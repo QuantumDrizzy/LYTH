@@ -113,16 +113,15 @@ fn a_reduction_emits_a_shared_tree_and_one_store_per_block() {
     let m = compile("dot.lyth").expect("dot should compile");
     // Dynamic shared memory, so the block size is not baked into the module.
     assert!(m.ptx.contains(".extern .shared"), "{}", m.ptx);
-    // Threads past the end reach the barrier with the identity instead of branching out.
-    assert!(m.ptx.contains("$L_idle_dot"), "{}", m.ptx);
-    assert!(m.ptx.contains("mov.f32 %f4, 0f00000000"), "{}", m.ptx);
     // Both barriers: after the initial store, and after each combine.
     assert_eq!(m.ptx.matches("bar.sync 0;").count(), 2, "{}", m.ptx);
     assert!(m.ptx.contains("ld.shared.f32"), "{}", m.ptx);
     assert!(m.ptx.contains("st.shared.f32"), "{}", m.ptx);
     // One global store, guarded on tid == 0.
     assert_eq!(m.ptx.matches("st.global.f32").count(), 1, "{}", m.ptx);
-    assert!(m.ptx.contains("setp.ne.u32 %p4, %r4, 0"), "{}", m.ptx);
+    assert!(m.ptx.contains("setp.ne.u32"), "{}", m.ptx);
+    // The per-thread fold happens inside the loop, before the tree.
+    assert!(m.ptx.contains("add.rn.f32"), "{}", m.ptx);
 }
 
 #[test]
@@ -154,4 +153,36 @@ fn the_cost_model_reports_shared_traffic_beside_dram_not_mixed_into_it() {
     // The partial is one write per block, reported separately rather than divided by a
     // block size the compiler would have to invent.
     assert_eq!(ir.cost.dram_bytes_per_block, 4.0);
+}
+
+#[test]
+fn every_kernel_loops_over_a_grid_stride() {
+    // The grid stops being a function of n, which is what makes the launch shape something
+    // that can be varied and therefore measured (ADR-0012).
+    for name in ["saxpy.lyth", "horner.lyth", "dot.lyth"] {
+        let m = compile(name).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(m.ptx.contains("mov.u32"), "{name}");
+        assert!(m.ptx.contains("%nctaid.x"), "{name}: no stride");
+        assert!(m.ptx.contains("mul.lo.s32"), "{name}: stride not computed");
+        let head = m.ptx.matches("$L_loop_").count();
+        assert!(head >= 3, "{name}: loop label, branch back and exit");
+    }
+}
+
+#[test]
+fn grid_stride_deletes_the_idle_thread_branch_from_a_reduction() {
+    // Under one-element-per-thread a thread with no element had to be routed to a label that
+    // loaded the identity. With a grid-stride accumulator it simply never enters the loop, so
+    // that branch is gone and the accumulator starts at the identity instead.
+    let m = compile("dot.lyth").unwrap();
+    assert!(
+        !m.ptx.contains("$L_idle_"),
+        "the idle branch should be gone:
+{}",
+        m.ptx
+    );
+    assert!(m.ptx.contains("mov.f32 %f1, 0f00000000"), "{}", m.ptx);
+    // Still exactly two barriers, and still one store guarded on thread 0.
+    assert_eq!(m.ptx.matches("bar.sync 0;").count(), 2, "{}", m.ptx);
+    assert_eq!(m.ptx.matches("st.global.f32").count(), 1, "{}", m.ptx);
 }

@@ -227,27 +227,41 @@ impl Emitter {
             }
         }
 
-        // --- index, and the bounds check ---------------------------------------------
+        // --- index, stride, and the loop head --------------------------------------
+        //
+        // GRID-STRIDE. The grid is no longer a function of `n`, so a thread handles elements
+        // i, i+S, i+2S, ... with S = nctaid * ntid. That is what lets the launch shape be
+        // varied and therefore measured at all (ADR-0012).
         let ctaid = self.b32();
         let ntid = self.b32();
         let tid = self.b32();
+        let nctaid = self.b32();
         let idx = self.b32();
+        let stride = self.b32();
         line(out, &format!("mov.u32 {ctaid}, %ctaid.x;"));
         line(out, &format!("mov.u32 {ntid}, %ntid.x;"));
         line(out, &format!("mov.u32 {tid}, %tid.x;"));
+        line(out, &format!("mov.u32 {nctaid}, %nctaid.x;"));
         line(out, &format!("mad.lo.s32 {idx}, {ctaid}, {ntid}, {tid};"));
-        // WITHOUT a reduction an out-of-range thread simply leaves. WITH one it must still
-        // reach the barrier and contribute the identity, or the shared slot it owns holds
-        // whatever was there before and the tree sums garbage. Different shape, same check.
+        line(out, &format!("mul.lo.s32 {stride}, {nctaid}, {ntid};"));
+
+        // A reduction accumulates into a register across its own elements before the block
+        // tree runs. Starting it at the identity is what makes a thread with no elements
+        // correct without a special case -- it simply never enters the loop.
+        let acc = if let Some(r) = &ir.reduction {
+            let a = self.f32();
+            line(out, &format!("mov.f32 {a}, {};", hex_f32(r.op.identity())));
+            Some(a)
+        } else {
+            None
+        };
+
+        let _ = writeln!(out, "$L_loop_{k}:");
         let p = self.pred();
         line(out, &format!("setp.ge.u32 {p}, {idx}, {r_bound};"));
-        if ir.reduction.is_none() {
-            line(out, &format!("@{p} bra $L_done_{k};"));
-        } else {
-            line(out, &format!("@{p} bra $L_idle_{k};"));
-        }
+        line(out, &format!("@{p} bra $L_loop_end_{k};"));
 
-        // --- one element address per buffer ------------------------------------------
+        // --- element addresses, recomputed each iteration -----------------------------
         let off = self.b64();
         line(out, &format!("mul.wide.u32 {off}, {idx}, 4;"));
         let reduce_target = ir.reduction.as_ref().map(|r| r.into.as_str());
@@ -349,8 +363,23 @@ impl Emitter {
             );
         }
 
+        // Fold this element into the accumulator before moving on.
+        if let (Some(r), Some(a)) = (&ir.reduction, &acc) {
+            let v = get(&regs, r.value);
+            match r.op {
+                lyth_lang::ast::ReduceOp::Sum => {
+                    line(out, &format!("add.rn.f32 {a}, {a}, {v};"));
+                }
+            }
+        }
+
+        line(out, &format!("add.s32 {idx}, {idx}, {stride};"));
+        line(out, &format!("bra $L_loop_{k};"));
+        let _ = writeln!(out, "$L_loop_end_{k}:");
+
         if let Some(r) = &ir.reduction {
-            self.reduction(ir, r, &buffers, &regs, &tid, &ctaid, &ntid, out)?;
+            let a = acc.as_ref().expect("a reduction always has an accumulator");
+            self.reduction(ir, r, &buffers, a, &tid, &ctaid, &ntid, out)?;
         }
 
         let _ = writeln!(out, "$L_done_{k}:");
@@ -370,31 +399,18 @@ impl Emitter {
         ir: &KernelIr,
         r: &lyth_lang::ir::ReductionIr,
         buffers: &[(String, String)],
-        regs: &[(RegId, String)],
+        acc: &str,
         tid: &str,
         ctaid: &str,
         ntid: &str,
         out: &mut String,
     ) -> Result<(), EmitError> {
         let k = &ir.name;
-        let value = regs
-            .iter()
-            .find(|(i, _)| *i == r.value)
-            .map(|(_, reg)| reg.clone())
-            .ok_or_else(|| EmitError::Message("the reduced value has no register".into()))?;
 
-        // The in-range path falls through with its value; the idle path joins here with the
-        // identity. Both reach every barrier below, which is what makes the barriers legal.
-        let acc = self.f32();
-        line(out, &format!("mov.f32 {acc}, {value};"));
-        line(out, &format!("bra $L_store_{k};"));
-        let _ = writeln!(out, "$L_idle_{k}:");
-        line(
-            out,
-            &format!("mov.f32 {acc}, {};", hex_f32(r.op.identity())),
-        );
-        let _ = writeln!(out, "$L_store_{k}:");
-
+        // Every thread arrives here with its accumulator, having folded however many elements
+        // the grid-stride loop gave it -- possibly none, in which case it still holds the
+        // identity. No idle-thread branch is needed, and every thread reaches every barrier.
+        //
         // slot = lyth_smem + tid * 4
         let smem = self.b64();
         let off = self.b64();
@@ -533,10 +549,21 @@ kernel saxpy(n: u32, a: f32, x: [f32], y: [f32])
     }
 
     #[test]
-    fn every_thread_is_bounds_checked() {
+    fn the_loop_is_bounded_and_strided() {
         let m = saxpy_ptx();
+        // The bound is the loop condition now, not a one-shot guard at the top.
         assert!(m.ptx.contains("setp.ge.u32"), "{}", m.ptx);
-        assert!(m.ptx.contains("bra $L_done_saxpy"), "{}", m.ptx);
+        assert!(m.ptx.contains("bra $L_loop_end_saxpy"), "{}", m.ptx);
+        assert!(m.ptx.contains("bra $L_loop_saxpy"), "{}", m.ptx);
+        // The stride is grid x block, read from the launch rather than assumed.
+        assert!(m.ptx.contains("%nctaid.x"), "{}", m.ptx);
+        assert!(m.ptx.contains("mul.lo.s32"), "{}", m.ptx);
+        assert!(
+            m.ptx.contains("add.s32"),
+            "advance by the stride:
+{}",
+            m.ptx
+        );
     }
 
     #[test]

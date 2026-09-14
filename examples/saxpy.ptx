@@ -18,7 +18,7 @@
 {
     .reg .pred  %p<2>;
     .reg .f32   %f<5>;
-    .reg .b32   %r<6>;
+    .reg .b32   %r<8>;
     .reg .b64   %rd<8>;
 
     ld.param.u32 %r1, [saxpy_n];
@@ -30,16 +30,22 @@
     mov.u32 %r2, %ctaid.x;
     mov.u32 %r3, %ntid.x;
     mov.u32 %r4, %tid.x;
-    mad.lo.s32 %r5, %r2, %r3, %r4;
-    setp.ge.u32 %p1, %r5, %r1;
-    @%p1 bra $L_done_saxpy;
-    mul.wide.u32 %rd5, %r5, 4;
+    mov.u32 %r5, %nctaid.x;
+    mad.lo.s32 %r6, %r2, %r3, %r4;
+    mul.lo.s32 %r7, %r5, %r3;
+$L_loop_saxpy:
+    setp.ge.u32 %p1, %r6, %r1;
+    @%p1 bra $L_loop_end_saxpy;
+    mul.wide.u32 %rd5, %r6, 4;
     add.s64 %rd6, %rd2, %rd5;
     add.s64 %rd7, %rd4, %rd5;
     ld.global.f32 %f2, [%rd6];
     ld.global.f32 %f3, [%rd7];
     fma.rn.f32 %f4, %f1, %f2, %f3;
     st.global.f32 [%rd7], %f4;
+    add.s32 %r6, %r6, %r7;
+    bra $L_loop_saxpy;
+$L_loop_end_saxpy:
 $L_done_saxpy:
     ret;
 }

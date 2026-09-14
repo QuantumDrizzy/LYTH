@@ -110,6 +110,21 @@ Three files are meant **not** to compile, and the tests assert that they do not:
 `saxpy-lie.lyth` (a declared intensity the body does not have), `forgot-stream.lyth` (a buffer
 read with no stream), `dead-local.lyth` and `reduce-streamed.lyth`.
 
+## Running and measuring
+
+```
+lyth run <file> --machine <machine.json> -n <elements> [--grid N] [--time REPS] [--set k=v]
+```
+
+Every thread loops over a grid-stride, so the grid is independent of `n`. The default is the
+device's SM count times four, capped at the blocks the problem needs; `--grid` overrides it so
+the choice can be swept rather than believed.
+
+`--time REPS` reports the median of REPS runs after a warm-up, the full spread, and achieved
+bandwidth against the machine file's measured figure. **If the result comes out above the
+baseline the tool says so and says what to check first**, because a number over 100% of peak is
+a claim about the baseline before it is a result.
+
 ## Not yet
 
 Control flow in the body. Neighbours — no stencils, no convolution, nothing but the current

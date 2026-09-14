@@ -43,19 +43,21 @@ pub struct Inputs {
 /// Element order is irrelevant: v1 has no cross-element communication, which is exactly why
 /// one thread per element is a legal schedule in the first place.
 pub fn eval(ir: &KernelIr, n: usize, inputs: &Inputs) -> Result<Inputs, EvalError> {
-    eval_with_block(ir, n, inputs, 256)
+    eval_with_launch(ir, n, inputs, n.div_ceil(256).max(1), 256)
 }
 
-/// As [`eval`], with the block size the device will launch with.
+/// As [`eval`], with the launch shape the device will use.
 ///
-/// The block size matters only for a reduction, and there it matters completely: float
-/// addition is not associative, so summing a block's elements in a different order gives a
-/// different last bit. The host has to walk the identical tree or the bit-exact check fails on
-/// a correct kernel and the failure looks like a code-generation bug.
-pub fn eval_with_block(
+/// The shape matters only for a reduction, and there it matters completely. Under grid-stride
+/// a thread first folds its own elements in sequence and only then does the block tree run, so
+/// the result depends on **both** the grid and the block. Float addition is not associative, so
+/// the host has to walk that same two-stage order or the bit-exact check fails on a correct
+/// kernel and the failure looks like a code-generation bug.
+pub fn eval_with_launch(
     ir: &KernelIr,
     n: usize,
     inputs: &Inputs,
+    grid: usize,
     block: usize,
 ) -> Result<Inputs, EvalError> {
     for p in &ir.params {
@@ -68,7 +70,7 @@ pub fn eval_with_block(
                 // A reduction target holds one value per block, not one per element. Demanding
                 // `n` of it would force the caller to allocate `n` slots for `n / block` results.
                 let want = match &ir.reduction {
-                    Some(r) if r.into == p.name => n.div_ceil(block).max(1),
+                    Some(r) if r.into == p.name => grid,
                     _ => n,
                 };
                 if b.len() < want {
@@ -88,7 +90,7 @@ pub fn eval_with_block(
         }
     }
 
-    if block == 0 {
+    if block == 0 || grid == 0 {
         return Err(EvalError::ZeroBlock);
     }
     let mut out = inputs.clone();
@@ -143,25 +145,36 @@ pub fn eval_with_block(
     }
 
     if let Some(r) = &ir.reduction {
-        let blocks = n.div_ceil(block).max(1);
         let target = out
             .buffers
             .get_mut(&r.into)
             .ok_or_else(|| EvalError::MissingBuffer(r.into.clone()))?;
-        if target.len() < blocks {
+        if target.len() < grid {
             return Err(EvalError::ShortBuffer {
                 name: r.into.clone(),
                 got: target.len(),
-                want: blocks,
+                want: grid,
             });
         }
-        for (b, slot) in target.iter_mut().enumerate().take(blocks) {
-            let start = b * block;
-            // A thread with no element contributes the identity, so it takes part in the tree
-            // rather than leaving its slot uninitialised. The device does the same.
-            let mut slots: Vec<f32> = (0..block)
-                .map(|t| reduced.get(start + t).copied().unwrap_or(r.op.identity()))
-                .collect();
+        // Two stages, in this order, because that is what the generated loop does:
+        //   1. each thread folds its own strided elements in sequence
+        //   2. the block's threads are combined by the tree
+        // Swapping them, or folding a block's elements contiguously, gives a different
+        // answer -- not a different last bit. See ADR-0011.
+        let stride = grid * block;
+        for (b, slot) in target.iter_mut().enumerate().take(grid) {
+            let mut slots: Vec<f32> = Vec::with_capacity(block);
+            for t in 0..block {
+                let mut acc = r.op.identity();
+                let mut i = b * block + t;
+                while i < n {
+                    acc = match r.op {
+                        ReduceOp::Sum => acc + reduced[i],
+                    };
+                    i += stride;
+                }
+                slots.push(acc);
+            }
             *slot = tree_reduce(&mut slots, r.op);
         }
     }
@@ -245,8 +258,8 @@ kernel dot(n: u32, x: [f32], y: [f32], partial: [f32])
         let want: f32 = x.iter().zip(&y).map(|(a, b)| a * b).sum();
         inputs.buffers.insert("x".into(), x);
         inputs.buffers.insert("y".into(), y);
-        inputs.buffers.insert("partial".into(), vec![0.0; 4]);
-        let out = eval_with_block(&ir, 8, &inputs, 8).unwrap();
+        inputs.buffers.insert("partial".into(), vec![0.0; 1]);
+        let out = eval_with_launch(&ir, 8, &inputs, 1, 8).unwrap();
         assert_eq!(out.buffers["partial"][0], want, "1+2+...+128 = 255");
         assert_eq!(want, 255.0);
     }
@@ -260,7 +273,7 @@ kernel dot(n: u32, x: [f32], y: [f32], partial: [f32])
         inputs.buffers.insert("x".into(), vec![1.0; 10]);
         inputs.buffers.insert("y".into(), vec![1.0; 10]);
         inputs.buffers.insert("partial".into(), vec![-99.0; 3]);
-        let out = eval_with_block(&ir, 10, &inputs, 4).unwrap();
+        let out = eval_with_launch(&ir, 10, &inputs, 3, 4).unwrap();
         let p = &out.buffers["partial"];
         assert_eq!(p[0], 4.0);
         assert_eq!(p[1], 4.0);
@@ -283,7 +296,7 @@ kernel dot(n: u32, x: [f32], y: [f32], partial: [f32])
         inputs.buffers.insert("x".into(), x.clone());
         inputs.buffers.insert("y".into(), vec![1.0; 4]);
         inputs.buffers.insert("partial".into(), vec![0.0; 1]);
-        let out = eval_with_block(&ir, 4, &inputs, 4).unwrap();
+        let out = eval_with_launch(&ir, 4, &inputs, 1, 4).unwrap();
 
         let tree = (x[0] + x[2]) + (x[1] + x[3]);
         let left_fold = ((x[0] + x[1]) + x[2]) + x[3];

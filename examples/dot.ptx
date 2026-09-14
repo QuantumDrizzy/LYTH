@@ -20,7 +20,7 @@
 {
     .reg .pred  %p<5>;
     .reg .f32   %f<9>;
-    .reg .b32   %r<8>;
+    .reg .b32   %r<10>;
     .reg .b64   %rd<17>;
 
     ld.param.u32 %r1, [dot_n];
@@ -33,33 +33,36 @@
     mov.u32 %r2, %ctaid.x;
     mov.u32 %r3, %ntid.x;
     mov.u32 %r4, %tid.x;
-    mad.lo.s32 %r5, %r2, %r3, %r4;
-    setp.ge.u32 %p1, %r5, %r1;
-    @%p1 bra $L_idle_dot;
-    mul.wide.u32 %rd7, %r5, 4;
+    mov.u32 %r5, %nctaid.x;
+    mad.lo.s32 %r6, %r2, %r3, %r4;
+    mul.lo.s32 %r7, %r5, %r3;
+    mov.f32 %f1, 0f00000000;
+$L_loop_dot:
+    setp.ge.u32 %p1, %r6, %r1;
+    @%p1 bra $L_loop_end_dot;
+    mul.wide.u32 %rd7, %r6, 4;
     add.s64 %rd8, %rd2, %rd7;
     add.s64 %rd9, %rd4, %rd7;
-    ld.global.f32 %f1, [%rd8];
-    ld.global.f32 %f2, [%rd9];
-    mul.rn.f32 %f3, %f1, %f2;
-    mov.f32 %f4, %f3;
-    bra $L_store_dot;
-$L_idle_dot:
-    mov.f32 %f4, 0f00000000;
-$L_store_dot:
+    ld.global.f32 %f2, [%rd8];
+    ld.global.f32 %f3, [%rd9];
+    mul.rn.f32 %f4, %f2, %f3;
+    add.rn.f32 %f1, %f1, %f4;
+    add.s32 %r6, %r6, %r7;
+    bra $L_loop_dot;
+$L_loop_end_dot:
     mov.u64 %rd10, lyth_smem;
     mul.wide.u32 %rd11, %r4, 4;
     add.s64 %rd12, %rd10, %rd11;
-    st.shared.f32 [%rd12], %f4;
+    st.shared.f32 [%rd12], %f1;
     bar.sync 0;
-    shr.u32 %r6, %r3, 1;
+    shr.u32 %r8, %r3, 1;
 $L_tree_dot:
-    setp.eq.u32 %p2, %r6, 0;
+    setp.eq.u32 %p2, %r8, 0;
     @%p2 bra $L_tree_end_dot;
-    setp.ge.u32 %p3, %r4, %r6;
+    setp.ge.u32 %p3, %r4, %r8;
     @%p3 bra $L_skip_dot;
-    add.u32 %r7, %r4, %r6;
-    mul.wide.u32 %rd13, %r7, 4;
+    add.u32 %r9, %r4, %r8;
+    mul.wide.u32 %rd13, %r9, 4;
     add.s64 %rd14, %rd10, %rd13;
     ld.shared.f32 %f5, [%rd12];
     ld.shared.f32 %f6, [%rd14];
@@ -67,7 +70,7 @@ $L_tree_dot:
     st.shared.f32 [%rd12], %f7;
 $L_skip_dot:
     bar.sync 0;
-    shr.u32 %r6, %r6, 1;
+    shr.u32 %r8, %r8, 1;
     bra $L_tree_dot;
 $L_tree_end_dot:
     setp.ne.u32 %p4, %r4, 0;

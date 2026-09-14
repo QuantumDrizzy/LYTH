@@ -14,17 +14,22 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
 
-use lyth_cuda::{grid_for, Arg, Context};
+use lyth_cuda::{grid_for, median_and_spread, time_launches, Arg, Context, Launch};
 use lyth_lang::ast::Ty;
-use lyth_lang::eval::{eval_with_block, Inputs};
+use lyth_lang::eval::{eval_with_launch, Inputs};
 use lyth_lang::{check_intensity, ir, parse, KernelIr, Ridge};
 use lyth_ptx::emit;
 
 const EXIT_REFUSED: u8 = 1;
 const EXIT_UNUSABLE: u8 = 2;
-/// Threads per block. 256 is the conventional starting point; v1 does not tune occupancy and
-/// makes no performance claim, so this is a constant rather than a flag pretending otherwise.
+/// Threads per block. 256 is the conventional starting point and is not tuned here.
 const BLOCK: u32 = 256;
+
+/// Blocks per SM in the default grid.
+///
+/// **[KNOWN LIMIT] This is a guess until swept.** A starting point, not a tuned value, which is
+/// exactly why `--grid` exists: the choice is meant to be measured rather than believed.
+const WAVES: u32 = 4;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -76,6 +81,14 @@ enum Cmd {
         /// Elements to run.
         #[arg(short, long, default_value_t = 1 << 20)]
         n: u32,
+        /// Blocks to launch. Default: SM count x WAVES, capped at what the problem needs.
+        /// Exposed so the choice can be swept and measured rather than assumed (ADR-0012).
+        #[arg(long)]
+        grid: Option<u32>,
+        /// Time the kernel over this many runs after a warm-up, and report achieved
+        /// bandwidth against the machine file's measured figure. 0 disables timing.
+        #[arg(long, default_value_t = 0)]
+        time: u32,
         /// Value for each `f32` parameter, as `name=value`. Repeatable.
         #[arg(long = "set", value_name = "NAME=VALUE")]
         sets: Vec<String>,
@@ -132,9 +145,11 @@ fn main() -> ExitCode {
             file,
             machine,
             n,
+            grid,
+            time,
             sets,
             tol,
-        } => cmd_run(&file, machine.as_deref(), n, &sets, tol),
+        } => cmd_run(&file, machine.as_deref(), n, grid, time, &sets, tol),
     }
 }
 
@@ -348,7 +363,15 @@ fn evidence_json(ir: &KernelIr, elements: u32) -> String {
 "
 }
 
-fn cmd_run(file: &Path, machine: Option<&Path>, n: u32, sets: &[String], tol: f64) -> ExitCode {
+fn cmd_run(
+    file: &Path,
+    machine: Option<&Path>,
+    n: u32,
+    grid_arg: Option<u32>,
+    reps: u32,
+    sets: &[String],
+    tol: f64,
+) -> ExitCode {
     let f = match front(file, machine, tol) {
         Ok(f) => f,
         Err(code) => return code,
@@ -372,7 +395,24 @@ fn cmd_run(file: &Path, machine: Option<&Path>, n: u32, sets: &[String], tol: f6
         }
     }
 
-    let grid = grid_for(n, BLOCK);
+    let ctx = match Context::new(0) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error[cuda]: {e}");
+            return ExitCode::from(EXIT_UNUSABLE);
+        }
+    };
+    println!("  device   {}", ctx.device_name);
+
+    // The grid stops being a function of `n` under grid-stride, so something has to
+    // choose it. Derived from the device -- SMs times WAVES -- and capped at the blocks
+    // the problem actually needs, since launching more would leave them with no elements.
+    let want = grid_for(n, BLOCK);
+    let grid = grid_arg.unwrap_or_else(|| (ctx.sm_count * WAVES).min(want).max(1));
+    println!(
+        "  grid     {grid} blocks of {BLOCK} ({} SMs x {WAVES} waves, capped at {want})",
+        ctx.sm_count
+    );
     // A reduction writes one value per block, so its target is sized by the grid, not by the
     // element count. Sizing it by n would work and would hide a real constraint on the caller.
     let reduce_target = ir.reduction.as_ref().map(|r| r.into.clone());
@@ -403,7 +443,7 @@ fn cmd_run(file: &Path, machine: Option<&Path>, n: u32, sets: &[String], tol: f6
         }
     }
 
-    let expected = match eval_with_block(ir, n as usize, &inputs, BLOCK as usize) {
+    let expected = match eval_with_launch(ir, n as usize, &inputs, grid as usize, BLOCK as usize) {
         Ok(o) => o,
         Err(e) => {
             eprintln!("error[reference]: {e}");
@@ -418,15 +458,6 @@ fn cmd_run(file: &Path, machine: Option<&Path>, n: u32, sets: &[String], tol: f6
             return ExitCode::from(EXIT_REFUSED);
         }
     };
-
-    let ctx = match Context::new(0) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("error[cuda]: {e}");
-            return ExitCode::from(EXIT_UNUSABLE);
-        }
-    };
-    println!("  device   {}", ctx.device_name);
 
     let loaded = match ctx.load_ptx(&module.ptx) {
         Ok(m) => m,
@@ -519,6 +550,13 @@ fn cmd_run(file: &Path, machine: Option<&Path>, n: u32, sets: &[String], tol: f6
         }
     }
 
+    if mismatches == 0 && reps > 0 {
+        if let Err(e) = report_timing(&ctx, &func, grid, shared, &args, reps, n, ir, &f.machine) {
+            eprintln!("error[timing]: {e}");
+            return ExitCode::from(EXIT_UNUSABLE);
+        }
+    }
+
     if mismatches == 0 {
         println!("  verify   BIT-EXACT against the IR evaluated on the host, {n} elements");
         if let Some(name) = &reduce_target {
@@ -547,4 +585,80 @@ fn cmd_run(file: &Path, machine: Option<&Path>, n: u32, sets: &[String], tol: f6
         eprintln!("  The back end and the IR disagree. The IR is the specification.");
         ExitCode::from(EXIT_REFUSED)
     }
+}
+
+/// Time the kernel and report achieved bandwidth beside the baseline it is measured against.
+///
+/// The rules are ADR-0012's, fixed before the first number was taken: N runs after a warm-up,
+/// median and full spread, the baseline named, and the byte count stated as derived rather than
+/// measured. Exercise 01 of rse-hpc-lab overstates its own bandwidth by 12.9% by dividing an
+/// analytic working set by a time; a compiler that derives its own byte count is *more* liable
+/// to that, not less, so the output says where the number came from.
+#[allow(clippy::too_many_arguments)]
+fn report_timing(
+    ctx: &Context,
+    func: &lyth_cuda::Function,
+    grid: u32,
+    shared: u32,
+    args: &[lyth_cuda::Arg],
+    reps: u32,
+    n: u32,
+    ir: &KernelIr,
+    machine: &Option<Machine>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // One warm-up per five runs, at least one: the first launch pays for module residency and
+    // clock ramp, neither of which is the kernel's cost.
+    let warmup = (reps / 5).max(1);
+    let shape = Launch {
+        grid,
+        block: BLOCK,
+        shared,
+    };
+    let samples = time_launches(ctx, func, shape, args, warmup, reps)?;
+    let (median_ms, spread) =
+        median_and_spread(&samples).ok_or("a timing with no runs has no median")?;
+
+    let bytes = ir.cost.bytes_per_element() * n as f64 + ir.cost.dram_bytes_per_block * grid as f64;
+    let gbs = bytes / (median_ms * 1e-3) / 1e9;
+
+    println!("  time     {median_ms:.4} ms median of n={reps} (warm-up {warmup} discarded), spread {:.1}%", spread * 100.0);
+    println!(
+        "  moved    {:.3} MB by the compiler's derived byte model, NOT measured",
+        bytes / 1e6
+    );
+    println!("  achieved {gbs:.2} GB/s");
+
+    match machine.as_ref().and_then(|m| {
+        m.levels
+            .iter()
+            .find(|l| l.name == "dram")
+            .map(|l| (m.id.clone(), l.bandwidth_gbs))
+    }) {
+        Some((id, peak)) => {
+            let pct = gbs / peak * 100.0;
+            println!(
+                "  vs       {pct:.1}% of {peak:.2} GB/s, the measured DRAM bandwidth in the {id} machine file"
+            );
+            // A tool that prints "above peak" and says nothing is the tool that produced
+            // exercise 01's 385.71 GB/s. Above the baseline means one of three things and the
+            // reader is told which to check, in the order they are worth checking.
+            if pct > 100.0 {
+                println!("  ABOVE    this is over the baseline, which is a claim about the");
+                println!("           baseline, not a result. Three things to check, in order:");
+                println!("           1. the byte count is derived, not measured. Check it with");
+                println!(
+                    "              `lyth build --evidence` and `lyth-probe --ncu` (ADR-0009)."
+                );
+                println!("           2. the baseline may not describe this access pattern. The");
+                println!("              {id} figure came from a torch.sum reduction, and the");
+                println!("              machine file says a streaming probe would be better.");
+                println!("           3. only then, that the kernel is genuinely faster.");
+            }
+        }
+        None => println!("  vs       no machine file given, so this number has no baseline"),
+    }
+    println!("  [LIMIT]  kernel only: allocation and the host copy are outside the events.");
+    println!("           Buffers stay resident across runs; L2 state is not controlled.");
+    println!("           Clocks not locked, as the baseline's were not.");
+    Ok(())
 }

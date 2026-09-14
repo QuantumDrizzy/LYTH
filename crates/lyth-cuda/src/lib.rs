@@ -32,9 +32,15 @@ extern "C" {
     fn cuInit(flags: c_uint) -> CUresult;
     fn cuDeviceGet(device: *mut c_int, ordinal: c_int) -> CUresult;
     fn cuDeviceGetName(name: *mut c_char, len: c_int, dev: c_int) -> CUresult;
+    fn cuDeviceGetAttribute(pi: *mut c_int, attrib: c_int, dev: c_int) -> CUresult;
     fn cuCtxCreate_v2(pctx: *mut *mut c_void, flags: c_uint, dev: c_int) -> CUresult;
     fn cuCtxDestroy_v2(ctx: *mut c_void) -> CUresult;
     fn cuCtxSynchronize() -> CUresult;
+    fn cuEventCreate(event: *mut *mut c_void, flags: c_uint) -> CUresult;
+    fn cuEventRecord(event: *mut c_void, stream: *mut c_void) -> CUresult;
+    fn cuEventSynchronize(event: *mut c_void) -> CUresult;
+    fn cuEventElapsedTime(ms: *mut f32, start: *mut c_void, end: *mut c_void) -> CUresult;
+    fn cuEventDestroy_v2(event: *mut c_void) -> CUresult;
     fn cuModuleLoadDataEx(
         module: *mut *mut c_void,
         image: *const c_void,
@@ -67,6 +73,9 @@ extern "C" {
         extra: *mut *mut c_void,
     ) -> CUresult;
 }
+
+/// `CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT`, from `cuda.h`.
+const CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT: c_int = 16;
 
 /// JIT compile options. Values from `cuda.h`.
 const CU_JIT_ERROR_LOG_BUFFER: c_int = 5;
@@ -146,6 +155,12 @@ fn check(op: &'static str, code: CUresult) -> Result<(), CudaError> {
 pub struct Context {
     ctx: *mut c_void,
     pub device_name: String,
+    /// SMs the driver reports on this device.
+    ///
+    /// Read from the driver rather than from the machine file: it is a property of the silicon
+    /// that is present, and a machine file disagreeing with it would be describing a different
+    /// card. The machine file states what the device *achieves*; this states what it *is*.
+    pub sm_count: u32,
 }
 
 impl Context {
@@ -172,10 +187,23 @@ impl Context {
             .to_string_lossy()
             .into_owned();
 
+        let mut sms: c_int = 0;
+        // SAFETY: `sms` is a live out-parameter for the duration of the call.
+        unsafe {
+            check(
+                "cuDeviceGetAttribute",
+                cuDeviceGetAttribute(&mut sms, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, dev),
+            )?
+        };
+
         let mut ctx: *mut c_void = std::ptr::null_mut();
         // SAFETY: `ctx` is a live out-parameter; the context it returns is freed in Drop.
         unsafe { check("cuCtxCreate", cuCtxCreate_v2(&mut ctx, 0, dev))? };
-        Ok(Context { ctx, device_name })
+        Ok(Context {
+            ctx,
+            device_name,
+            sm_count: sms.max(1) as u32,
+        })
     }
 
     /// Load a PTX module, capturing the JIT assembler's log.
@@ -434,6 +462,125 @@ impl Function<'_> {
     }
 }
 
+/// Time `reps` launches, discarding `warmup` first, and return each one in milliseconds.
+///
+/// Events bracket the launch and nothing else: no allocation, no host-to-device copy. That is
+/// the kernel's time, not a program's, and a caller reporting it must say so.
+///
+/// Every repetition is returned rather than a summary, because a median without its spread is
+/// a number that cannot be argued with. The caller decides what to report.
+pub fn time_launches(
+    ctx: &Context,
+    f: &Function,
+    shape: Launch,
+    args: &[Arg],
+    warmup: u32,
+    reps: u32,
+) -> Result<Vec<f64>, CudaError> {
+    let Launch {
+        grid,
+        block,
+        shared,
+    } = shape;
+    if reps == 0 {
+        return Err(CudaError::Message("a timing needs at least one run".into()));
+    }
+    for _ in 0..warmup {
+        f.launch_shared(grid, block, shared, args)?;
+    }
+    ctx.synchronize()?;
+
+    let mut out = Vec::with_capacity(reps as usize);
+    for _ in 0..reps {
+        let start = Event::new()?;
+        let end = Event::new()?;
+        start.record()?;
+        f.launch_shared(grid, block, shared, args)?;
+        end.record()?;
+        end.synchronize()?;
+        out.push(Event::elapsed_ms(&start, &end)? as f64);
+    }
+    Ok(out)
+}
+
+/// The shape of one launch. Grouped because grid, block and shared size are one decision, and
+/// passing them as three loose integers invites transposing two of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Launch {
+    pub grid: u32,
+    pub block: u32,
+    pub shared: u32,
+}
+
+struct Event(*mut c_void);
+
+impl Event {
+    fn new() -> Result<Self, CudaError> {
+        let mut e: *mut c_void = std::ptr::null_mut();
+        // SAFETY: `e` is a live out-parameter; the event is destroyed in Drop.
+        unsafe { check("cuEventCreate", cuEventCreate(&mut e, 0))? };
+        Ok(Event(e))
+    }
+
+    fn record(&self) -> Result<(), CudaError> {
+        // SAFETY: `self.0` is a live event; the null stream is the legacy default stream.
+        unsafe { check("cuEventRecord", cuEventRecord(self.0, std::ptr::null_mut())) }
+    }
+
+    fn synchronize(&self) -> Result<(), CudaError> {
+        // SAFETY: `self.0` is a live event that has been recorded.
+        unsafe { check("cuEventSynchronize", cuEventSynchronize(self.0)) }
+    }
+
+    fn elapsed_ms(start: &Event, end: &Event) -> Result<f32, CudaError> {
+        let mut ms: f32 = 0.0;
+        // SAFETY: both events are live and recorded; `ms` is a live out-parameter.
+        unsafe {
+            check(
+                "cuEventElapsedTime",
+                cuEventElapsedTime(&mut ms, start.0, end.0),
+            )?
+        };
+        Ok(ms)
+    }
+}
+
+impl Drop for Event {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            // SAFETY: created by cuEventCreate, destroyed exactly once.
+            unsafe {
+                let _ = cuEventDestroy_v2(self.0);
+            }
+        }
+    }
+}
+
+/// Median and `(max - min) / median` of a set of timings.
+///
+/// The median rather than the mean: one descheduled run or one clock-boost transition makes a
+/// mean meaningless and hides that it did. The spread comes back with it because a median
+/// alone does not say whether the runs agreed.
+pub fn median_and_spread(samples: &[f64]) -> Option<(f64, f64)> {
+    if samples.is_empty() {
+        return None;
+    }
+    let mut v = samples.to_vec();
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = v.len();
+    let median = if n % 2 == 1 {
+        v[n / 2]
+    } else {
+        (v[n / 2 - 1] + v[n / 2]) / 2.0
+    };
+    let spread = if median > 0.0 {
+        (v[n - 1] - v[0]) / median
+    } else {
+        0.0
+    };
+    Some((median, spread))
+}
+
 /// Blocks needed to cover `n` elements at `block` threads each.
 pub fn grid_for(n: u32, block: u32) -> u32 {
     n.div_ceil(block).max(1)
@@ -449,6 +596,20 @@ mod tests {
         assert_eq!(grid_for(1025, 256), 5, "the tail needs its own block");
         assert_eq!(grid_for(1, 256), 1);
         assert_eq!(grid_for(0, 256), 1, "never launch an empty grid");
+    }
+
+    #[test]
+    fn the_median_ignores_an_outlier_that_would_move_a_mean() {
+        // One descheduled run among five. The mean is 2.28; the median is unmoved.
+        let (median, spread) = median_and_spread(&[1.0, 1.1, 1.05, 1.02, 7.2]).unwrap();
+        assert!((median - 1.05).abs() < 1e-12, "{median}");
+        // And the spread says out loud that the runs did not agree.
+        assert!(spread > 5.0, "{spread}");
+    }
+
+    #[test]
+    fn an_empty_timing_has_no_median_rather_than_a_zero() {
+        assert!(median_and_spread(&[]).is_none());
     }
 
     #[test]
