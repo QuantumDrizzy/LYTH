@@ -1,5 +1,5 @@
 {
-  "schema": "lith-poly/0.1",
+  "schema": "lyth-poly/0.1",
   "name": "fake_poly_same_bytes",
   "machine_id": "sm_120",
   "instances": [

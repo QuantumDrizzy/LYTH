@@ -1,5 +1,5 @@
 {
-  "schema": "lith-evidence/0.1",
+  "schema": "lyth-evidence/0.1",
   "claim": "k_integrate (N=166700) median ≤ 11 µs/step on sm_120 with CUDA-graph replay",
   "value": 10.76,
   "unit": "us/step",

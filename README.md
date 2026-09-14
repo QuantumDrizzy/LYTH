@@ -6,7 +6,7 @@
 
 > A kernel that cannot say what it costs does not compile.
 
-Memory-first kernel dialect for bare-metal HPC & quantum computing. **Not a language yet** — `lith-probe` over CUDA you already have.
+Memory-first kernel dialect for bare-metal HPC & quantum computing. **Not a language yet** — `lyth-probe` over CUDA you already have.
 
 ## Status
 
@@ -19,29 +19,29 @@ Memory-first kernel dialect for bare-metal HPC & quantum computing. **Not a lang
 | 1c | kernel IR | **live** (integrate / propagate / gate_proj) |
 | 1d | constant-time taint | **live** |
 | 1e | layout × machine poly | **live** (gate_proj INT4 vs NF4) |
-| 2 | `.lith` parser | blocked |
+| 2 | `.lyth` parser | blocked |
 
 ## Commands
 
 ```bash
-cargo test -p lith-probe
-cargo run -p lith-probe -- suite fixtures/suite-fase1.json
+cargo test -p lyth-probe
+cargo run -p lyth-probe -- suite fixtures/suite-fase1.json
 
-cargo run -p lith-probe -- kernel-check fixtures/kernel/gate_proj_int4.json \
+cargo run -p lyth-probe -- kernel-check fixtures/kernel/gate_proj_int4.json \
   --machine fixtures/machine/sm_120.json
 
-cargo run -p lith-probe -- poly-check fixtures/poly/gate-proj-int4-nf4.json \
+cargo run -p lyth-probe -- poly-check fixtures/poly/gate-proj-int4-nf4.json \
   --machine fixtures/machine/sm_120.json
 
-cargo run -p lith-probe -- ct-check fixtures/ct/kyber-ntt-ok.json
-cargo run -p lith-probe -- ct-check fixtures/ct/secret-gather-fail.json
+cargo run -p lyth-probe -- ct-check fixtures/ct/kyber-ntt-ok.json
+cargo run -p lyth-probe -- ct-check fixtures/ct/secret-gather-fail.json
 
 # The byte accounting against measured DRAM/L2 traffic, not against itself (ADR-0009).
 # CONFIRMED at l2 — 28.41 measured B/neuron vs 29.00 counted, 0.9796x.
-cargo run -p lith-probe -- intensity-check fixtures/intensity/k_integrate.json   --machine fixtures/machine/sm_120.json   --ncu fixtures/ncu/k_integrate-sm_120-2026-09-14.csv --elements 166700 --ncu-level l2
+cargo run -p lyth-probe -- intensity-check fixtures/intensity/k_integrate.json   --machine fixtures/machine/sm_120.json   --ncu fixtures/ncu/k_integrate-sm_120-2026-09-14.csv --elements 166700 --ncu-level l2
 
 # Same accounting at dram: ABSORBED, 0.5190x. Half the state is L2-resident at F=1.
-cargo run -p lith-probe -- intensity-check fixtures/intensity/k_integrate.json   --ncu fixtures/ncu/k_integrate-sm_120-2026-09-14.csv --elements 166700
+cargo run -p lyth-probe -- intensity-check fixtures/intensity/k_integrate.json   --ncu fixtures/ncu/k_integrate-sm_120-2026-09-14.csv --elements 166700
 ```
 
 ## Docs

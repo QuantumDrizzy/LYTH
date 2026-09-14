@@ -1,5 +1,5 @@
 {
-  "schema": "lith-intensity/0.1",
+  "schema": "lyth-intensity/0.1",
   "kernel": "gemv_int4_lie_example",
   "declared_intensity": 2.0,
   "unit": "flops_per_byte",

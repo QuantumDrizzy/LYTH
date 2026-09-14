@@ -1,5 +1,5 @@
 {
-  "schema": "lith-evidence/0.1",
+  "schema": "lyth-evidence/0.1",
   "claim": "CUDA Langmuir 512² grid matches host reference (max abs err ≤ 1e-6); C==Kd diagonal is 0.5",
   "value": 1.1920929e-07,
   "unit": "max_abs_err",

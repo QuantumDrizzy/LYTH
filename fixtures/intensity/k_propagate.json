@@ -1,5 +1,5 @@
 {
-  "schema": "lith-intensity/0.1",
+  "schema": "lyth-intensity/0.1",
   "kernel": "k_propagate_edge",
   "declared_intensity": 0.125,
   "unit": "flops_per_byte",

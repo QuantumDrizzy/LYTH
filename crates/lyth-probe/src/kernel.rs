@@ -1,4 +1,4 @@
-//! Kernel IR — memory-first AST the future `.lith` frontend must emit.
+//! Kernel IR — memory-first AST the future `.lyth` frontend must emit.
 //!
 //! Streams declare traffic. Ops declare FLOPs at a level. `kernel-check`
 //! lowers to intensity accounting and refuses missing machine ops.
@@ -6,12 +6,10 @@
 use serde::Deserialize;
 use thiserror::Error;
 
-use crate::intensity::{
-    check_with_machine, BodyAccounting, IntensityCase, IntensityVerdict, Move,
-};
+use crate::intensity::{check_with_machine, BodyAccounting, IntensityCase, IntensityVerdict, Move};
 use crate::machine::Machine;
 
-pub const KERNEL_IR_SCHEMA: &str = "lith-kernel-ir/0.1";
+pub const KERNEL_IR_SCHEMA: &str = "lyth-kernel-ir/0.1";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct KernelIr {
@@ -189,9 +187,10 @@ pub fn check_capabilities(ir: &KernelIr, machine: &Machine) -> Result<Vec<String
         });
         // Also allow ops that live at "sm" when req doesn't pin at.
         let found = found
-            || machine.ops.iter().any(|op| {
-                op.name == req.op && op.status == "present" && req.at.is_none()
-            });
+            || machine
+                .ops
+                .iter()
+                .any(|op| op.name == req.op && op.status == "present" && req.at.is_none());
         if found {
             ok.push(req.op.clone());
         } else {
@@ -219,7 +218,7 @@ pub fn check(ir: &KernelIr, machine: &Machine, tol: f64) -> Result<KernelVerdict
         ));
     }
     match check_capabilities(ir, machine) {
-        Err(missing) => return Ok(KernelVerdict::FailCapability { missing }),
+        Err(missing) => Ok(KernelVerdict::FailCapability { missing }),
         Ok(checked_caps) => {
             let intensity_case = lower(ir)?;
             let intensity = check_with_machine(&intensity_case, Some(machine), tol)
@@ -309,6 +308,10 @@ fn format_intensity_brief(v: &IntensityVerdict) -> String {
     }
 }
 
+impl crate::document::Document for KernelIr {
+    const SCHEMA: &'static str = KERNEL_IR_SCHEMA;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,7 +319,7 @@ mod tests {
     fn machine_sm120() -> Machine {
         serde_json::from_str(
             r#"{
-              "schema":"lith-machine/0.1","id":"sm_120","peak_tflops":15.03,
+              "schema":"lyth-machine/0.1","id":"sm_120","peak_tflops":15.03,
               "levels":[{"name":"dram","bandwidth_gbs":398.39}],
               "ops":[{"name":"fma.f32","status":"present","at":"reg"},
                      {"name":"tma","status":"absent","at":"sm"},
@@ -330,7 +333,7 @@ mod tests {
     fn integrate_lowers_and_passes() {
         let ir: KernelIr = serde_json::from_str(
             r#"{
-              "schema":"lith-kernel-ir/0.1",
+              "schema":"lyth-kernel-ir/0.1",
               "name":"k_integrate",
               "machine_id":"sm_120",
               "declared_intensity":0.2069,
@@ -356,7 +359,7 @@ mod tests {
     fn missing_tma_refuses() {
         let ir: KernelIr = serde_json::from_str(
             r#"{
-              "schema":"lith-kernel-ir/0.1",
+              "schema":"lyth-kernel-ir/0.1",
               "name":"bad",
               "machine_id":"sm_120",
               "declared_intensity":1.0,

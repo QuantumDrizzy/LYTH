@@ -1,9 +1,9 @@
-//! `lith-evidence/0.1` — machine-readable claim with a baseline or nothing.
+//! `lyth-evidence/0.1` — machine-readable claim with a baseline or nothing.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const SCHEMA_ID: &str = "lith-evidence/0.1";
+pub const SCHEMA_ID: &str = "lyth-evidence/0.1";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bundle {
@@ -109,9 +109,14 @@ impl Bundle {
             source_repo: None,
             notes: vec![
                 "Fill value, unit, baseline, n_reps, arch, compile_flags.".into(),
-                "Set clock_state / cache_state to measured|flushed|warm and close the limits.".into(),
+                "Set clock_state / cache_state to measured|flushed|warm and close the limits."
+                    .into(),
                 "verified may become true only when every known_limit is closed.".into(),
             ],
         }
     }
+}
+
+impl crate::document::Document for Bundle {
+    const SCHEMA: &'static str = SCHEMA_ID;
 }

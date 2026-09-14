@@ -3,7 +3,7 @@
 use serde::Deserialize;
 use thiserror::Error;
 
-pub const ORACLE_CASE_SCHEMA: &str = "lith-oracle-case/0.1";
+pub const ORACLE_CASE_SCHEMA: &str = "lyth-oracle-case/0.1";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct OracleCase {
@@ -65,17 +65,12 @@ pub fn check(case: &OracleCase) -> Result<OracleVerdict, OracleError> {
         return Ok(OracleVerdict::Inconclusive { missing });
     }
 
-    let oracle_order = rank_desc(
+    let oracle_order = rank_desc(case.kernels.iter().map(|k| (k.id.as_str(), k.oracle_score)));
+    let silicon_order = rank_desc(
         case.kernels
             .iter()
-            .map(|k| (k.id.as_str(), k.oracle_score)),
+            .map(|k| (k.id.as_str(), k.silicon_score.expect("checked above"))),
     );
-    let silicon_order = rank_desc(case.kernels.iter().map(|k| {
-        (
-            k.id.as_str(),
-            k.silicon_score.expect("checked above"),
-        )
-    }));
 
     if oracle_order == silicon_order {
         Ok(OracleVerdict::Pass {
@@ -135,6 +130,10 @@ pub fn format_verdict(case: &OracleCase, v: &OracleVerdict) -> String {
         }
     }
     out
+}
+
+impl crate::document::Document for OracleCase {
+    const SCHEMA: &'static str = ORACLE_CASE_SCHEMA;
 }
 
 #[cfg(test)]

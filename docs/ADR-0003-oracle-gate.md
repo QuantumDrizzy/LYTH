@@ -25,8 +25,8 @@
 - CPU GFLOP/s order: **ising > llm > mps**
 
 ```bash
-lith-probe oracle-check fixtures/oracle/case-gpu-gflops-2026-09-14.json   # exit 1
-lith-probe oracle-check fixtures/oracle/case-cpu-gflops-2026-09-14.json   # exit 1
+lyth-probe oracle-check fixtures/oracle/case-gpu-gflops-2026-09-14.json   # exit 1
+lyth-probe oracle-check fixtures/oracle/case-cpu-gflops-2026-09-14.json   # exit 1
 ```
 
 Evidence: `fixtures/adopted/oracle-gate-0.5-fail.json`.

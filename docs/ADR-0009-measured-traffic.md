@@ -25,7 +25,7 @@ traffic from Nsight Compute.
 ncu --csv --kernel-name k_integrate --launch-skip 2000 --launch-count 1 \
     --metrics dram__bytes.sum,lts__t_bytes.sum ./connectome_lif.exe --steps 20 --flies 1
 
-lith-probe intensity-check fixtures/intensity/k_integrate.json \
+lyth-probe intensity-check fixtures/intensity/k_integrate.json \
   --machine fixtures/machine/sm_120.json \
   --ncu fixtures/ncu/k_integrate-sm_120-2026-09-14.csv --elements 166700
 ```

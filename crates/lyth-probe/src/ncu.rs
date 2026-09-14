@@ -53,7 +53,8 @@ pub fn deepest_level<'a>(levels: impl IntoIterator<Item = &'a str>) -> String {
             best = best.min(i);
         }
     }
-    LEVEL_ORDER.get(if best == usize::MAX { 0 } else { best })
+    LEVEL_ORDER
+        .get(if best == usize::MAX { 0 } else { best })
         .unwrap_or(&"dram")
         .to_string()
 }
@@ -161,7 +162,11 @@ fn parse_value(raw: &str, unit: &str) -> Option<f64> {
     let decimal: Option<char> = match (dots, commas) {
         (0, 0) => None,
         // Both kinds: whichever comes last is the decimal point.
-        (d, c) if d > 0 && c > 0 => Some(if t.rfind('.') > t.rfind(',') { '.' } else { ',' }),
+        (d, c) if d > 0 && c > 0 => Some(if t.rfind('.') > t.rfind(',') {
+            '.'
+        } else {
+            ','
+        }),
         // Repeated: cannot be a decimal point, so it groups.
         (d, 0) if d > 1 => None,
         (0, c) if c > 1 => None,
@@ -225,7 +230,10 @@ pub fn parse(csv: &str, kernel: Option<&str>, level: Option<&str>) -> Result<Ncu
             continue;
         }
         let metric = f[c_name].trim().to_string();
-        let unit = c_unit.and_then(|i| f.get(i)).map(String::as_str).unwrap_or("");
+        let unit = c_unit
+            .and_then(|i| f.get(i))
+            .map(String::as_str)
+            .unwrap_or("");
         let Some(bytes) = parse_value(&f[c_val], unit) else {
             continue;
         };
@@ -236,7 +244,11 @@ pub fn parse(csv: &str, kernel: Option<&str>, level: Option<&str>) -> Result<Ncu
             .and_then(|i| f.get(i))
             .map(|s| s.trim().to_string())
             .unwrap_or_else(|| "<all>".into());
-        let e = per_kernel.entry(kname).or_default().entry(metric).or_insert((0.0, 0));
+        let e = per_kernel
+            .entry(kname)
+            .or_default()
+            .entry(metric)
+            .or_insert((0.0, 0));
         e.0 += bytes;
         e.1 += 1;
     }
@@ -254,7 +266,11 @@ pub fn parse(csv: &str, kernel: Option<&str>, level: Option<&str>) -> Result<Ncu
             // Fold every kernel together. Correct for a single-launch report, wrong for a
             // multi-kernel one -- so say which kernels were folded rather than hiding it.
             let names: Vec<&str> = per_kernel.keys().map(String::as_str).collect();
-            let label = if names.len() == 1 { names[0].to_string() } else { names.join(" + ") };
+            let label = if names.len() == 1 {
+                names[0].to_string()
+            } else {
+                names.join(" + ")
+            };
             let mut folded: BTreeMap<String, (f64, u32)> = BTreeMap::new();
             for m in per_kernel.values() {
                 for (metric, (b, n)) in m {
@@ -294,13 +310,10 @@ pub fn parse(csv: &str, kernel: Option<&str>, level: Option<&str>) -> Result<Ncu
     }
 
     let want = level.unwrap_or("dram");
-    let pick = found
-        .iter()
-        .position(|(l, ..)| l == want)
-        .ok_or_else(|| {
-            let have: Vec<&str> = found.iter().map(|(l, ..)| l.as_str()).collect();
-            NcuError::NoLevel(want.into(), have.join(", "))
-        })?;
+    let pick = found.iter().position(|(l, ..)| l == want).ok_or_else(|| {
+        let have: Vec<&str> = found.iter().map(|(l, ..)| l.as_str()).collect();
+        NcuError::NoLevel(want.into(), have.join(", "))
+    })?;
     let (lvl, bytes, metric, launches) = found[pick].clone();
     let others = found
         .iter()
@@ -308,18 +321,42 @@ pub fn parse(csv: &str, kernel: Option<&str>, level: Option<&str>) -> Result<Ncu
         .filter(|(i, _)| *i != pick)
         .map(|(_, (l, b, m, _))| (l.clone(), *b, m.clone()))
         .collect();
-    Ok(NcuTraffic { kernel: kname, level: lvl, bytes, launches, metric, others })
+    Ok(NcuTraffic {
+        kernel: kname,
+        level: lvl,
+        bytes,
+        launches,
+        metric,
+        others,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "verdict", rename_all = "snake_case")]
 pub enum TrafficVerdict {
     /// The byte model is confirmed against silicon.
-    Confirmed { expected: f64, measured: f64, ratio: f64, tol: f64 },
+    Confirmed {
+        expected: f64,
+        measured: f64,
+        ratio: f64,
+        tol: f64,
+    },
     /// More traffic than the accounting predicts.
-    Inflated { expected: f64, measured: f64, ratio: f64, tol: f64, causes: Vec<String> },
+    Inflated {
+        expected: f64,
+        measured: f64,
+        ratio: f64,
+        tol: f64,
+        causes: Vec<String>,
+    },
     /// Less traffic than predicted: it never reached DRAM.
-    Absorbed { expected: f64, measured: f64, ratio: f64, tol: f64, causes: Vec<String> },
+    Absorbed {
+        expected: f64,
+        measured: f64,
+        ratio: f64,
+        tol: f64,
+        causes: Vec<String>,
+    },
 }
 
 /// Compare a per-element accounting, scaled by the problem size, against measurement.
@@ -340,13 +377,20 @@ pub fn compare(
         return Err(NcuError::Message("bytes per element must be > 0".into()));
     }
     if !(0.0..1.0).contains(&tol) {
-        return Err(NcuError::Message(format!("tol must be in [0,1), got {tol}")));
+        return Err(NcuError::Message(format!(
+            "tol must be in [0,1), got {tol}"
+        )));
     }
     let expected = bytes_per_element * elements;
     let ratio = measured.bytes / expected;
 
     if (ratio - 1.0).abs() <= tol {
-        return Ok(TrafficVerdict::Confirmed { expected, measured: measured.bytes, ratio, tol });
+        return Ok(TrafficVerdict::Confirmed {
+            expected,
+            measured: measured.bytes,
+            ratio,
+            tol,
+        });
     }
     if ratio > 1.0 {
         Ok(TrafficVerdict::Inflated {
@@ -395,16 +439,37 @@ fn human(bytes: f64) -> String {
 
 pub fn format_verdict(v: &TrafficVerdict, m: &NcuTraffic, elements: f64) -> String {
     let (expected, measured, ratio, tol) = match v {
-        TrafficVerdict::Confirmed { expected, measured, ratio, tol }
-        | TrafficVerdict::Inflated { expected, measured, ratio, tol, .. }
-        | TrafficVerdict::Absorbed { expected, measured, ratio, tol, .. } => {
-            (*expected, *measured, *ratio, *tol)
+        TrafficVerdict::Confirmed {
+            expected,
+            measured,
+            ratio,
+            tol,
         }
+        | TrafficVerdict::Inflated {
+            expected,
+            measured,
+            ratio,
+            tol,
+            ..
+        }
+        | TrafficVerdict::Absorbed {
+            expected,
+            measured,
+            ratio,
+            tol,
+            ..
+        } => (*expected, *measured, *ratio, *tol),
     };
     let mut out = String::new();
-    out.push_str(&format!("\ntraffic-check ({}): accounting against measurement\n", m.level));
+    out.push_str(&format!(
+        "\ntraffic-check ({}): accounting against measurement\n",
+        m.level
+    ));
     out.push_str(&format!("  kernel:   {}\n", short_kernel(&m.kernel)));
-    out.push_str(&format!("  metric:   {} ({} launch(es))\n", m.metric, m.launches));
+    out.push_str(&format!(
+        "  metric:   {} ({} launch(es))\n",
+        m.metric, m.launches
+    ));
     out.push_str(&format!("  elements: {elements}\n"));
     out.push_str(&format!(
         "  analytic: {:>10}  ({:.4} bytes/element)\n",
@@ -492,14 +557,20 @@ mod tests {
     fn folding_every_kernel_says_which_ones_it_folded() {
         let t = parse(CSV, None, None).unwrap();
         assert_eq!(t.bytes, 6.75e6);
-        assert!(t.kernel.contains('+'), "folded label should name both kernels");
+        assert!(
+            t.kernel.contains('+'),
+            "folded label should name both kernels"
+        );
     }
 
     #[test]
     fn a_missing_kernel_lists_what_is_there() {
         let e = parse(CSV, Some("k_nope"), None).unwrap_err();
         let msg = e.to_string();
-        assert!(msg.contains("k_integrate"), "error should list kernels present: {msg}");
+        assert!(
+            msg.contains("k_integrate"),
+            "error should list kernels present: {msg}"
+        );
     }
 
     #[test]
@@ -527,14 +598,20 @@ mod tests {
     #[test]
     fn a_grouping_dot_is_not_read_as_a_decimal_point() {
         let t = parse(REAL, Some("k_integrate"), None).unwrap();
-        assert_eq!(t.bytes, 2_508_800.0, "2.508.800 byte is 2.5 MB, not 2.5 bytes");
+        assert_eq!(
+            t.bytes, 2_508_800.0,
+            "2.508.800 byte is 2.5 MB, not 2.5 bytes"
+        );
     }
 
     #[test]
     fn na_cells_are_skipped_not_counted_as_zero() {
         let t = parse(REAL, None, None).unwrap();
         assert_eq!(t.metric, "dram__bytes.sum");
-        assert_eq!(t.launches, 1, "the n/a read metric must not inflate the launch count");
+        assert_eq!(
+            t.launches, 1,
+            "the n/a read metric must not inflate the launch count"
+        );
     }
 
     #[test]
@@ -556,6 +633,9 @@ mod tests {
         let bad = r#""Kernel Name","Metric Name","Metric Unit","Metric Value"
 "k(int)","dram__bytes.sum","furlongs","4.75"
 "#;
-        assert!(parse(bad, None, None).is_err(), "must not invent a scale for an unknown unit");
+        assert!(
+            parse(bad, None, None).is_err(),
+            "must not invent a scale for an unknown unit"
+        );
     }
 }

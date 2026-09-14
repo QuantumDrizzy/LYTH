@@ -1,5 +1,5 @@
 {
-  "schema": "lith-oracle-case/0.1",
+  "schema": "lyth-oracle-case/0.1",
   "metric_oracle": "flops_per_instruction",
   "metric_silicon": "pct_of_measured_dram_bandwidth",
   "metric_note": "Higher is better on both axes for this case. Oracle values from Unibit docs/kernel-cost.md. Silicon incomplete → expect INCONCLUSIVE.",

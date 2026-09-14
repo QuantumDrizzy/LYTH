@@ -1,5 +1,5 @@
 {
-  "schema": "lith-oracle-case/0.1",
+  "schema": "lyth-oracle-case/0.1",
   "metric_oracle": "flops_per_instruction",
   "metric_silicon": "pct_of_isa_ceiling",
   "metric_note": "SELF-CHECK only: silicon_score copied from Unibit % of ceiling. Proves the checker, not the oracle gate. Real gate needs independent silicon.",

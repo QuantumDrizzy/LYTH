@@ -1,11 +1,18 @@
 {
-  "schema": "lith-machine-measurement/0.1",
+  "schema": "lyth-machine-measurement/0.1",
   "machine_id": "sm_120",
-  "source": "Unibit/docs/host-reference.json host.gpu_read_gbs 2026-09-14",
+  "source": "tools/peak_probe.py, six runs, 2026-09-14",
+  "clock_state": "unlocked",
   "levels": [
     {
       "name": "dram",
-      "bandwidth_gbs": 398.38843599246957
+      "bandwidth_gbs": 358.43,
+      "runs": [350.84, 352.26, 354.38, 362.48, 368.32, 368.42]
     }
+  ],
+  "known_limits": [
+    "[KNOWN LIMIT] Clocks not locked. Bandwidth moves with clock state and this number is the median of an unlocked run; a locked-clock measurement is not interchangeable with it.",
+    "[KNOWN LIMIT] The benchmark is a torch.sum reduction, not a pure streaming read, so it is a lower bound on achievable read bandwidth.",
+    "[KNOWN LIMIT] The previously recorded 398.39 GB/s did not reproduce: it sits 10% above every one of these six runs. Its provenance was a copy out of Unibit/docs/host-reference.json, which is why it survived unchecked."
   ]
 }

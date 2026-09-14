@@ -1,5 +1,5 @@
 {
-  "schema": "lith-machine/0.1",
+  "schema": "lyth-machine/0.1",
   "id": "sm_120",
   "peak_tflops": 15.37,
   "peak_tflops_fp16": 44.25,
@@ -68,7 +68,7 @@
   ],
   "notes": [
     "dram 398.39 GB/s: Unibit host_reference.py 2026-09-14. peak_probe same day saw 357 GB/s \u00e2\u20ac\u201d unlocked clock variance ~10%.",
-    "peak_tflops 15.03 / peak_tflops_fp16 44.08: achieved cuBLAS GEMM 8192 via lith/tools/peak_probe.py (not datasheet).",
+    "peak_tflops 15.03 / peak_tflops_fp16 44.08: achieved cuBLAS GEMM 8192 via lyth/tools/peak_probe.py (not datasheet).",
     "ridge FP32 \u00e2\u2030\u02c6 15.03e3/398.39 \u00e2\u2030\u02c6 37.7 flop/byte. TC/FP16 ridge \u00e2\u2030\u02c6 110.6.",
     "l2/smem/reg bandwidth 0 until a probe names them."
   ],

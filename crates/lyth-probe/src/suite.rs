@@ -3,7 +3,7 @@
 use serde::Deserialize;
 use thiserror::Error;
 
-pub const SUITE_SCHEMA: &str = "lith-suite/0.1";
+pub const SUITE_SCHEMA: &str = "lyth-suite/0.1";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Suite {
@@ -82,6 +82,41 @@ pub enum Expect {
     Inconclusive,
 }
 
+/// What a step actually did.
+///
+/// This replaces a `(bool, &str)` pair that had to agree by convention and that nothing
+/// checked — `got_pass && got_label == "pass"` was the old condition, which says out loud
+/// that the two could disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    Pass,
+    Fail,
+    /// Oracle only: the case did not carry enough silicon to decide.
+    Inconclusive,
+    /// The step could not run at all — unreadable file, wrong schema, check refused input.
+    Error,
+}
+
+impl Outcome {
+    pub fn label(self) -> &'static str {
+        match self {
+            Outcome::Pass => "pass",
+            Outcome::Fail => "fail",
+            Outcome::Inconclusive => "inconclusive",
+            Outcome::Error => "error",
+        }
+    }
+
+    /// A two-valued verdict, where anything that is not a pass is a fail.
+    pub fn of(passed: bool) -> Self {
+        if passed {
+            Outcome::Pass
+        } else {
+            Outcome::Fail
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StepOutcome {
     Ok,
@@ -106,17 +141,37 @@ pub fn check_schema(suite: &Suite) -> Result<(), SuiteError> {
     Ok(())
 }
 
-pub fn match_expect(expect: Expect, got_pass: bool, got_label: &str) -> StepOutcome {
-    let ok = match expect {
-        Expect::Pass => got_pass && got_label == "pass",
-        Expect::Fail => got_label == "fail",
-        Expect::Inconclusive => got_label == "inconclusive",
-    };
+pub fn match_expect(expect: Expect, got: Outcome) -> StepOutcome {
+    let ok = matches!(
+        (expect, got),
+        (Expect::Pass, Outcome::Pass)
+            | (Expect::Fail, Outcome::Fail)
+            | (Expect::Inconclusive, Outcome::Inconclusive)
+    );
     if ok {
         StepOutcome::Ok
     } else {
         StepOutcome::Unexpected {
-            got: got_label.into(),
+            got: got.label().into(),
         }
     }
+}
+
+impl Step {
+    /// Every variant carries an `expect`; reading it should not require matching all seven.
+    pub fn expect(&self) -> Expect {
+        match self {
+            Step::Validate { expect, .. }
+            | Step::OracleCheck { expect, .. }
+            | Step::MachineCheck { expect, .. }
+            | Step::IntensityCheck { expect, .. }
+            | Step::KernelCheck { expect, .. }
+            | Step::CtCheck { expect, .. }
+            | Step::PolyCheck { expect, .. } => *expect,
+        }
+    }
+}
+
+impl crate::document::Document for Suite {
+    const SCHEMA: &'static str = SUITE_SCHEMA;
 }

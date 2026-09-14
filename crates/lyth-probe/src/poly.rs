@@ -7,10 +7,12 @@
 use serde::Deserialize;
 use thiserror::Error;
 
-use crate::kernel::{check as kernel_check, KernelIr, KernelVerdict, Stream, ArithOp, CapabilityReq};
+use crate::kernel::{
+    check as kernel_check, ArithOp, CapabilityReq, KernelIr, KernelVerdict, Stream,
+};
 use crate::machine::Machine;
 
-pub const POLY_SCHEMA: &str = "lith-poly/0.1";
+pub const POLY_SCHEMA: &str = "lyth-poly/0.1";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PolyCase {
@@ -256,6 +258,10 @@ pub fn format_verdict(poly: &PolyCase, v: &PolyVerdict) -> String {
     out
 }
 
+impl crate::document::Document for PolyCase {
+    const SCHEMA: &'static str = POLY_SCHEMA;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,7 +269,7 @@ mod tests {
     fn machine() -> Machine {
         serde_json::from_str(
             r#"{
-              "schema":"lith-machine/0.1","id":"sm_120","peak_tflops":15.03,
+              "schema":"lyth-machine/0.1","id":"sm_120","peak_tflops":15.03,
               "levels":[{"name":"dram","bandwidth_gbs":398.39}],
               "ops":[{"name":"fma.f16","status":"present","at":"reg"},
                      {"name":"nvfp4","status":"present","at":"sm"}]

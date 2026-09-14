@@ -1,4 +1,4 @@
-# ADR-0001 — What LITH is, and what would kill it
+# ADR-0001 — What LYTH is, and what would kill it
 
 **Status:** Accepted  
 **Date:** 2026-09-14  
@@ -13,7 +13,7 @@
 
 ## The question that can lose (must stay open for three weeks)
 
-> **What can LITH express that a Rust DSL with procedural macros cannot?**
+> **What can LYTH express that a Rust DSL with procedural macros cannot?**
 
 Everything else in the plan — profiles, capability refuse, evidence bundles, cost
 oracle — is *a Rust crate plus a CLI*. A new parser is the most expensive thing
@@ -24,7 +24,7 @@ you can build. It is justified only if:
 2. Memory-first syntax (movement declared, arithmetic subordinate) cannot be
    expressed as attributes without becoming unreadable.
 
-**Falsification:** if after three weeks of dogfooding `lith probe` on hand-written
+**Falsification:** if after three weeks of dogfooding `lyth probe` on hand-written
 CUDA it turns out `#[kernel]` + macros cover ~90%, **stop the parser, publish the
 negative result**, keep the probe CLI. Same discipline as Unibit (256-bit width
 bought nothing) and SWEEP (no kernel margin over cuStateVec).
@@ -37,11 +37,11 @@ Arithmetic-first languages write `c = a + b` and leave movement *implicit*.
 
 On a machine where moving bytes costs 100–1000× operating on them, that is backwards.
 
-**In LITH the program describes data movement through the memory hierarchy.
+**In LYTH the program describes data movement through the memory hierarchy.
 Arithmetic is what happens to bytes at the stops.**
 
 You already write this way in your head (NIBBLE: “FP16 weights never materialise”,
-“16-entry table lives in the warp register file”). LITH removes the hand
+“16-entry table lives in the warp register file”). LYTH removes the hand
 translation into CUDA’s arithmetic syntax.
 
 ```
@@ -81,7 +81,7 @@ machine sm_120:
     op   tma      absent   # or present — capability refuse if required
 ```
 
-A 2036 GPU is a **new file**, not a new backend. `lith machine probe` measures live
+A 2036 GPU is a **new file**, not a new backend. `lyth machine probe` measures live
 silicon and **fails if the description lies**.
 
 **Falsification (hardware):** if a relevant machine cannot be described as levels
@@ -134,14 +134,14 @@ dropped from v1.
 | `constant_time` verified by taint on addresses/branches | Smart contracts |
 
 PQC: NTT/Merkle are first-class `@gpu` candidates. Do **not** assume memory-bound —
-Kyber n=256 may be latency- or compute-bound until batched. LITH answers which.
+Kyber n=256 may be latency- or compute-bound until batched. LYTH answers which.
 `constant_time` is the feature nobody ships: no secret-dependent address or branch.
 
 ---
 
 ## Adoption (must answer before CHIASMA dogfood)
 
-How does a `.lith` enter an existing CUDA tree?
+How does a `.lyth` enter an existing CUDA tree?
 
 | Path | Pros | Cons |
 |------|------|------|
@@ -183,16 +183,16 @@ A bare `lacks TMA` without next steps is worse than a silent fallback.
 
 | Phase | Ship | Done when |
 |-------|------|-----------|
-| **0** | `lith probe` — **no parser** | Evidence CLI over existing CUDA/Rust; useful in CHIASMA, NIBBLE, SWEEP, Blaze, QuBLAR |
+| **0** | `lyth probe` — **no parser** | Evidence CLI over existing CUDA/Rust; useful in CHIASMA, NIBBLE, SWEEP, Blaze, QuBLAR |
 | **0.5** | Oracle rank-order experiment | **DONE FAIL** — kill `@oracle` from v1 (ADR-0003) |
-| **1** | `machine` as value + `lith machine probe` | Live bandwidth vs file; fail if lie — scaffold in ADR-0004 |
+| **1** | `machine` as value + `lyth machine probe` | Live bandwidth vs file; fail if lie — scaffold in ADR-0004 |
 | **1b** | Intensity as checked type + CHIASMA dogfood | `intensity-check` + suite — ADR-0005 |
 | **1c** | Kernel IR (streams / ops / capability refuse) | `kernel-check` — ADR-0006; peak measured |
 | **1d** | `constant_time` taint refuse | `ct-check` — ADR-0007 (PQC gate before NTT) |
 | **2** | Parser + intensity typecheck | `@gpu` PTX only; dogfood CHIASMA LIF or NIBBLE GEMV |
 | **3** | Polymorphism layout × machine | Cost re-checked per instance; NIBBLE becomes a language answer |
 | **4** | `constant_time` + PQC NTT | Kyber path; KHAOS consumer |
-| **5** | `lith probe anchor` | Content-addressed hash of bundle; chain-agnostic; **outside** the compiler |
+| **5** | `lyth probe anchor` | Content-addressed hash of bundle; chain-agnostic; **outside** the compiler |
 
 ### Evidence bundle (mandatory fields — exit 1 if missing)
 
@@ -224,8 +224,8 @@ What it promises:
 |------|---------------------|
 | Unibit | Density/museum instrument — **not** v1 `@oracle` (0.5 FAIL) |
 | TRM `gpu-ir` | IR spine for `@gpu` (extend, do not fork) |
-| rse-hpc-lab labkit | G1–G8 patterns absorbed into `lith probe` |
-| KARDASHEV | Civilisation gates stay TS; LITH does not reimplement them |
+| rse-hpc-lab labkit | G1–G8 patterns absorbed into `lyth probe` |
+| KARDASHEV | Civilisation gates stay TS; LYTH does not reimplement them |
 | VENTUS | `@fsw` later; harness `source` field informs probe cases |
 | CHIASMA | First `@gpu` dogfood (`k_integrate` / `k_propagate`) |
 | KHAOS | PQC consumer for Fase 4 |

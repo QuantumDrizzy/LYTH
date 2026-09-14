@@ -1,5 +1,5 @@
-use lith_probe::{
-    validate, Bundle, Baseline, ClockState, CacheState, KnownLimit, LimitStatus, SCHEMA_ID,
+use lyth_probe::{
+    validate, Baseline, Bundle, CacheState, ClockState, KnownLimit, LimitStatus, SCHEMA_ID,
 };
 use serde_json::json;
 
@@ -110,7 +110,11 @@ fn unknown_clock_without_limit_fails_with_next_step() {
         notes: vec![],
     };
     let err = validate(&b).unwrap_err();
-    let msg = err.iter().map(|v| v.0.as_str()).collect::<Vec<_>>().join("\n");
+    let msg = err
+        .iter()
+        .map(|v| v.0.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(msg.contains("options:"));
     assert!(msg.contains("clock"));
 }

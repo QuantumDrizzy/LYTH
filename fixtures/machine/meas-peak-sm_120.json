@@ -1,7 +1,7 @@
 {
-  "schema": "lith-machine-measurement/0.1",
+  "schema": "lyth-machine-measurement/0.1",
   "machine_id": "sm_120",
-  "source": "lith/tools/peak_probe.py torch 2.12.0.dev20260408+cu128",
+  "source": "lyth/tools/peak_probe.py torch 2.12.0.dev20260408+cu128",
   "levels": [
     {
       "name": "dram",

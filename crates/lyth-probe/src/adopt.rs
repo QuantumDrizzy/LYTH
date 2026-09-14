@@ -1,6 +1,6 @@
 //! Gap analysis against foreign evidence (rse-audit, neuromod, ad-hoc).
 //!
-//! Does not pretend foreign bundles are lith bundles. Lists what is missing
+//! Does not pretend foreign bundles are lyth bundles. Lists what is missing
 //! so adopting a repo is a checklist, not a rewrite.
 
 use serde_json::Value;
@@ -35,7 +35,7 @@ pub fn gap_report(raw: &Value) -> Vec<GapItem> {
         note: if schema.is_empty() {
             "no schema field".into()
         } else {
-            format!("foreign schema `{schema}` — adopt into lith-evidence/0.1")
+            format!("foreign schema `{schema}` — adopt into lyth-evidence/0.1")
         },
     });
 
@@ -75,7 +75,10 @@ pub fn gap_report(raw: &Value) -> Vec<GapItem> {
     );
 
     let has_baseline = raw.get("baseline").is_some()
-        || raw.get("baselines").and_then(|v| v.as_array()).is_some_and(|a| !a.is_empty())
+        || raw
+            .get("baselines")
+            .and_then(|v| v.as_array())
+            .is_some_and(|a| !a.is_empty())
         || raw
             .pointer("/probes/0/evidence/baselines")
             .and_then(|v| v.as_array())
@@ -90,18 +93,15 @@ pub fn gap_report(raw: &Value) -> Vec<GapItem> {
         note: if has_baseline {
             "baseline(s) found".into()
         } else {
-            "MISSING — lith will refuse without a named baseline".into()
+            "MISSING — lyth will refuse without a named baseline".into()
         },
     });
 
-    let n = raw
-        .get("n_reps")
-        .and_then(|v| v.as_u64())
-        .or_else(|| {
-            raw.pointer("/measurements/0/samples_us")
-                .and_then(|v| v.as_array())
-                .map(|a| a.len() as u64)
-        });
+    let n = raw.get("n_reps").and_then(|v| v.as_u64()).or_else(|| {
+        raw.pointer("/measurements/0/samples_us")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len() as u64)
+    });
     items.push(GapItem {
         field: "n_reps",
         status: match n {
@@ -206,7 +206,7 @@ pub fn format_report(path: &str, items: &[GapItem]) -> String {
         .filter(|i| i.status == GapStatus::Missing)
         .count();
     out.push_str(&format!(
-        "summary: {missing} mandatory field(s) missing for lith-evidence/0.1\n"
+        "summary: {missing} mandatory field(s) missing for lyth-evidence/0.1\n"
     ));
     out
 }

@@ -1,5 +1,5 @@
 {
-  "schema": "lith-intensity/0.1",
+  "schema": "lyth-intensity/0.1",
   "kernel": "gate_proj_int4_gemv",
   "declared_intensity": 0.4444,
   "unit": "flops_per_byte",

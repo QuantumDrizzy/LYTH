@@ -1,6 +1,6 @@
 {
-  "schema": "lith-suite/0.1",
-  "name": "lith-fase1-smoke",
+  "schema": "lyth-suite/0.1",
+  "name": "lyth-fase1-smoke",
   "steps": [
     { "kind": "validate", "path": "fixtures/adopted/int4-gate-proj.json" },
     { "kind": "validate", "path": "fixtures/adopted/lif-integrate.json" },

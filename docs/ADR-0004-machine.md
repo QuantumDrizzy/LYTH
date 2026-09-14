@@ -6,12 +6,12 @@
 
 ## Decision
 
-A machine is a **JSON value** (`lith-machine/0.1`), not a CLI flag.
-`lith-probe machine-check` compares claimed level bandwidths to a measurement
+A machine is a **JSON value** (`lyth-machine/0.1`), not a CLI flag.
+`lyth-probe machine-check` compares claimed level bandwidths to a measurement
 file and **FAIL**s if the file lies beyond `--tol` (default 5%).
 
 ```bash
-lith-probe machine-check \
+lyth-probe machine-check \
   --machine fixtures/machine/sm_120.json \
   --measurement fixtures/machine/meas-sm_120-2026-09-14.json
 ```

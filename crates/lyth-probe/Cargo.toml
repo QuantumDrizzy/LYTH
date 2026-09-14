@@ -1,12 +1,12 @@
 [package]
-name = "lith-probe"
+name = "lyth-probe"
 version = "0.1.0"
 edition = "2021"
-description = "Evidence CLI for LITH — Fase 0, no language. A claim without a baseline does not ship."
+description = "Evidence CLI for LYTH — Fase 0, no language. A claim without a baseline does not ship."
 license = "UNLICENSED"
 
 [[bin]]
-name = "lith-probe"
+name = "lyth-probe"
 path = "src/main.rs"
 
 [dependencies]

@@ -8,7 +8,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use thiserror::Error;
 
-pub const CT_SCHEMA: &str = "lith-ct/0.1";
+pub const CT_SCHEMA: &str = "lyth-ct/0.1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -242,6 +242,10 @@ pub fn format_verdict(case: &CtCase, v: &CtVerdict) -> String {
     out
 }
 
+impl crate::document::Document for CtCase {
+    const SCHEMA: &'static str = CT_SCHEMA;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,7 +254,7 @@ mod tests {
     fn secret_branch_fails() {
         let case: CtCase = serde_json::from_str(
             r#"{
-              "schema":"lith-ct/0.1","name":"bad",
+              "schema":"lyth-ct/0.1","name":"bad",
               "secrets":["sk"],
               "values":[{"id":"sk","taint":"secret"}],
               "ops":[{"kind":"branch","cond":"sk"}]
@@ -267,7 +271,7 @@ mod tests {
     fn secret_arith_ok() {
         let case: CtCase = serde_json::from_str(
             r#"{
-              "schema":"lith-ct/0.1","name":"ok",
+              "schema":"lyth-ct/0.1","name":"ok",
               "secrets":["sk"],
               "values":[
                 {"id":"sk","taint":"secret"},
@@ -291,7 +295,7 @@ mod tests {
     fn secret_gather_fails() {
         let case: CtCase = serde_json::from_str(
             r#"{
-              "schema":"lith-ct/0.1","name":"gather",
+              "schema":"lyth-ct/0.1","name":"gather",
               "secrets":["sk"],
               "values":[{"id":"sk"},{"id":"buf"}],
               "ops":[

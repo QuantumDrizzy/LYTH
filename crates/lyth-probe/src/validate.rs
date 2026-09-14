@@ -23,7 +23,9 @@ pub fn validate(b: &Bundle) -> Result<(), Vec<Violation>> {
         v.push(Violation("claim still contains REPLACE_ME".into()));
     }
     if b.value.is_null() {
-        v.push(Violation("value is null — a claim without a number does not ship".into()));
+        v.push(Violation(
+            "value is null — a claim without a number does not ship".into(),
+        ));
     }
     if b.unit.trim().is_empty() || b.unit == "REPLACE_ME" {
         v.push(Violation("unit missing or REPLACE_ME".into()));
@@ -90,8 +92,7 @@ pub fn validate(b: &Bundle) -> Result<(), Vec<Violation>> {
     for lim in &b.known_limits {
         if lim.id.trim().is_empty() || lim.text.trim().is_empty() {
             v.push(Violation(
-                "known_limit with empty id or text — [KNOWN_LIMIT] is syntax, not a shrug"
-                    .into(),
+                "known_limit with empty id or text — [KNOWN_LIMIT] is syntax, not a shrug".into(),
             ));
         }
     }
@@ -111,14 +112,10 @@ pub fn validate(b: &Bundle) -> Result<(), Vec<Violation>> {
             )));
         }
         if matches!(b.clock_state, ClockState::Unknown) {
-            v.push(Violation(
-                "verified=true but clock_state is unknown".into(),
-            ));
+            v.push(Violation("verified=true but clock_state is unknown".into()));
         }
         if matches!(b.cache_state, CacheState::Unknown) {
-            v.push(Violation(
-                "verified=true but cache_state is unknown".into(),
-            ));
+            v.push(Violation("verified=true but cache_state is unknown".into()));
         }
     }
 

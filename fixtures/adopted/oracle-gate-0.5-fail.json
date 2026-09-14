@@ -1,5 +1,5 @@
 {
-  "schema": "lith-evidence/0.1",
+  "schema": "lyth-evidence/0.1",
   "claim": "Unibit FLOPs/instruction rank-order (mps>llm>ising) does NOT match live silicon GPU GFLOP/s rank-order (llm>ising>mps) on RTX 5060 Ti sm_120",
   "value": "FAIL",
   "unit": "oracle_rank_order_vs_silicon",
@@ -41,9 +41,9 @@
   ],
   "verified": false,
   "device": "NVIDIA GeForce RTX 5060 Ti sm_120 36 SMs",
-  "source_repo": "Unibit + lith",
+  "source_repo": "Unibit + lyth",
   "notes": [
-    "lith-probe oracle-check fixtures/oracle/case-gpu-gflops-2026-09-14.json → exit 1 FAIL",
+    "lyth-probe oracle-check fixtures/oracle/case-gpu-gflops-2026-09-14.json → exit 1 FAIL",
     "CPU twin fixtures/oracle/case-cpu-gflops-2026-09-14.json also FAIL (ising>llm>mps)",
     "ADR-0001 falsifier (2): drop @oracle from v1 design path; keep Unibit as museum/density instrument",
     "Raw: Unibit/docs/host-reference.json"

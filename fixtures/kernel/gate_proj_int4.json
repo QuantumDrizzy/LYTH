@@ -1,5 +1,5 @@
 {
-  "schema": "lith-kernel-ir/0.1",
+  "schema": "lyth-kernel-ir/0.1",
   "name": "gate_proj_int4",
   "machine_id": "sm_120",
   "declared_intensity": 0.4444,

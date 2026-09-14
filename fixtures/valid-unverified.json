@@ -1,5 +1,5 @@
 {
-  "schema": "lith-evidence/0.1",
+  "schema": "lyth-evidence/0.1",
   "claim": "k_integrate median ≤ 12 µs/step on sm_120 (N=166700, CUDA graph)",
   "value": 10.76,
   "unit": "us/step",
@@ -29,6 +29,6 @@
   "device": "NVIDIA GeForce RTX 5060 Ti",
   "source_repo": "rse-hpc-lab/exercises/08-connectome-lif",
   "notes": [
-    "Numbers from exercises/08-connectome-lif/evidence.json integrate_only / plain medians — adopted as a lith example, not re-measured."
+    "Numbers from exercises/08-connectome-lif/evidence.json integrate_only / plain medians — adopted as a lyth example, not re-measured."
   ]
 }

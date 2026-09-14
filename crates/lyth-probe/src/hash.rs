@@ -1,4 +1,4 @@
-//! Content-addressing for future `lith probe anchor` — hash only, no chain.
+//! Content-addressing for future `lyth probe anchor` — hash only, no chain.
 
 use sha2::{Digest, Sha256};
 

@@ -1,5 +1,5 @@
 {
-  "schema": "lith-kernel-ir/0.1",
+  "schema": "lyth-kernel-ir/0.1",
   "name": "tma_load_refused",
   "machine_id": "sm_120",
   "declared_intensity": 1.0,

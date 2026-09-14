@@ -6,15 +6,15 @@
 
 ## Decision
 
-Before a `.lith` parser exists, the contract is **`lith-kernel-ir/0.1` JSON**:
+Before a `.lyth` parser exists, the contract is **`lyth-kernel-ir/0.1` JSON**:
 
 - `streams[]` — memory-first traffic (`from`/`to`/`bytes`/`via`)
 - `ops[]` — FLOPs at a level
 - `requires[]` — capability refuse against `machine.ops`
-- `declared_intensity` — checked after lower → `lith-intensity/0.1`
+- `declared_intensity` — checked after lower → `lyth-intensity/0.1`
 
 ```bash
-lith-probe kernel-check fixtures/kernel/k_integrate.json \
+lyth-probe kernel-check fixtures/kernel/k_integrate.json \
   --machine fixtures/machine/sm_120.json
 ```
 

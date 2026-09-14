@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Measure achieved peak TFLOPS (SGEMM/HGEMM) and DRAM read BW for lith machine files.
+"""Measure achieved peak TFLOPS (SGEMM/HGEMM) and DRAM read BW for lyth machine files.
 
     python tools/peak_probe.py
     python tools/peak_probe.py --out fixtures/machine/meas-peak-sm_120.json
 
-Writes a lith-machine-measurement-compatible JSON plus peak_tflops for machine update.
+Writes a lyth-machine-measurement-compatible JSON plus peak_tflops for machine update.
 """
 from __future__ import annotations
 
@@ -81,15 +81,15 @@ def main() -> None:
     fp16_tflops, fp16_ms = gemm_tflops(torch.float16, n=8192)
     print(f"HGEMM 8192: {fp16_tflops:.2f} TFLOP/s  ({fp16_ms:.2f} ms/iter)")
 
-    # Ridge for lith uses FP32-class peak unless noted; keep both.
+    # Ridge for lyth uses FP32-class peak unless noted; keep both.
     peak_for_ridge = fp32_tflops
     ridge = peak_for_ridge * 1e3 / bw if bw > 0 else 0.0
     print(f"ridge (fp32_peak*1e3/dram): {ridge:.1f} flop/byte")
 
     payload = {
-        "schema": "lith-machine-measurement/0.1",
+        "schema": "lyth-machine-measurement/0.1",
         "machine_id": args.machine_id,
-        "source": f"lith/tools/peak_probe.py torch {torch.__version__}",
+        "source": f"lyth/tools/peak_probe.py torch {torch.__version__}",
         "levels": [{"name": "dram", "bandwidth_gbs": bw}],
         "peak_tflops_fp32": fp32_tflops,
         "peak_tflops_fp16": fp16_tflops,

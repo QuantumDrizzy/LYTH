@@ -1,5 +1,5 @@
 {
-  "schema": "lith-machine/0.1",
+  "schema": "lyth-machine/0.1",
   "id": "sm_120",
   "peak_tflops": 24.0,
   "levels": [

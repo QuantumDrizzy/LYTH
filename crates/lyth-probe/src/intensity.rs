@@ -1,7 +1,7 @@
 //! Arithmetic intensity as a checked value — pre-parser teeth.
 //!
 //! Declared FLOPs/byte must match body (Σflops / Σbytes). Mismatch is FAIL with
-//! the machine ridge named. No `.lith` parser yet: the accounting JSON *is* the
+//! the machine ridge named. No `.lyth` parser yet: the accounting JSON *is* the
 //! contract the future frontend must emit.
 
 use serde::Deserialize;
@@ -9,7 +9,7 @@ use thiserror::Error;
 
 use crate::machine::Machine;
 
-pub const INTENSITY_SCHEMA: &str = "lith-intensity/0.1";
+pub const INTENSITY_SCHEMA: &str = "lyth-intensity/0.1";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct IntensityCase {
@@ -125,13 +125,17 @@ pub fn check_with_machine(
         return Err(IntensityError::BadUnit(case.unit.clone()));
     }
     if !(0.0..1.0).contains(&tol) {
-        return Err(IntensityError::Message(format!("tol must be in [0,1), got {tol}")));
+        return Err(IntensityError::Message(format!(
+            "tol must be in [0,1), got {tol}"
+        )));
     }
     if case.body.flops < 0.0 {
         return Err(IntensityError::Message("body.flops must be ≥ 0".into()));
     }
     if case.declared_intensity < 0.0 {
-        return Err(IntensityError::Message("declared_intensity must be ≥ 0".into()));
+        return Err(IntensityError::Message(
+            "declared_intensity must be ≥ 0".into(),
+        ));
     }
 
     let bytes: f64 = case.body.moves.iter().map(|m| m.bytes).sum();
@@ -289,6 +293,10 @@ pub fn format_verdict(case: &IntensityCase, v: &IntensityVerdict) -> String {
     out
 }
 
+impl crate::document::Document for IntensityCase {
+    const SCHEMA: &'static str = INTENSITY_SCHEMA;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -296,7 +304,7 @@ mod tests {
     fn gemv_lie() -> IntensityCase {
         serde_json::from_str(
             r#"{
-              "schema":"lith-intensity/0.1",
+              "schema":"lyth-intensity/0.1",
               "kernel":"gemv_lie",
               "declared_intensity":2.0,
               "unit":"flops_per_byte",
@@ -324,7 +332,7 @@ mod tests {
     fn honest_passes() {
         let case: IntensityCase = serde_json::from_str(
             r#"{
-              "schema":"lith-intensity/0.1",
+              "schema":"lyth-intensity/0.1",
               "kernel":"ok",
               "declared_intensity":0.5,
               "unit":"flops_per_byte",

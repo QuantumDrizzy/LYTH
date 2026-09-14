@@ -6,8 +6,8 @@
 
 ## Decision
 
-`kernel gemv[L: layout, M: machine]` is not sloganeering. `lith-poly/0.1` lists
-**instances** (one per layout). Each instance lowers to `lith-kernel-ir` and must
+`kernel gemv[L: layout, M: machine]` is not sloganeering. `lyth-poly/0.1` lists
+**instances** (one per layout). Each instance lowers to `lyth-kernel-ir` and must
 `kernel-check` PASS on the machine. Identical Σ stream bytes across layouts is
 **FAIL** (fake poly).
 
@@ -23,7 +23,7 @@ Optional `claim`: format wall-cost band from silicon rows.
 Format cost: **(122.080 − 96.384) / 96.384 ≈ 26.7%** ∈ [19%, 31%] (README).
 
 ```bash
-lith-probe poly-check fixtures/poly/gate-proj-int4-nf4.json \
+lyth-probe poly-check fixtures/poly/gate-proj-int4-nf4.json \
   --machine fixtures/machine/sm_120.json
 ```
 

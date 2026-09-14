@@ -6,7 +6,7 @@
 
 ## Decision
 
-`lith-ct/0.1` is a tiny op list with taint. Refuse:
+`lyth-ct/0.1` is a tiny op list with taint. Refuse:
 
 1. **Load/store** whose address is secret-tainted  
 2. **Branch** whose condition is secret-tainted  
@@ -14,8 +14,8 @@
 Secret arithmetic is allowed (taint joins). `declassify` requires a non-empty note.
 
 ```bash
-lith-probe ct-check fixtures/ct/kyber-ntt-ok.json          # PASS
-lith-probe ct-check fixtures/ct/secret-gather-fail.json    # FAIL
+lyth-probe ct-check fixtures/ct/kyber-ntt-ok.json          # PASS
+lyth-probe ct-check fixtures/ct/secret-gather-fail.json    # FAIL
 ```
 
 ## Why now
