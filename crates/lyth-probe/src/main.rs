@@ -73,6 +73,17 @@ enum Cmd {
         /// byte model that misses at DRAM is right one level up.
         #[arg(long, value_name = "dram|l2")]
         ncu_level: Option<String>,
+        /// Take the element count from this metric in the same ncu report instead of a
+        /// hand-typed number. For a data-dependent kernel this is the only honest source:
+        /// its element count changes with its input and cannot be recovered afterwards.
+        #[arg(long, value_name = "METRIC")]
+        elements_from: Option<String>,
+        /// Compare only one half of the traffic: `all` (default), `read` or `write`.
+        /// A write-back cache can retire every store into L2 and evict none before the
+        /// kernel ends, so `read` is the honest comparison for a single launch whose
+        /// working set fits in cache.
+        #[arg(long, value_name = "all|read|write", default_value = "all")]
+        ncu_dir: String,
         /// Tolerance for measured/analytic. Separate from --tol: that one bounds
         /// arithmetic error, this one bounds how far a model of silicon may sit from
         /// the silicon.
@@ -124,20 +135,30 @@ fn main() -> ExitCode {
             ncu,
             ncu_kernel,
             elements,
+            elements_from,
             ncu_level,
+            ncu_dir,
             ncu_tol,
-        } => cli::checks::intensity(
-            &path,
-            machine.as_deref(),
-            tol,
-            &TrafficOpts {
-                report: ncu.as_deref(),
-                kernel: ncu_kernel.as_deref(),
-                elements,
-                level: ncu_level.as_deref(),
-                tol: ncu_tol,
-            },
-        ),
+        } => match lyth_probe::Direction::parse(&ncu_dir) {
+            None => {
+                eprintln!("error: --ncu-dir must be all, read or write; got `{ncu_dir}`");
+                ExitCode::from(2)
+            }
+            Some(dir) => cli::checks::intensity(
+                &path,
+                machine.as_deref(),
+                tol,
+                &TrafficOpts {
+                    report: ncu.as_deref(),
+                    kernel: ncu_kernel.as_deref(),
+                    elements,
+                    elements_from: elements_from.as_deref(),
+                    level: ncu_level.as_deref(),
+                    dir,
+                    tol: ncu_tol,
+                },
+            ),
+        },
         Cmd::KernelCheck { path, machine, tol } => cli::checks::kernel(&path, &machine, tol),
         Cmd::CtCheck { path } => cli::checks::constant_time(&path),
         Cmd::PolyCheck { path, machine, tol } => cli::checks::poly(&path, &machine, tol),

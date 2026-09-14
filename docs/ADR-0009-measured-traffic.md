@@ -116,3 +116,52 @@ Full record, including what is and is not established, in `docs/DOGFOOD.md`.
   free parameter that could be tuned to force agreement is not available.
 - If `INFLATED` and `ABSORBED` fire on almost every real kernel, the tolerance is a fiction
   and the honest output is a ratio with no verdict at all.
+
+## Two corrections the dogfood forced (2026-09-14)
+
+### Direction, and why the first write-up of `k_integrate` was imprecise
+
+The original record above reads "at F = 1 the 9.00 MB state is L2-resident, so the memory
+controller sees 52% of the count". Directionally right, imprecise, and the precise version is
+more useful. Splitting the same launch by direction:
+
+```
+dram read   2,508,800 B = 15.048 B/neuron
+dram write          0 B = exactly zero
+```
+
+The accounting's 29 bytes are **15 read and 14 written**. Measured read matches the read half to
+**0.32%**, and the write half contributes nothing at all: every store retired into L2 as a dirty
+line and none was evicted inside the launch.
+
+So the accounting is not half-wrong — it is exact, and a single-launch DRAM measurement can only
+see its read half for a kernel whose working set fits in cache. Hence `--ncu-dir all|read|write`,
+which restricts the accounting using the `dir` each move already carried and the checker was
+discarding, and hence `ABSORBED` naming write-back absorption as cause **[1]**, before it
+suggests the accounting is at fault.
+
+**[CORRECTED]** The `ncu.rs` fallback constants were `dram__bytes_read.sum`. On sm_120 the
+metric is `dram__bytes_op_read.sum`. The wrong name does not error — ncu prints the row with
+`n/a` — so that path could never have fired. Checked against `ncu --query-metrics` on the device.
+
+### `--elements-from`, for a kernel whose element count is not knowable in advance
+
+`k_propagate` walks the out-edges of whichever neurons happened to fire. Its element count
+changes with its input, cannot be typed in after the fact, and cannot be recovered from the byte
+counts. The frozen-step launch the exercise reports could not be isolated by launch index.
+
+The element count is therefore **measured from the same report**. The `atomicAdd` discards its
+result, so it lowers to a global reduction, one per edge:
+
+```
+--elements-from l1tex__t_sectors_pipe_lsu_mem_global_op_red.sum
+```
+
+Result: **INFLATED 3.15x**, 10 B/edge counted against 31.50 measured — and the cause is measured
+rather than picked off the shortlist. 39,062 red sectors over 1,447 warp-level reduction
+instructions is **27.0 sectors per instruction out of a possible 32**: nearly every thread's
+4-byte atomic in its own 32-byte sector. `39,062 x 32 B = 1,249,984 B` against a measured DRAM
+read of `1,230,336 B` — 98.4%. The model that describes this kernel at DRAM is one sector per
+edge and nothing else.
+
+Full record and limits in `docs/DOGFOOD.md`.

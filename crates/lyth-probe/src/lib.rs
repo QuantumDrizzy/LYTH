@@ -39,8 +39,8 @@ pub use machine::{
     MachineVerdict, MACHINE_SCHEMA, MEASUREMENT_SCHEMA,
 };
 pub use ncu::{
-    compare as ncu_compare, format_verdict as format_ncu_verdict, parse as ncu_parse, NcuTraffic,
-    TrafficVerdict,
+    compare as ncu_compare, format_verdict as format_ncu_verdict, parse as ncu_parse, Direction,
+    NcuTraffic, TrafficVerdict,
 };
 pub use oracle::{
     check as oracle_check, format_verdict as format_oracle_verdict, OracleCase, OracleVerdict,

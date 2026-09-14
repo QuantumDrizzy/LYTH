@@ -13,11 +13,11 @@
 //! THE RATIO IS THE RESULT, NOT A PASS MARK. The accounting is a LOWER BOUND: the bytes the
 //! algorithm must move. Measurement can legitimately come out on either side of it.
 //!
-//!   measured > expected   cache-line granularity (touching 4 bytes pulls a 32-byte sector),
+//!   measured > expected cache-line granularity (touching 4 bytes pulls a 32-byte sector),
 //!                         uncoalesced access, partial-line read-modify-write, spilled
 //!                         registers, or traffic the accounting simply forgot
 //!
-//!   measured < expected   the data never reached DRAM. L2 absorbed it, which means the
+//!   measured < expected the data never reached DRAM. L2 absorbed it, which means the
 //!                         accounting is describing the wrong level of the hierarchy
 //!
 //! So a ratio of 1.03 confirms the byte model. A ratio of 4.0 says you are moving four times
@@ -39,8 +39,80 @@ const LEVEL_METRICS: &[(&str, &[&str])] = &[
     ("dram", &["dram__bytes.sum"]),
     ("l2", &["lts__t_bytes.sum", "lts__t_bytes.sum.per_second"]),
 ];
-const DRAM_READ: &[&str] = &["dram__bytes_read.sum"];
-const DRAM_WRITE: &[&str] = &["dram__bytes_write.sum"];
+
+/// Per-direction metrics, when the report carries them.
+///
+/// The spelling matters and is easy to get wrong: on sm_120 these are `dram__bytes_op_read`,
+/// **not** `dram__bytes_read`. The wrong name does not error — ncu prints the row with a
+/// value of `n/a` — so a fallback keyed on it silently never fires. Checked against
+/// `ncu --query-metrics` on the device rather than recalled.
+const DIR_METRICS: &[(&str, Direction, &[&str])] = &[
+    (
+        "dram",
+        Direction::Read,
+        &["dram__bytes_op_read.sum", "dram__bytes_read.sum"],
+    ),
+    (
+        "dram",
+        Direction::Write,
+        &["dram__bytes_op_write.sum", "dram__bytes_write.sum"],
+    ),
+    ("l2", Direction::Read, &["lts__t_bytes_op_read.sum"]),
+    ("l2", Direction::Write, &["lts__t_bytes_op_write.sum"]),
+];
+
+/// Which half of the traffic a comparison is about.
+///
+/// This is not a display option. Within one launch a write-back cache may retire every
+/// store into L2 and evict none of them before the kernel ends, so the writes an accounting
+/// correctly lists can contribute **zero** DRAM bytes. Comparing a read+write count against
+/// a read-only measurement then reads as a failure of the accounting, which it is not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Direction {
+    All,
+    Read,
+    Write,
+}
+
+impl Direction {
+    pub fn label(self) -> &'static str {
+        match self {
+            Direction::All => "all",
+            Direction::Read => "read",
+            Direction::Write => "write",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "all" | "rw" => Some(Direction::All),
+            "read" | "r" => Some(Direction::Read),
+            "write" | "w" => Some(Direction::Write),
+            _ => None,
+        }
+    }
+
+    /// The share of one move's bytes that belongs to this direction.
+    ///
+    /// A move marked `rw` is a read-modify-write of the same bytes, so its count is split
+    /// evenly. That is an assumption, and it is the only one in this file: a move that
+    /// reads and writes *different* amounts must be declared as two moves.
+    pub fn share_of(self, move_dir: &str) -> f64 {
+        let d = move_dir.trim().to_ascii_lowercase();
+        match (self, d.as_str()) {
+            (Direction::All, _) => 1.0,
+            (Direction::Read, "r") | (Direction::Write, "w") => 1.0,
+            (Direction::Read, "rw") | (Direction::Write, "rw") => 0.5,
+            _ => 0.0,
+        }
+    }
+}
+
+/// Units that are counts rather than sizes: no scale, and never a fractional value.
+const COUNT_UNITS: &[&str] = &[
+    "sector", "sectors", "request", "requests", "inst", "warp", "thread", "cycle", "block",
+];
 
 /// Order from farthest-from-register to nearest. Matches `kernel.rs::deeper_level`.
 pub const LEVEL_ORDER: &[&str] = &["dram", "l2", "smem", "reg"];
@@ -73,6 +145,24 @@ pub struct NcuTraffic {
     /// "wrong level" diagnosis is confirmed or killed from the same profiling run, rather
     /// than left as a hypothesis for the reader to go and test.
     pub others: Vec<(String, f64, String)>,
+    /// Read and write halves at this level, when the report carries them. A zero here is
+    /// a finding, not a missing value: it says the cache retired every store.
+    pub read: Option<f64>,
+    pub write: Option<f64>,
+    /// Every metric the report carried for this kernel, so a counter that scales with the
+    /// element can supply the element count. See `--elements-from`.
+    pub metrics: BTreeMap<String, f64>,
+}
+
+impl NcuTraffic {
+    /// Measured bytes for one direction, or `None` when the report did not split them.
+    pub fn bytes_for(&self, dir: Direction) -> Option<f64> {
+        match dir {
+            Direction::All => Some(self.bytes),
+            Direction::Read => self.read,
+            Direction::Write => self.write,
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -86,9 +176,13 @@ pub enum NcuError {
     )]
     NoDramMetric,
     #[error(
-        "the accounting is about `{0}` traffic but the report measures only {1}.          Add the metric for that level (dram -> dram__bytes.sum, l2 -> lts__t_bytes.sum)."
+        "the accounting is about `{0}` traffic but the report measures only {1}. Add the metric for that level (dram -> dram__bytes.sum, l2 -> lts__t_bytes.sum)."
     )]
     NoLevel(String, String),
+    #[error(
+        "the report does not split traffic by direction, so `{0}` cannot be isolated. Profile with: ncu --csv --metrics dram__bytes_op_read.sum,dram__bytes_op_write.sum"
+    )]
+    NoDirection(String),
     #[error("kernel `{0}` not in the report. kernels present: {1}")]
     NoSuchKernel(String, String),
     #[error("{0}")]
@@ -125,9 +219,9 @@ fn split_csv(line: &str) -> Vec<String> {
 /// ratio wrong by six orders of magnitude, which is exactly the kind of number that looks like
 /// a result. So the separator is resolved rather than assumed:
 ///
-///   both `.` and `,` present   the LAST one is the decimal point, the other groups
+///   both `.` and `,` present the LAST one is the decimal point, the other groups
 ///   one kind, appearing 2+     grouping
-///   one kind, appearing once   ambiguous on its own — resolved by the unit below
+///   one kind, appearing once ambiguous on its own — resolved by the unit below
 ///
 /// UNIT. `--csv` implies `--print-units base`, so a byte metric arrives as a whole number of
 /// bytes and a lone separator there must be grouping: a fractional byte does not exist. Under
@@ -145,13 +239,17 @@ fn parse_value(raw: &str, unit: &str) -> Option<f64> {
         "kibyte" => 1024.0,
         "mibyte" => 1024.0 * 1024.0,
         "gibyte" => 1024.0 * 1024.0 * 1024.0,
+        // Counts, not sizes. A sector or an instruction count has no byte scale to apply,
+        // and refusing them would throw away exactly the counters that can supply an
+        // element count for a data-dependent kernel.
+        u if COUNT_UNITS.contains(&u) => 1.0,
         other => {
             eprintln!("  [ncu] unrecognised unit `{other}` — refusing to guess a scale");
             return None;
         }
     };
-    // A base unit means an exact count: a lone separator in it groups digits.
-    let base_unit = matches!(u.as_str(), "" | "byte" | "bytes");
+    // An exact count has no fractional part, so a lone separator in it groups digits.
+    let base_unit = scale == 1.0;
 
     let t: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
     if t.is_empty() || t.eq_ignore_ascii_case("n/a") {
@@ -292,15 +390,20 @@ pub fn parse(csv: &str, kernel: Option<&str>, level: Option<&str>) -> Result<Ncu
             found.push(((*level).to_string(), *bytes, name.to_string(), *n));
         }
     }
-    // Older metric sets give read and write separately; same quantity, different route.
+    // Older metric sets give only the two halves; their sum is the same quantity.
     if !found.iter().any(|(l, ..)| l == "dram") {
-        let r = DRAM_READ.iter().find_map(|n| metrics.get(*n));
-        let w = DRAM_WRITE.iter().find_map(|n| metrics.get(*n));
-        if let (Some((rb, rn)), Some((wb, _))) = (r, w) {
+        let pick = |dir: Direction| {
+            DIR_METRICS
+                .iter()
+                .filter(|(l, d, _)| *l == "dram" && *d == dir)
+                .flat_map(|(_, _, names)| names.iter())
+                .find_map(|n| metrics.get(*n))
+        };
+        if let (Some((rb, rn)), Some((wb, _))) = (pick(Direction::Read), pick(Direction::Write)) {
             found.push((
                 "dram".into(),
                 rb + wb,
-                "dram__bytes_read.sum + dram__bytes_write.sum".into(),
+                "dram__bytes_op_read.sum + dram__bytes_op_write.sum".into(),
                 *rn,
             ));
         }
@@ -315,6 +418,17 @@ pub fn parse(csv: &str, kernel: Option<&str>, level: Option<&str>) -> Result<Ncu
         NcuError::NoLevel(want.into(), have.join(", "))
     })?;
     let (lvl, bytes, metric, launches) = found[pick].clone();
+    let half = |dir: Direction| -> Option<f64> {
+        DIR_METRICS
+            .iter()
+            .filter(|(l, d, _)| *l == lvl && *d == dir)
+            .flat_map(|(_, _, names)| names.iter())
+            .find_map(|n| metrics.get(*n))
+            .map(|(b, _)| *b)
+    };
+    let (read, write) = (half(Direction::Read), half(Direction::Write));
+    let all_metrics: BTreeMap<String, f64> =
+        metrics.iter().map(|(k, (v, _))| (k.clone(), *v)).collect();
     let others = found
         .iter()
         .enumerate()
@@ -328,6 +442,9 @@ pub fn parse(csv: &str, kernel: Option<&str>, level: Option<&str>) -> Result<Ncu
         launches,
         metric,
         others,
+        read,
+        write,
+        metrics: all_metrics,
     })
 }
 
@@ -361,33 +478,39 @@ pub enum TrafficVerdict {
 
 /// Compare a per-element accounting, scaled by the problem size, against measurement.
 ///
-/// `bytes_per_element` is Σ of the accounting's moves; `elements` is how many of them the
-/// profiled launch processed. Both are required and neither can be guessed: an accounting
-/// without a problem size is not comparable to a measurement of anything.
+/// `bytes_per_element` must already be restricted to `dir` — use [`Direction::share_of`]
+/// over the accounting's moves — and `measured` must carry that direction's metric.
 pub fn compare(
     bytes_per_element: f64,
     elements: f64,
     measured: &NcuTraffic,
+    dir: Direction,
     tol: f64,
 ) -> Result<TrafficVerdict, NcuError> {
     if elements <= 0.0 {
         return Err(NcuError::Message("elements must be > 0".into()));
     }
     if bytes_per_element <= 0.0 {
-        return Err(NcuError::Message("bytes per element must be > 0".into()));
+        return Err(NcuError::Message(format!(
+            "the accounting has no {} bytes to compare",
+            dir.label()
+        )));
     }
     if !(0.0..1.0).contains(&tol) {
         return Err(NcuError::Message(format!(
             "tol must be in [0,1), got {tol}"
         )));
     }
+    let Some(measured_bytes) = measured.bytes_for(dir) else {
+        return Err(NcuError::NoDirection(dir.label().into()));
+    };
     let expected = bytes_per_element * elements;
-    let ratio = measured.bytes / expected;
+    let ratio = measured_bytes / expected;
 
     if (ratio - 1.0).abs() <= tol {
         return Ok(TrafficVerdict::Confirmed {
             expected,
-            measured: measured.bytes,
+            measured: measured_bytes,
             ratio,
             tol,
         });
@@ -395,12 +518,11 @@ pub fn compare(
     if ratio > 1.0 {
         Ok(TrafficVerdict::Inflated {
             expected,
-            measured: measured.bytes,
+            measured: measured_bytes,
             ratio,
             tol,
             causes: vec![
-                "cache-line granularity: a 4-byte access pulls a 32-byte sector, so a strided \
-                 or scattered pattern moves up to 8x the bytes the accounting counts"
+                "cache-line granularity: a 4-byte access pulls a 32-byte sector, so a strided or scattered pattern moves up to 8x the bytes the accounting counts"
                     .into(),
                 "uncoalesced access within a warp".into(),
                 "partial-line writes turning into read-modify-write".into(),
@@ -411,20 +533,33 @@ pub fn compare(
     } else {
         Ok(TrafficVerdict::Absorbed {
             expected,
-            measured: measured.bytes,
+            measured: measured_bytes,
             ratio,
             tol,
-            causes: vec![
-                "L2 absorbed the traffic and it never crossed the DRAM boundary — the \
-                 accounting is describing the wrong level of the hierarchy"
-                    .into(),
-                "the working set fits in cache at this problem size, so the measurement does \
-                 not generalise to the size the accounting was written for"
-                    .into(),
-                "fewer elements were processed than `--elements` claims".into(),
-            ],
+            causes: absorbed_causes(dir),
         })
     }
+}
+
+/// Why fewer bytes arrived than the accounting counts, most specific first.
+fn absorbed_causes(dir: Direction) -> Vec<String> {
+    let mut causes = Vec::new();
+    if dir != Direction::Read {
+        causes.push(
+            "write-back absorption: a store retires into L2 as a dirty line and only reaches DRAM when that line is evicted. Within one launch a working set that fits in L2              evicts nothing, so correctly counted writes contribute ZERO measured bytes. Check the write half: if it is 0, the accounting is not wrong, the measurement is read-only. Re-run with --ncu-dir read."
+                .into(),
+        );
+    }
+    causes.push(
+        "the accounting names the wrong level — the traffic crosses L2 but not the memory controller"
+            .into(),
+    );
+    causes.push(
+        "the working set fits in cache at this problem size, so the measurement does not generalise to the size the accounting was written for"
+            .into(),
+    );
+    causes.push("fewer elements were processed than the element count claims".into());
+    causes
 }
 
 fn human(bytes: f64) -> String {
@@ -437,7 +572,7 @@ fn human(bytes: f64) -> String {
     format!("{bytes:.0} B")
 }
 
-pub fn format_verdict(v: &TrafficVerdict, m: &NcuTraffic, elements: f64) -> String {
+pub fn format_verdict(v: &TrafficVerdict, m: &NcuTraffic, elements: f64, dir: Direction) -> String {
     let (expected, measured, ratio, tol) = match v {
         TrafficVerdict::Confirmed {
             expected,
@@ -462,8 +597,9 @@ pub fn format_verdict(v: &TrafficVerdict, m: &NcuTraffic, elements: f64) -> Stri
     };
     let mut out = String::new();
     out.push_str(&format!(
-        "\ntraffic-check ({}): accounting against measurement\n",
-        m.level
+        "\ntraffic-check ({} {}): accounting against measurement\n",
+        m.level,
+        dir.label()
     ));
     out.push_str(&format!("  kernel:   {}\n", short_kernel(&m.kernel)));
     out.push_str(&format!(
@@ -482,9 +618,25 @@ pub fn format_verdict(v: &TrafficVerdict, m: &NcuTraffic, elements: f64) -> Stri
         measured / elements
     ));
     out.push_str(&format!(
-        "  ratio:    {ratio:.4}x measured/analytic   (tol ±{:.1}%)\n",
+        "  ratio:    {ratio:.4}x measured/analytic (tol ±{:.1}%)\n",
         tol * 100.0
     ));
+    // The read/write split, when the report carries it. A write half of zero is the whole
+    // diagnosis for a memory-bound kernel whose state fits in L2, so it is never hidden.
+    if let (Some(r), Some(w)) = (m.read, m.write) {
+        out.push_str(&format!(
+            "  split:    read {} / write {}
+",
+            human(r),
+            human(w)
+        ));
+        if w == 0.0 {
+            out.push_str(
+                "            write half is 0: every store retired into L2, none evicted
+",
+            );
+        }
+    }
     // The same run measured the other levels. Print them: the "wrong level" hypothesis is
     // either confirmed or killed here, without a second profiling pass.
     for (level, bytes, metric) in &m.others {
@@ -577,13 +729,13 @@ mod tests {
     fn confirmed_inflated_and_absorbed() {
         let t = parse(CSV, Some("k_integrate"), None).unwrap();
         // 29 bytes per neuron over 163,903 neurons ~ 4.75 MB
-        let ok = compare(29.0, 163_903.0, &t, 0.05).unwrap();
+        let ok = compare(29.0, 163_903.0, &t, Direction::All, 0.05).unwrap();
         assert!(matches!(ok, TrafficVerdict::Confirmed { .. }), "{ok:?}");
 
-        let low = compare(8.0, 163_903.0, &t, 0.05).unwrap();
+        let low = compare(8.0, 163_903.0, &t, Direction::All, 0.05).unwrap();
         assert!(matches!(low, TrafficVerdict::Inflated { .. }), "{low:?}");
 
-        let high = compare(200.0, 163_903.0, &t, 0.05).unwrap();
+        let high = compare(200.0, 163_903.0, &t, Direction::All, 0.05).unwrap();
         assert!(matches!(high, TrafficVerdict::Absorbed { .. }), "{high:?}");
     }
 
@@ -626,6 +778,51 @@ mod tests {
         assert_eq!(parse_value("4.750", "byte"), Some(4750.0));
         // Lone separator, scaled unit: a fractional megabyte does.
         assert_eq!(parse_value("4.750", "Mbyte"), Some(4.75e6));
+    }
+
+    /// Verbatim from the sm_120 run that produced the finding: every store retired into L2
+    /// and not one was evicted inside the launch.
+    const SPLIT: &str = r#""Kernel Name","Metric Name","Metric Unit","Metric Value"
+"k_integrate(int, int)","dram__bytes.sum","byte","2.508.800"
+"k_integrate(int, int)","dram__bytes_op_read.sum","byte","2.508.800"
+"k_integrate(int, int)","dram__bytes_op_write.sum","byte","0"
+"#;
+
+    #[test]
+    fn a_read_only_measurement_confirms_the_read_half_of_the_accounting() {
+        let t = parse(SPLIT, None, None).unwrap();
+        assert_eq!(t.read, Some(2_508_800.0));
+        assert_eq!(
+            t.write,
+            Some(0.0),
+            "a zero write half is a finding, not a missing value"
+        );
+
+        // 29 B/neuron of which 15 are reads (ring 4, refrac 2, adapt 4, v 4, is_stim 1).
+        let all = compare(29.0, 166_700.0, &t, Direction::All, 0.05).unwrap();
+        assert!(matches!(all, TrafficVerdict::Absorbed { .. }), "{all:?}");
+
+        let read = compare(15.0, 166_700.0, &t, Direction::Read, 0.05).unwrap();
+        assert!(
+            matches!(read, TrafficVerdict::Confirmed { .. }),
+            "the read half is exact; only the write half is invisible: {read:?}"
+        );
+    }
+
+    #[test]
+    fn rw_moves_split_evenly_between_the_halves() {
+        assert_eq!(Direction::Read.share_of("rw"), 0.5);
+        assert_eq!(Direction::Write.share_of("rw"), 0.5);
+        assert_eq!(Direction::Read.share_of("r"), 1.0);
+        assert_eq!(Direction::Read.share_of("w"), 0.0);
+        assert_eq!(Direction::All.share_of("w"), 1.0);
+    }
+
+    #[test]
+    fn a_report_without_a_split_refuses_rather_than_inventing_one() {
+        let t = parse(CSV, Some("k_integrate"), None).unwrap();
+        let e = compare(15.0, 166_700.0, &t, Direction::Read, 0.05).unwrap_err();
+        assert!(e.to_string().contains("dram__bytes_op_read"), "{e}");
     }
 
     #[test]

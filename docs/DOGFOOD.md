@@ -19,19 +19,35 @@ Nothing here is a plan. A kernel enters this table after it has been profiled.
 
 | # | kernel | source | verdict | measured vs counted |
 |---|---|---|---|---|
-| 1 | `k_integrate` | rse-hpc-lab 08-connectome-lif | **CONFIRMED at l2** | 28.41 vs 29.00 B/neuron — 0.980x |
+| 1 | `k_integrate` | rse-hpc-lab 08-connectome-lif | **CONFIRMED at dram, read half** | 15.048 vs 15.000 B/neuron — 1.003x |
 | 2 | `rmsnorm_fused_block` | rse-hpc-lab 01-fused-rmsnorm | **ABSORBED at dram** | 7.09 vs 8.00 B/element — 0.886x |
+| 3 | `k_propagate` | rse-hpc-lab 08-connectome-lif | **INFLATED at dram** | 31.50 vs 10.00 B/edge — 3.150x |
 
 ### 1 — `k_integrate`, 166,700 neurons
 
-The 29-byte model is confirmed against silicon to 2.1%. Its **label** was wrong: the moves
-declare `dram`, and at one fly the 9.00 MB state is L2-resident, so the memory controller sees
-15.05 B/neuron — 52% of the count. Full record in ADR-0009.
+First read as "the byte model is confirmed at L2 and mislabelled `dram`". That was directionally
+right and **imprecise**, and the precise version is better. Splitting the traffic by direction:
+
+```
+dram read   2,508,800 B = 15.048 B/neuron
+dram write          0 B = exactly zero
+```
+
+The accounting's 29 bytes are 15 read (ring 4, refrac 2, adapt 4, v 4, is_stim 1) and 14 written.
+**Measured DRAM read matches the read half to 0.32%.** The write half contributes *nothing*:
+every store retired into L2 as a dirty line and not one was evicted before the kernel ended.
+
+So the accounting is not half-wrong. It is exactly right, and **a single-launch DRAM measurement
+can only ever see its read half** for a kernel whose working set fits in cache. Comparing the
+full 29 bytes against a read-only measurement reads as a 48% failure that does not exist.
+
+This is why `--ncu-dir` exists, and why `ABSORBED` now names write-back absorption as cause [1]
+before it suggests anything is wrong with the accounting.
 
 **Would a macro have caught it?** A macro could hold the same accounting and check the same
-arithmetic. It could not have known which level the traffic actually crosses. **Neither can
-LYTH.** That came from `ncu`, and the tool's contribution was putting the two numbers side by
-side and printing the neighbouring level automatically.
+arithmetic. It could not have known that the writes never leave L2. **Neither can LYTH.** That
+came from `ncu`; the tool's contribution was holding the `dir` of each move — which the
+accounting already carried and the checker was throwing away — and comparing like with like.
 → *Argues for the probe, not for a parser.*
 
 ### 2 — `rmsnorm_fused_block`, N=2048 × D=8192
@@ -62,16 +78,80 @@ kernel moves 12.9% fewer bytes than the headline divides by.
 byte count, and nothing about it needs a new syntax.
 → *Argues for the probe. Still no evidence for a parser.*
 
+### 3 — `k_propagate`, CSR edge walk with a scattered atomic
+
+The hard case, and the one that broke an assumption in the tool.
+
+**The element count is data-dependent.** An element is one touched out-edge, and that number
+changes with which neurons fired. It cannot be typed in after the fact and it cannot be
+recovered from the report's byte counts. The exercise prints `424 spikes / 15,858 edges` for its
+frozen-step benchmark, but that launch could not be isolated by index: `--launch-skip` at 12,000
+and at 42,000 both landed in the main loop, identified by `k_propagate` alternating with
+`k_advance` rather than with `k_bump_step`.
+
+The way out is to **measure the element count from the same report**. The `atomicAdd` discards
+its result, so it compiles to a global reduction — one per edge:
+
+```
+--elements-from l1tex__t_sectors_pipe_lsu_mem_global_op_red.sum
+```
+
+That is a new flag, and it is the only honest source for a kernel like this one.
+
+**Result: INFLATED 3.15x.** 10 B/edge counted as reads, 31.50 B/edge measured.
+
+The cause is *measured in the same report*, not chosen from a list:
+
+```
+39,062 red sectors / 1,447 warp-level reduction instructions = 27.0 sectors per instruction,
+                                                               out of a maximum of 32
+```
+
+Nearly every thread's 4-byte atomic lands in its own 32-byte sector. The decomposition closes:
+
+```
+39,062 sectors x 32 B      = 1,249,984 B
+measured dram read         = 1,230,336 B   -> 98.4% of it
+col_idx + weight, 8 B/edge =   312,496 B   -> never reaches dram; L2 serves it
+l2 measured 1,643,424 vs ring+CSR 1,562,480 -> 1.05x
+```
+
+**The model that actually describes this kernel at DRAM is one 32-byte sector per edge and
+nothing else.** The accounting's `4 bytes` for the ring atomic is the payload; the machine moves
+a whole sector for it.
+
+**[KNOWN LIMIT]** The element count used is red *sectors*, a **lower** bound on edges — two
+threads sharing a sector count once — so 31.50 B/edge is an **upper** bound.
+
+**[KNOWN LIMIT]** This is a main-loop launch (~39k edges), not the frozen-step launch (15,858
+edges) the exercise reports. Nothing here is attributed to the frozen launch.
+
+**[KNOWN LIMIT]** The exercise reports 18.7 GB/s for scatter from a ~12 B/edge count. If
+31.5 B/edge holds at the frozen step, that is understated ~2.6x and the reported "11.4x worse
+efficiency than cuSPARSE" is overstated by the same factor. **Not published as a revised ratio**
+— the cuSPARSE side was not measured and the frozen launch was not isolated.
+
+**Would a macro have caught it?** No — and neither would LYTH without `ncu`. But note what the
+*declaration* bought: `dir` per move is what made the read/write comparison possible, and
+`level` per move is what made "wrong level" a checkable hypothesis. Both are attributes. A macro
+could carry them.
+→ *Argues for the probe. Still no evidence for a parser.*
+
 ---
 
 ## The parser question, current standing
 
-**Days elapsed of three weeks: 1. Kernels measured: 2. Evidence that a parser is needed: none
+**Days elapsed of three weeks: 1. Kernels measured: 3. Evidence that a parser is needed: none
 so far.**
 
-Both findings came from comparing a hand-written accounting against a measurement. A
-`#[kernel]` attribute macro carrying the same accounting would have produced both. The thing
-that found them is the *comparison*, and the comparison is a CLI.
+All three findings came from comparing a hand-written accounting against a measurement. A
+`#[kernel]` attribute macro carrying the same accounting — including the `dir` and `level` of
+each move, which is what made findings 1 and 3 checkable — would have produced all three. The
+thing that found them is the *comparison*, and the comparison is a CLI.
+
+Kernel 3 is the closest thing to a counter-argument so far, and it argues the other way: what
+the tool needed was not a richer language but a way to **measure** a quantity the declaration
+could not know. That is `--elements-from`, and it is a flag.
 
 What would count as evidence the other way, stated now so it cannot be adjusted later:
 

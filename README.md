@@ -40,8 +40,13 @@ cargo run -p lyth-probe -- ct-check fixtures/ct/secret-gather-fail.json
 # CONFIRMED at l2 — 28.41 measured B/neuron vs 29.00 counted, 0.9796x.
 cargo run -p lyth-probe -- intensity-check fixtures/intensity/k_integrate.json   --machine fixtures/machine/sm_120.json   --ncu fixtures/ncu/k_integrate-sm_120-2026-09-14.csv --elements 166700 --ncu-level l2
 
-# Same accounting at dram: ABSORBED, 0.5190x. Half the state is L2-resident at F=1.
-cargo run -p lyth-probe -- intensity-check fixtures/intensity/k_integrate.json   --ncu fixtures/ncu/k_integrate-sm_120-2026-09-14.csv --elements 166700
+# The read half of the same accounting: CONFIRMED to 0.32%. The write half never
+# leaves L2, so a single-launch DRAM measurement cannot see it (ADR-0009).
+cargo run -p lyth-probe -- intensity-check fixtures/intensity/k_integrate.json   --ncu fixtures/ncu/k_integrate-sm_120-2026-09-14.csv --elements 166700 --ncu-dir read
+
+# A kernel whose element count depends on its input: measure the count from the same
+# report. INFLATED 3.15x -- a scattered 4-byte atomic moves a 32-byte sector.
+cargo run -p lyth-probe -- intensity-check fixtures/intensity/k_propagate.json   --ncu fixtures/ncu/k_propagate-sm_120-2026-09-14.csv --ncu-dir read   --elements-from l1tex__t_sectors_pipe_lsu_mem_global_op_red.sum
 ```
 
 ## Docs

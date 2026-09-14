@@ -162,7 +162,7 @@ pub fn check(
             if drift > 0.005 {
                 mismatches.push(format!(
                     "{name}: measurement claims {claimed:.2} GB/s but the median of its                      {n} runs is {median:.2} GB/s
-                       the measurement is not self-consistent; fix it before it is used to                      judge the machine file",
+                       the measurement is not self-consistent; fix it before it is used to judge the machine file",
                     name = m.name,
                     claimed = m.bandwidth_gbs,
                     n = m.runs.len(),

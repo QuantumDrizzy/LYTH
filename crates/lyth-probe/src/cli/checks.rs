@@ -9,9 +9,9 @@ use lyth_probe::{
     ct_check, format_ct_verdict, format_intensity_verdict, format_kernel_verdict,
     format_machine_verdict, format_ncu_verdict, format_oracle_verdict, format_poly_verdict,
     intensity_check_with_machine, kernel_check, machine_check, ncu, ncu_compare, ncu_parse,
-    oracle_check, poly_check, CtCase, CtVerdict, IntensityCase, IntensityVerdict, KernelIr,
-    KernelVerdict, Machine, MachineMeasurement, MachineVerdict, OracleCase, OracleVerdict,
-    PolyCase, PolyVerdict, TrafficVerdict,
+    oracle_check, poly_check, CtCase, CtVerdict, Direction, IntensityCase, IntensityVerdict,
+    KernelIr, KernelVerdict, Machine, MachineMeasurement, MachineVerdict, OracleCase,
+    OracleVerdict, PolyCase, PolyVerdict, TrafficVerdict,
 };
 
 use super::io;
@@ -60,8 +60,14 @@ pub struct TrafficOpts<'a> {
     pub kernel: Option<&'a str>,
     /// Overrides the case file's `elements`.
     pub elements: Option<f64>,
+    /// Take the element count from this metric in the same report, rather than from a
+    /// number typed in by hand. The only honest source for a data-dependent kernel, whose
+    /// element count changes with its input and is not recoverable after the fact.
+    pub elements_from: Option<&'a str>,
     /// Overrides the level the accounting's moves declare.
     pub level: Option<&'a str>,
+    /// Which half of the traffic to compare. Defaults to all.
+    pub dir: Direction,
     pub tol: f64,
 }
 
@@ -127,24 +133,57 @@ fn check_traffic(case: &IntensityCase, report: &Path, opts: &TrafficOpts) -> Opt
 
     // The accounting is per element; ncu reports a total. Refuse to invent the factor that
     // relates them — a guessed element count makes any ratio come out at 1.0.
-    let elements = match opts.elements.or(case.elements) {
-        Some(n) => n,
-        None => {
-            eprintln!("error: --ncu needs an element count.");
-            eprintln!(
-                "  The accounting in {} is per element and the report is a total;",
-                case.kernel
-            );
-            eprintln!("  without the problem size they are not comparable.");
-            eprintln!("  Pass --elements N, or add \"elements\" to the case file.");
-            return None;
-        }
+    let elements = match opts.elements_from {
+        Some(metric) => match measured.metrics.get(metric) {
+            Some(n) if *n > 0.0 => {
+                println!("  elements from `{metric}` in the same report: {n}");
+                *n
+            }
+            Some(_) => {
+                eprintln!("error: metric `{metric}` is 0 — it cannot be an element count");
+                return None;
+            }
+            None => {
+                eprintln!("error: the report has no metric `{metric}`.");
+                eprintln!(
+                    "  present: {}",
+                    measured
+                        .metrics
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                return None;
+            }
+        },
+        None => match opts.elements.or(case.elements) {
+            Some(n) => n,
+            None => {
+                eprintln!("error: --ncu needs an element count.");
+                eprintln!(
+                    "  The accounting in {} is per element and the report is a total;",
+                    case.kernel
+                );
+                eprintln!("  without the problem size they are not comparable.");
+                eprintln!("  Pass --elements N, --elements-from <metric>, or add");
+                eprintln!("  \"elements\" to the case file.");
+                return None;
+            }
+        },
     };
 
-    let bytes_per_element: f64 = case.body.moves.iter().map(|m| m.bytes).sum();
-    match ncu_compare(bytes_per_element, elements, &measured, opts.tol) {
+    // Restrict the accounting to the half being compared. A move marked `rw` splits evenly;
+    // see Direction::share_of for why that is the only assumption here.
+    let bytes_per_element: f64 = case
+        .body
+        .moves
+        .iter()
+        .map(|m| m.bytes * opts.dir.share_of(&m.dir))
+        .sum();
+    match ncu_compare(bytes_per_element, elements, &measured, opts.dir, opts.tol) {
         Ok(v) => {
-            print!("{}", format_ncu_verdict(&v, &measured, elements));
+            print!("{}", format_ncu_verdict(&v, &measured, elements, opts.dir));
             Some(matches!(v, TrafficVerdict::Confirmed { .. }))
         }
         Err(e) => {

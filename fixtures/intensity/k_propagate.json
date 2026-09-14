@@ -1,24 +1,46 @@
 {
   "schema": "lyth-intensity/0.1",
-  "kernel": "k_propagate_edge",
+  "kernel": "k_propagate",
   "declared_intensity": 0.125,
   "unit": "flops_per_byte",
   "machine_id": "sm_120",
   "body": {
     "moves": [
-      { "name": "col_idx", "level": "dram", "bytes": 4.0, "dir": "r" },
-      { "name": "weight_f32", "level": "dram", "bytes": 4.0, "dir": "r" },
-      { "name": "ring_atomic_add", "level": "dram", "bytes": 4.0, "dir": "rw" }
+      {
+        "name": "col_idx",
+        "level": "dram",
+        "bytes": 4.0,
+        "dir": "r"
+      },
+      {
+        "name": "weight_f32",
+        "level": "dram",
+        "bytes": 4.0,
+        "dir": "r"
+      },
+      {
+        "name": "ring_atomic_add",
+        "level": "dram",
+        "bytes": 4.0,
+        "dir": "rw"
+      }
     ],
     "flops": 1.5,
-    "flop_note": "Cast weight to int (not a FLOP) + scale/sign into ring. Counted ~1.5 FP ops per edge as honest upper bound; real path is int-dominated."
+    "flop_note": "Per edge. Cast weight to int is not a FLOP; 1.5 counted as an honest upper bound on an int-dominated path."
   },
   "notes": [
-    "CHIASMA / exercise 08 k_propagate — memory-first: CSR edge walk.",
-    "CRITICAL: kernel historically read (int)weights[e] — plasticity in the float fractional part was invisible. That is a correctness KNOWN_LIMIT, not an intensity miss."
+    "rse-hpc-lab/exercises/08-connectome-lif k_propagate — CSR edge walk, one block per spiking neuron, scattered atomicAdd into a delay ring.",
+    "THE ELEMENT COUNT IS DATA-DEPENDENT. An element is one touched out-edge, and that number changes with which neurons fired. It cannot be typed in after the fact, so it is measured from the same report: the atomicAdd discards its result and compiles to a global reduction, one per edge. Run with --elements-from l1tex__t_sectors_pipe_lsu_mem_global_op_red.sum",
+    "MEASURED 2026-09-14, ncu 2025.3.1, RTX 5060 Ti, grid 512 x block 256, one launch: dram read 1,230,336 B, write 8,960 B, l2 1,643,424 B, red sectors 39,062, red requests 1,447.",
+    "THE DIAGNOSIS IS IN THE SAME REPORT: 39,062 sectors / 1,447 warp-level reduction instructions = 27.0 sectors per instruction, out of a maximum of 32. Nearly every thread's 4-byte atomic lands in its own 32-byte sector. That is cause [1] of the INFLATED shortlist — cache-line granularity — measured rather than guessed.",
+    "THE DECOMPOSITION CLOSES. 39,062 sectors x 32 B = 1,249,984 B; measured DRAM read is 1,230,336 B, which is 98.4% of it. So essentially ALL DRAM read traffic is the scattered ring atomics, and the sequential col_idx/weight reads (8 B/edge) never reach the memory controller. L2 measures 1,643,424 B against ring+CSR of 1,562,480 B, 1.05x -- they are served there. The model that actually describes this kernel at DRAM is ONE 32-BYTE SECTOR PER EDGE and nothing else: 10 B/edge counted, 31.50 B/edge measured, 32 B/edge predicted by that model."
   ],
   "known_limits": [
-    "quant-cast-weights: (int)weights swallows fractional plasticity (CHIASMA RESULTS-E15b). Float shadow + stochastic round is the fix path.",
-    "Delay-from-hash is modelling choice with zero DRAM (ADR-002) — not in moves."
+    "[KNOWN LIMIT] The element count used is `red sectors`, which is a LOWER bound on edges: two threads whose destinations share a 32-byte sector are counted once. Bytes-per-edge derived from it is therefore an UPPER bound.",
+    "[KNOWN LIMIT] This launch is from the main simulation loop, not from the frozen-step benchmark the exercise reports. The program prints 424 spikes / 15,858 edges for the frozen launch; this one carries ~39k edges. The frozen launch could not be isolated by launch index — see docs/DOGFOOD.md — so no number here is attributed to it.",
+    "[KNOWN LIMIT] quant-cast-weights: (int)weights swallows fractional plasticity (CHIASMA RESULTS-E15b). A correctness limit, not an intensity miss.",
+    "[KNOWN LIMIT] Delay-from-hash is a modelling choice with zero DRAM cost and is not in moves.",
+    "[KNOWN LIMIT] row_offsets and the spike queue are read per spiking neuron, not per edge. At ~92 edges per spike here they are under 1% and are not in moves; at low out-degree they would not be negligible.",
+    "[KNOWN LIMIT] The exercise reports 18.7 GB/s for scatter, computed from ~12 B/edge. If 31.5 B/edge holds at the frozen step too, that figure is understated by ~2.6x and the reported 11.4x worse efficiency than cuSPARSE is overstated by the same factor. NOT PUBLISHED as a revised ratio: the cuSPARSE side was not measured, and the frozen launch was not isolated."
   ]
 }
