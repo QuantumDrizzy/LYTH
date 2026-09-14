@@ -32,6 +32,10 @@ pub struct PolyInstance {
     pub declared_intensity: f64,
     pub streams: Vec<Stream>,
     pub ops: Vec<ArithOp>,
+    /// Elements one launch of this instance processes. A layout change can change it, so it
+    /// is per instance rather than per case.
+    #[serde(default)]
+    pub elements: Option<f64>,
     #[serde(default)]
     pub requires: Vec<CapabilityReq>,
     #[serde(default)]
@@ -94,6 +98,7 @@ pub fn instantiate(poly: &PolyCase, inst: &PolyInstance) -> KernelIr {
         declared_intensity: inst.declared_intensity,
         streams: inst.streams.clone(),
         ops: inst.ops.clone(),
+        elements: inst.elements,
         requires: inst.requires.clone(),
         notes: vec![format!("poly instance layout={}", inst.layout)],
         known_limits: inst.known_limits.clone(),

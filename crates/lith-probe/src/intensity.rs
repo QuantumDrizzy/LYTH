@@ -19,6 +19,14 @@ pub struct IntensityCase {
     pub declared_intensity: f64,
     pub unit: String,
     pub body: BodyAccounting,
+    /// How many of the accounted-for elements one launch processes.
+    ///
+    /// The accounting above is PER ELEMENT — per neuron, per output row, per tile. `ncu`
+    /// reports a TOTAL. Without this field the two are not comparable, so `--ncu` refuses
+    /// rather than assuming a problem size. Only `--ncu` reads it; the arithmetic check does
+    /// not, because intensity is a ratio and the element count cancels.
+    #[serde(default)]
+    pub elements: Option<f64>,
     #[serde(default)]
     pub machine_id: Option<String>,
     #[serde(default)]

@@ -4,11 +4,46 @@
   "machine_id": "sm_120",
   "declared_intensity": 0.2069,
   "streams": [
-    { "name": "ring_slot", "from": "dram", "to": "reg", "bytes": 8, "dir": "rw", "once": true },
-    { "name": "v", "from": "dram", "to": "reg", "bytes": 8, "dir": "rw", "once": true },
-    { "name": "adapt", "from": "dram", "to": "reg", "bytes": 8, "dir": "rw", "once": true },
-    { "name": "refrac", "from": "dram", "to": "reg", "bytes": 4, "dir": "rw", "once": true },
-    { "name": "is_stim", "from": "dram", "to": "reg", "bytes": 1, "dir": "r", "once": true }
+    {
+      "name": "ring_slot",
+      "from": "dram",
+      "to": "reg",
+      "bytes": 8,
+      "dir": "rw",
+      "once": true
+    },
+    {
+      "name": "v",
+      "from": "dram",
+      "to": "reg",
+      "bytes": 8,
+      "dir": "rw",
+      "once": true
+    },
+    {
+      "name": "adapt",
+      "from": "dram",
+      "to": "reg",
+      "bytes": 8,
+      "dir": "rw",
+      "once": true
+    },
+    {
+      "name": "refrac",
+      "from": "dram",
+      "to": "reg",
+      "bytes": 4,
+      "dir": "rw",
+      "once": true
+    },
+    {
+      "name": "is_stim",
+      "from": "dram",
+      "to": "reg",
+      "bytes": 1,
+      "dir": "r",
+      "once": true
+    }
   ],
   "ops": [
     {
@@ -17,13 +52,21 @@
       "note": "non-refrac path: adapt_decay; (v_rest-vm)*leak; +gain*acc; -w"
     }
   ],
-  "requires": [{ "op": "fma.f32", "at": "reg" }],
+  "requires": [
+    {
+      "op": "fma.f32",
+      "at": "reg"
+    }
+  ],
   "notes": [
     "Lowered from CHIASMA/rse-hpc-lab connectome_kernels.cuh k_integrate.",
-    "Future .lith frontend must emit this shape — not CUDA AST."
+    "Future .lith frontend must emit this shape — not CUDA AST.",
+    "MEASURED 2026-09-14, ncu 2025.3.1, RTX 5060 Ti (sm_120), 1 launch, F=1, n=166700, grid 288 x block 256: lts__t_bytes.sum = 4,735,680 B = 28.41 B/neuron against 29.00 counted, 0.9796x -> the byte model is CONFIRMED at L2 within 2.1%."
   ],
   "known_limits": [
     "Spike atomics / hash stim excluded from FLOP numerator.",
-    "Cold DRAM lower bound."
-  ]
+    "Cold DRAM lower bound.",
+    "[KNOWN LIMIT] The `dram` level on these moves is the design intent (cold, large-instance), not what this machine does at F=1 — where L2 absorbs 48% of it. `--ncu` without `--ncu-level l2` reports ABSORBED, and that is the honest reading. The DRAM lower bound is only reached once the working set exceeds L2; the instance count at which that happens is NOT MEASURED."
+  ],
+  "elements": 166700
 }

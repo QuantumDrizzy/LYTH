@@ -11,6 +11,7 @@ mod hash;
 pub mod intensity;
 pub mod kernel;
 pub mod machine;
+pub mod ncu;
 pub mod oracle;
 pub mod poly;
 mod schema;
@@ -34,6 +35,10 @@ pub use kernel::{
 pub use machine::{
     check as machine_check, format_verdict as format_machine_verdict, Machine,
     MachineMeasurement, MachineVerdict, MACHINE_SCHEMA, MEASUREMENT_SCHEMA,
+};
+pub use ncu::{
+    compare as ncu_compare, format_verdict as format_ncu_verdict, parse as ncu_parse, NcuTraffic,
+    TrafficVerdict,
 };
 pub use oracle::{check as oracle_check, format_verdict as format_oracle_verdict, OracleCase, OracleVerdict};
 pub use poly::{

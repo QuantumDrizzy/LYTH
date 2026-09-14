@@ -8,10 +8,11 @@ use clap::{Parser, Subcommand};
 use lith_probe::{
     content_hash, ct_check, format_ct_verdict, format_intensity_verdict, format_kernel_verdict,
     format_machine_verdict, format_oracle_verdict, format_poly_verdict, format_report, gap_report,
-    intensity_check_with_machine, kernel_check, machine_check, match_expect, oracle_check,
-    poly_check, suite_check_schema, validate, Bundle, CtCase, CtVerdict, Expect, IntensityCase,
-    IntensityVerdict, KernelIr, KernelVerdict, Machine, MachineMeasurement, MachineVerdict,
-    OracleCase, OracleVerdict, PolyCase, PolyVerdict, Step, StepOutcome, Suite, SCHEMA_ID,
+    format_ncu_verdict, intensity_check_with_machine, kernel_check, machine_check, match_expect,
+    ncu_compare, ncu_parse, oracle_check, poly_check, suite_check_schema, validate, Bundle, CtCase,
+    CtVerdict, Expect, IntensityCase, IntensityVerdict, KernelIr, KernelVerdict, Machine,
+    MachineMeasurement, MachineVerdict, OracleCase, OracleVerdict, PolyCase, PolyVerdict, Step,
+    StepOutcome, Suite, TrafficVerdict, SCHEMA_ID,
 };
 
 #[derive(Parser, Debug)]
@@ -58,6 +59,25 @@ enum Cmd {
         machine: Option<PathBuf>,
         #[arg(long, default_value_t = 0.05)]
         tol: f64,
+        /// `ncu --csv --metrics dram__bytes.sum` output. Checks the hand-written byte
+        /// accounting against measured DRAM traffic instead of only against itself.
+        #[arg(long, value_name = "CSV")]
+        ncu: Option<PathBuf>,
+        /// Which kernel in the report (substring). Omit only for a single-kernel report.
+        #[arg(long, value_name = "SUBSTR")]
+        ncu_kernel: Option<String>,
+        /// Elements the profiled launch processed. Overrides `elements` in the case file.
+        #[arg(long)]
+        elements: Option<f64>,
+        /// Check the accounting at this level instead of the one its moves declare.
+        /// `dram` = dram__bytes.sum, `l2` = lts__t_bytes.sum. Use it to ask whether a
+        /// byte model that misses at DRAM is right one level up.
+        #[arg(long, value_name = "dram|l2")]
+        ncu_level: Option<String>,
+        /// Tolerance for measured/analytic. Separate from --tol: that one bounds arithmetic
+        /// error, this one bounds how far a model of silicon may sit from the silicon.
+        #[arg(long, default_value_t = 0.05)]
+        ncu_tol: f64,
     },
     /// Memory-first kernel IR: streams + ops + capability refuse.
     KernelCheck {
@@ -100,7 +120,21 @@ fn main() -> ExitCode {
             path,
             machine,
             tol,
-        } => cmd_intensity(&path, machine.as_ref(), tol),
+            ncu,
+            ncu_kernel,
+            elements,
+            ncu_level,
+            ncu_tol,
+        } => cmd_intensity(
+            &path,
+            machine.as_ref(),
+            tol,
+            ncu.as_ref(),
+            ncu_kernel.as_deref(),
+            elements,
+            ncu_level.as_deref(),
+            ncu_tol,
+        ),
         Cmd::KernelCheck {
             path,
             machine,
@@ -325,7 +359,17 @@ fn cmd_machine(machine_path: &PathBuf, meas_path: &PathBuf, tol: f64) -> ExitCod
     }
 }
 
-fn cmd_intensity(path: &PathBuf, machine_path: Option<&PathBuf>, tol: f64) -> ExitCode {
+#[allow(clippy::too_many_arguments)]
+fn cmd_intensity(
+    path: &PathBuf,
+    machine_path: Option<&PathBuf>,
+    tol: f64,
+    ncu_path: Option<&PathBuf>,
+    ncu_kernel: Option<&str>,
+    elements_cli: Option<f64>,
+    ncu_level: Option<&str>,
+    ncu_tol: f64,
+) -> ExitCode {
     let raw = match fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
@@ -362,14 +406,93 @@ fn cmd_intensity(path: &PathBuf, machine_path: Option<&PathBuf>, tol: f64) -> Ex
     match intensity_check_with_machine(&case, machine_owned.as_ref(), tol) {
         Ok(v) => {
             print!("{}", format_intensity_verdict(&case, &v));
-            match v {
-                IntensityVerdict::Pass { .. } => ExitCode::SUCCESS,
-                IntensityVerdict::Fail { .. } => ExitCode::from(1),
+            let arithmetic_ok = matches!(v, IntensityVerdict::Pass { .. });
+            let traffic_ok = match ncu_path {
+                None => true,
+                Some(np) => match cmd_ncu_traffic(
+                    &case,
+                    np,
+                    ncu_kernel,
+                    elements_cli,
+                    ncu_level,
+                    ncu_tol,
+                ) {
+                    Some(ok) => ok,
+                    // An input problem with the report is not a verdict on the kernel.
+                    None => return ExitCode::from(2),
+                },
+            };
+            if arithmetic_ok && traffic_ok {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
             }
         }
         Err(e) => {
             eprintln!("error: {e}");
             ExitCode::from(2)
+        }
+    }
+}
+
+/// The measured half of the intensity check.
+///
+/// `Some(true)`  the byte model is confirmed against silicon
+/// `Some(false)` it is not, and the reasons are printed
+/// `None`        the report or the problem size is unusable — an input error, not a verdict
+fn cmd_ncu_traffic(
+    case: &IntensityCase,
+    ncu_path: &PathBuf,
+    kernel: Option<&str>,
+    elements_cli: Option<f64>,
+    level_cli: Option<&str>,
+    tol: f64,
+) -> Option<bool> {
+    let csv = match fs::read_to_string(ncu_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: read {}: {e}", ncu_path.display());
+            return None;
+        }
+    };
+    // The accounting names its own level. Check against that one, not against whichever
+    // metric happens to be in the report -- a correct L2 accounting compared to DRAM reads
+    // as a failure, and that mistake is indistinguishable from a real one.
+    let level = match level_cli {
+        Some(l) => l.to_string(),
+        None => lith_probe::ncu::deepest_level(case.body.moves.iter().map(|m| m.level.as_str())),
+    };
+    let measured = match ncu_parse(&csv, kernel, Some(&level)) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: ncu report: {e}");
+            return None;
+        }
+    };
+    // The accounting is per element; ncu reports a total. Refuse to invent the scale factor
+    // that relates them -- a guessed element count would make any ratio come out at 1.0.
+    let elements = match elements_cli.or(case.elements) {
+        Some(n) => n,
+        None => {
+            eprintln!("error: --ncu needs an element count.");
+            eprintln!(
+                "  The accounting in {} is per element and the report is a total;",
+                case.kernel
+            );
+            eprintln!("  without the problem size they are not comparable.");
+            eprintln!("  Pass --elements N, or add \"elements\" to the case file.");
+            return None;
+        }
+    };
+    let bytes_per_element: f64 = case.body.moves.iter().map(|m| m.bytes).sum();
+    match ncu_compare(bytes_per_element, elements, &measured, tol) {
+        Ok(v) => {
+            print!("{}", format_ncu_verdict(&v, &measured, elements));
+            Some(matches!(v, TrafficVerdict::Confirmed { .. }))
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            None
         }
     }
 }

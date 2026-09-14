@@ -21,6 +21,10 @@ pub struct KernelIr {
     pub declared_intensity: f64,
     pub streams: Vec<Stream>,
     pub ops: Vec<ArithOp>,
+    /// Elements one launch processes, carried through lowering so `--ncu` can scale the
+    /// per-element stream accounting to the total `ncu` reports.
+    #[serde(default)]
+    pub elements: Option<f64>,
     #[serde(default)]
     pub requires: Vec<CapabilityReq>,
     #[serde(default)]
@@ -152,6 +156,7 @@ pub fn lower(ir: &KernelIr) -> Result<IntensityCase, KernelError> {
             flops,
             flop_note,
         },
+        elements: ir.elements,
         machine_id: Some(ir.machine_id.clone()),
         notes: ir.notes.clone(),
         known_limits: ir.known_limits.clone(),

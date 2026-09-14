@@ -35,8 +35,15 @@ cargo run -p lith-probe -- poly-check fixtures/poly/gate-proj-int4-nf4.json \
 
 cargo run -p lith-probe -- ct-check fixtures/ct/kyber-ntt-ok.json
 cargo run -p lith-probe -- ct-check fixtures/ct/secret-gather-fail.json
+
+# The byte accounting against measured DRAM/L2 traffic, not against itself (ADR-0009).
+# CONFIRMED at l2 — 28.41 measured B/neuron vs 29.00 counted, 0.9796x.
+cargo run -p lith-probe -- intensity-check fixtures/intensity/k_integrate.json   --machine fixtures/machine/sm_120.json   --ncu fixtures/ncu/k_integrate-sm_120-2026-09-14.csv --elements 166700 --ncu-level l2
+
+# Same accounting at dram: ABSORBED, 0.5190x. Half the state is L2-resident at F=1.
+cargo run -p lith-probe -- intensity-check fixtures/intensity/k_integrate.json   --ncu fixtures/ncu/k_integrate-sm_120-2026-09-14.csv --elements 166700
 ```
 
 ## Docs
 
-ADR-0001 … ADR-0008 under `docs/`.
+ADR-0001 … ADR-0009 under `docs/`.
