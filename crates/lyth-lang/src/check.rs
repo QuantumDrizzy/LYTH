@@ -83,7 +83,7 @@ pub fn check_intensity(
     let report = IntensityReport {
         derived,
         declared,
-        bytes: ir.cost.bytes_per_element,
+        bytes: ir.cost.bytes_per_element(),
         flops: ir.cost.flops_per_element,
         ridge: ridge_fpb,
         regime: ridge_fpb.map(|r| Regime::of(derived, r)),
@@ -117,9 +117,9 @@ pub fn check_intensity(
         "declares {declared} flop/byte, body computes {derived:.4}\n  \
          bytes moved: {bytes} per element ({read} read + {write} written)\n  \
          flops:       {flops} per element",
-        bytes = ir.cost.bytes_per_element,
-        read = ir.cost.read_bytes_per_element,
-        write = ir.cost.write_bytes_per_element,
+        bytes = ir.cost.bytes_per_element(),
+        read = ir.cost.read_bytes_per_element(),
+        write = ir.cost.write_bytes_per_element(),
         flops = ir.cost.flops_per_element,
     );
     if let (Some(r), Some(regime)) = (ridge_fpb, report.regime) {

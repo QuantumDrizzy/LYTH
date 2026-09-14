@@ -24,8 +24,63 @@ pub struct Kernel {
     pub declared_intensity: Option<f64>,
     pub intensity_span: Option<Span>,
     pub streams: Vec<StreamDecl>,
+    /// At most one in v1. See ADR-0011.
+    pub reductions: Vec<ReduceDecl>,
     /// `at <level>:` blocks, in source order.
     pub blocks: Vec<Block>,
+}
+
+/// `reduce sum p : reg -> smem -> dram into partial`
+///
+/// A movement declaration like `stream`, not a statement: it says which value is combined,
+/// through which levels it travels, and where the block's result lands. The path is written
+/// out rather than implied by the word `reduce`, because this language does not infer
+/// movement -- it checks that the arithmetic fits what was declared.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReduceDecl {
+    pub op: ReduceOp,
+    /// The value being combined. A local defined in the body, not a buffer.
+    pub source: String,
+    /// Levels the partial travels through, as written.
+    pub path: Vec<Level>,
+    /// Buffer receiving one value per block.
+    pub into: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReduceOp {
+    Sum,
+}
+
+impl ReduceOp {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "sum" => Some(ReduceOp::Sum),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ReduceOp::Sum => "sum",
+        }
+    }
+
+    /// The value a thread with no element contributes, so that it can take part in the tree
+    /// instead of branching out and leaving the shared array uninitialised.
+    pub fn identity(self) -> f32 {
+        match self {
+            ReduceOp::Sum => 0.0,
+        }
+    }
+
+    /// FLOPs one combine retires.
+    pub fn flops(self) -> f64 {
+        match self {
+            ReduceOp::Sum => 1.0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

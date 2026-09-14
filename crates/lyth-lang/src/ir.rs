@@ -30,7 +30,19 @@ pub struct KernelIr {
     pub ops: Vec<Op>,
     /// Registers holding the final value of each drained buffer.
     pub drains: Vec<(String, RegId)>,
+    /// At most one in v1.
+    pub reduction: Option<ReductionIr>,
     pub cost: Cost,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReductionIr {
+    pub op: ReduceOp,
+    /// Register holding the per-element value being combined.
+    pub value: RegId,
+    /// Buffer receiving one result per block.
+    pub into: String,
+    pub path: Vec<Level>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -111,17 +123,66 @@ impl Op {
     }
 }
 
-/// What the compiler derived. Nothing in here was typed by a human.
+/// Traffic per element at one level of the hierarchy.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Cost {
-    /// Bytes moved per element, at the deepest level any stream touches.
-    pub bytes_per_element: f64,
-    pub read_bytes_per_element: f64,
-    pub write_bytes_per_element: f64,
-    pub flops_per_element: f64,
-    pub intensity: f64,
-    /// The level `bytes_per_element` is about.
+pub struct LevelCost {
     pub level: Level,
+    pub read: f64,
+    pub write: f64,
+}
+
+impl LevelCost {
+    pub fn total(&self) -> f64 {
+        self.read + self.write
+    }
+}
+
+/// What the compiler derived. Nothing in here was typed by a human.
+///
+/// Traffic is per level, not one number. A reduction moves bytes at `dram` **and** at `smem`,
+/// and collapsing the two would either hide the shared traffic or corrupt the roofline
+/// position, which is a statement about DRAM. They are reported side by side instead.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Cost {
+    /// One entry per level the kernel touches, deepest (farthest from registers) first.
+    pub levels: Vec<LevelCost>,
+    pub flops_per_element: f64,
+    /// FLOPs/byte at the deepest level with traffic. This is the roofline number.
+    pub intensity: f64,
+    /// DRAM bytes written once per block rather than once per element: a reduction's partial.
+    ///
+    /// Deliberately **not** folded into `intensity`. Per element it is this over the block
+    /// size, and the block size is a launch parameter that does not appear in the source, so
+    /// folding it in would require the compiler to invent a constant. At a block of 256 it is
+    /// 0.016 bytes/element against 8, which is 0.2%.
+    pub dram_bytes_per_block: f64,
+}
+
+impl Cost {
+    pub fn at(&self, level: Level) -> Option<&LevelCost> {
+        self.levels.iter().find(|l| l.level == level)
+    }
+
+    /// The deepest level carrying traffic — the one the roofline is about.
+    pub fn roofline(&self) -> Option<&LevelCost> {
+        self.levels.iter().find(|l| l.total() > 0.0)
+    }
+
+    pub fn bytes_per_element(&self) -> f64 {
+        self.roofline().map(LevelCost::total).unwrap_or(0.0)
+    }
+
+    pub fn read_bytes_per_element(&self) -> f64 {
+        self.roofline().map(|l| l.read).unwrap_or(0.0)
+    }
+
+    pub fn write_bytes_per_element(&self) -> f64 {
+        self.roofline().map(|l| l.write).unwrap_or(0.0)
+    }
+
+    pub fn level(&self) -> Level {
+        self.roofline().map(|l| l.level).unwrap_or(Level::Dram)
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -160,6 +221,24 @@ pub enum LowerError {
         from: &'static str,
         to: &'static str,
     },
+    #[error(
+        "{span}: `{name}` is computed and then discarded. A local is only useful as the source of a reduction; either reduce it, or assign to a drained buffer."
+    )]
+    DeadLocal { span: Span, name: String },
+    #[error("{span}: `reduce sum {name}` names nothing the body computes")]
+    ReduceOfNothing { span: Span, name: String },
+    #[error("{span}: `into {name}` names no buffer parameter of this kernel")]
+    ReduceIntoNothing { span: Span, name: String },
+    #[error(
+        "{span}: `into {name}` is also streamed. A reduction writes one value per BLOCK, not one per element, so its target carries no per-element traffic. Remove the stream."
+    )]
+    ReduceIntoStream { span: Span, name: String },
+    #[error(
+        "{span}: a reduction travels `reg -> smem -> dram`; `{path}` is not implemented in v1"
+    )]
+    ReducePath { span: Span, path: String },
+    #[error("{span}: v1 supports one reduction per kernel")]
+    TooManyReductions { span: Span },
     #[error("{0}")]
     Message(String),
 }
@@ -236,15 +315,15 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
     }
 
     let mut assigned: BTreeSet<String> = BTreeSet::new();
+    let mut locals: BTreeMap<String, Span> = BTreeMap::new();
     for block in &kernel.blocks {
         for stmt in &block.stmts {
             let value = ctx.expr(&stmt.value)?;
             match params.get(stmt.target.as_str()) {
+                // Not a parameter: a local. Legal only if a reduction consumes it, which is
+                // checked once the whole body is known.
                 None => {
-                    return Err(LowerError::UnknownName {
-                        span: stmt.target_span,
-                        name: stmt.target.clone(),
-                    })
+                    locals.insert(stmt.target.clone(), stmt.target_span);
                 }
                 Some(ty) if !ty.is_buffer() => {
                     return Err(LowerError::ScalarStream {
@@ -252,35 +331,97 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
                         name: stmt.target.clone(),
                     })
                 }
-                Some(_) => {}
-            }
-            let drained = ctx
-                .streams
-                .iter()
-                .find(|s| s.buffer == stmt.target)
-                .map(|s| s.drain);
-            match drained {
-                None => {
-                    return Err(LowerError::NotStreamed {
-                        span: stmt.target_span,
-                        name: stmt.target.clone(),
-                    })
+                Some(_) => {
+                    let drained = ctx
+                        .streams
+                        .iter()
+                        .find(|s| s.buffer == stmt.target)
+                        .map(|s| s.drain);
+                    match drained {
+                        None => {
+                            return Err(LowerError::NotStreamed {
+                                span: stmt.target_span,
+                                name: stmt.target.clone(),
+                            })
+                        }
+                        Some(false) => {
+                            return Err(LowerError::WriteWithoutDrain {
+                                span: stmt.target_span,
+                                name: stmt.target.clone(),
+                            })
+                        }
+                        Some(true) => {}
+                    }
+                    assigned.insert(stmt.target.clone());
                 }
-                Some(false) => {
-                    return Err(LowerError::WriteWithoutDrain {
-                        span: stmt.target_span,
-                        name: stmt.target.clone(),
-                    })
-                }
-                Some(true) => {}
             }
             ctx.env.insert(stmt.target.clone(), value);
-            assigned.insert(stmt.target.clone());
         }
     }
 
     // Destructure to end the mutable borrow of `streams` before reading it back.
     let Lowering { ops, env, .. } = ctx;
+
+    // --- the reduction -------------------------------------------------------------
+    if kernel.reductions.len() > 1 {
+        return Err(LowerError::TooManyReductions {
+            span: kernel.reductions[1].span,
+        });
+    }
+    let mut reduction = None;
+    if let Some(r) = kernel.reductions.first() {
+        if r.path != [Level::Reg, Level::Smem, Level::Dram] {
+            return Err(LowerError::ReducePath {
+                span: r.span,
+                path: r
+                    .path
+                    .iter()
+                    .map(|l| l.name())
+                    .collect::<Vec<_>>()
+                    .join(" -> "),
+            });
+        }
+        let Some(value) = env.get(&r.source).copied() else {
+            return Err(LowerError::ReduceOfNothing {
+                span: r.span,
+                name: r.source.clone(),
+            });
+        };
+        match params.get(r.into.as_str()) {
+            None => {
+                return Err(LowerError::ReduceIntoNothing {
+                    span: r.span,
+                    name: r.into.clone(),
+                })
+            }
+            Some(ty) if !ty.is_buffer() => {
+                return Err(LowerError::ReduceIntoNothing {
+                    span: r.span,
+                    name: r.into.clone(),
+                })
+            }
+            Some(_) => {}
+        }
+        if streams.iter().any(|s| s.buffer == r.into) {
+            return Err(LowerError::ReduceIntoStream {
+                span: r.span,
+                name: r.into.clone(),
+            });
+        }
+        locals.remove(&r.source);
+        reduction = Some(ReductionIr {
+            op: r.op,
+            value,
+            into: r.into.clone(),
+            path: r.path.clone(),
+        });
+    }
+
+    // A local nothing consumed is work whose result is thrown away.
+    if let Some((name, span)) = locals.into_iter().next() {
+        return Err(LowerError::DeadLocal { span, name });
+    }
+
     let mut drains = Vec::new();
     for s in streams.iter() {
         if !s.drain {
@@ -296,7 +437,15 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
         drains.push((s.buffer.clone(), reg));
     }
 
-    let cost = derive_cost(&streams, &ops);
+    // A kernel that neither drains nor reduces computes nothing anyone can see.
+    if drains.is_empty() && reduction.is_none() {
+        return Err(LowerError::Message(format!(
+            "kernel `{}` writes nothing: no drained stream and no reduction",
+            kernel.name
+        )));
+    }
+
+    let cost = derive_cost(&streams, &ops, reduction.as_ref());
 
     Ok(KernelIr {
         name: kernel.name.clone(),
@@ -305,6 +454,7 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
         streams,
         ops,
         drains,
+        reduction,
         cost,
     })
 }
@@ -314,31 +464,63 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
 /// A stream contributes a read only if the body actually reads it, and a write only if it
 /// drains. A buffer that is streamed and never read costs nothing to read — the declaration
 /// does not get to inflate the denominator, and an unread stream is caught elsewhere.
-fn derive_cost(streams: &[StreamIr], ops: &[Op]) -> Cost {
-    let mut read = 0.0;
-    let mut write = 0.0;
-    let mut level = Level::Reg;
+fn derive_cost(streams: &[StreamIr], ops: &[Op], reduction: Option<&ReductionIr>) -> Cost {
+    let elem = Ty::BufF32.bytes() as f64;
+    let mut dram = LevelCost {
+        level: Level::Dram,
+        read: 0.0,
+        write: 0.0,
+    };
     for s in streams {
         if s.read {
-            read += Ty::BufF32.bytes() as f64;
+            dram.read += elem;
         }
         if s.drain {
-            write += Ty::BufF32.bytes() as f64;
-        }
-        // The deepest level any stream touches is what the byte count is about.
-        if (s.from as u8) < (level as u8) {
-            level = s.from;
+            dram.write += elem;
         }
     }
-    let flops: f64 = ops.iter().map(Op::flops).sum();
-    let bytes = read + write;
+
+    let mut flops: f64 = ops.iter().map(Op::flops).sum();
+    let mut levels = vec![dram];
+    let mut dram_bytes_per_block = 0.0;
+
+    if let Some(r) = reduction {
+        // Shared-memory traffic of the tree, per block of B threads:
+        //   B initial writes                        4B bytes
+        //   B-1 combines, each 2 reads and 1 write  12(B-1) bytes
+        //   one final read of slot 0                4 bytes
+        // which is 16B - 8, so 16 - 8/B per element. Counted as 16; at B = 256 that
+        // overstates by 0.03 bytes, 0.2%. [KNOWN LIMIT] in ADR-0011.
+        levels.push(LevelCost {
+            level: Level::Smem,
+            read: 8.0,
+            write: 8.0,
+        });
+        // The tree retires B-1 combines over B elements, so (B-1)/B per element. Counted as
+        // one, for the same reason: the block size is not in the source.
+        flops += r.op.flops();
+        // One partial per block, not per element, so it is reported separately rather than
+        // divided by a block size the compiler would have to invent.
+        dram_bytes_per_block = elem;
+    }
+
+    // Deepest first, so `roofline()` finds DRAM before shared memory.
+    levels.sort_by_key(|l| l.level as u8);
+    let roofline = levels
+        .iter()
+        .find(|l| l.total() > 0.0)
+        .map(LevelCost::total)
+        .unwrap_or(0.0);
+
     Cost {
-        bytes_per_element: bytes,
-        read_bytes_per_element: read,
-        write_bytes_per_element: write,
+        levels,
         flops_per_element: flops,
-        intensity: if bytes > 0.0 { flops / bytes } else { 0.0 },
-        level,
+        intensity: if roofline > 0.0 {
+            flops / roofline
+        } else {
+            0.0
+        },
+        dram_bytes_per_block,
     }
 }
 
@@ -486,9 +668,9 @@ kernel saxpy(n: u32, a: f32, x: [f32], y: [f32])
     fn cost_is_derived_from_the_program_not_declared() {
         let k = ir(SAXPY).expect("saxpy should lower");
         // x read 4, y read 4, y written 4.
-        assert_eq!(k.cost.read_bytes_per_element, 8.0);
-        assert_eq!(k.cost.write_bytes_per_element, 4.0);
-        assert_eq!(k.cost.bytes_per_element, 12.0);
+        assert_eq!(k.cost.read_bytes_per_element(), 8.0);
+        assert_eq!(k.cost.write_bytes_per_element(), 4.0);
+        assert_eq!(k.cost.bytes_per_element(), 12.0);
         // One fma = 2 flops.
         assert_eq!(k.cost.flops_per_element, 2.0);
         assert!(
@@ -515,7 +697,8 @@ kernel saxpy(n: u32, a: f32, x: [f32], y: [f32])
 
     #[test]
     fn a_buffer_read_without_a_stream_is_refused_and_says_what_to_add() {
-        let src = "machine m\n\nkernel k(x: [f32], y: [f32])\n    stream y : dram -> reg, drain\n    at reg:
+        let src =
+            "machine m\n\nkernel k(x: [f32], y: [f32])\n stream y : dram -> reg, drain\n at reg:
         y = x\n";
         let e = ir(src).unwrap_err();
         let s = e.to_string();
@@ -525,7 +708,7 @@ kernel saxpy(n: u32, a: f32, x: [f32], y: [f32])
 
     #[test]
     fn writing_a_stream_that_does_not_drain_is_refused() {
-        let src = "machine m\n\nkernel k(x: [f32])\n    stream x : dram -> reg\n    at reg:
+        let src = "machine m\n\nkernel k(x: [f32])\n stream x : dram -> reg\n at reg:
         x = x + 1\n";
         let e = ir(src).unwrap_err();
         assert!(e.to_string().contains("no `drain`"), "{e}");
@@ -533,10 +716,10 @@ kernel saxpy(n: u32, a: f32, x: [f32], y: [f32])
 
     #[test]
     fn draining_something_never_computed_is_refused() {
-        let src = "machine m\n\nkernel k(x: [f32], y: [f32])\n    stream x : dram -> reg\n    stream y : dram -> reg, drain\n    at reg:
+        let src = "machine m\n\nkernel k(x: [f32], y: [f32])\n stream x : dram -> reg\n stream y : dram -> reg, drain\n at reg:
         x = x\n";
         // x has no drain, so this trips WriteWithoutDrain first; swap to make y the issue.
-        let src2 = "machine m\n\nkernel k(x: [f32], y: [f32])\n    stream x : dram -> reg\n    stream y : dram -> reg, drain\n    at reg:
+        let src2 = "machine m\n\nkernel k(x: [f32], y: [f32])\n stream x : dram -> reg\n stream y : dram -> reg, drain\n at reg:
         y = x\n";
         assert!(ir(src).is_err());
         assert!(ir(src2).is_ok(), "y is drained and assigned");
@@ -544,7 +727,7 @@ kernel saxpy(n: u32, a: f32, x: [f32], y: [f32])
 
     #[test]
     fn a_stream_of_a_scalar_is_refused() {
-        let src = "machine m\n\nkernel k(a: f32, y: [f32])\n    stream a : dram -> reg\n    stream y : dram -> reg, drain\n    at reg:
+        let src = "machine m\n\nkernel k(a: f32, y: [f32])\n stream a : dram -> reg\n stream y : dram -> reg, drain\n at reg:
         y = a\n";
         let e = ir(src).unwrap_err();
         assert!(e.to_string().contains("scalar parameter"), "{e}");
@@ -552,7 +735,7 @@ kernel saxpy(n: u32, a: f32, x: [f32], y: [f32])
 
     #[test]
     fn an_unknown_name_names_itself() {
-        let src = "machine m\n\nkernel k(y: [f32])\n    stream y : dram -> reg, drain\n    at reg:
+        let src = "machine m\n\nkernel k(y: [f32])\n stream y : dram -> reg, drain\n at reg:
         y = z\n";
         let e = ir(src).unwrap_err();
         assert!(e.to_string().contains("`z`"), "{e}");
@@ -560,7 +743,7 @@ kernel saxpy(n: u32, a: f32, x: [f32], y: [f32])
 
     #[test]
     fn a_buffer_is_loaded_once_however_often_it_is_named() {
-        let src = "machine m\n\nkernel k(x: [f32], y: [f32])\n    stream x : dram -> reg\n    stream y : dram -> reg, drain\n    at reg:
+        let src = "machine m\n\nkernel k(x: [f32], y: [f32])\n stream x : dram -> reg\n stream y : dram -> reg, drain\n at reg:
         y = x + x + x\n";
         let k = ir(src).unwrap();
         assert_eq!(
@@ -578,21 +761,21 @@ kernel saxpy(n: u32, a: f32, x: [f32], y: [f32])
     fn a_drained_buffer_that_is_never_read_costs_a_write_and_not_a_read() {
         // y is assigned and drained, but its old value is never used, so nothing loads it.
         // Charging a read here would inflate the denominator and understate the intensity.
-        let src = "machine m\n\nkernel k(x: [f32], y: [f32])\n    stream x : dram -> reg\n    stream y : dram -> reg, drain\n    at reg:
+        let src = "machine m\n\nkernel k(x: [f32], y: [f32])\n stream x : dram -> reg\n stream y : dram -> reg, drain\n at reg:
         y = x + x\n";
         let k = ir(src).unwrap();
-        assert_eq!(k.cost.read_bytes_per_element, 4.0, "x only");
-        assert_eq!(k.cost.write_bytes_per_element, 4.0, "y only");
-        assert_eq!(k.cost.bytes_per_element, 8.0);
+        assert_eq!(k.cost.read_bytes_per_element(), 4.0, "x only");
+        assert_eq!(k.cost.write_bytes_per_element(), 4.0, "y only");
+        assert_eq!(k.cost.bytes_per_element(), 8.0);
 
         // saxpy does read y, because `a * x + y` names it.
         let saxpy = ir(SAXPY).unwrap();
-        assert_eq!(saxpy.cost.read_bytes_per_element, 8.0, "x and y");
+        assert_eq!(saxpy.cost.read_bytes_per_element(), 8.0, "x and y");
     }
 
     #[test]
     fn v1_refuses_a_level_it_cannot_generate_instead_of_ignoring_it() {
-        let src = "machine m\n\nkernel k(x: [f32])\n    stream x : dram -> reg, drain\n    at smem:
+        let src = "machine m\n\nkernel k(x: [f32])\n stream x : dram -> reg, drain\n at smem:
         x = x\n";
         let e = ir(src).unwrap_err();
         assert!(e.to_string().contains("not implemented"), "{e}");

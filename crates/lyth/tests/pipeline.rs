@@ -74,13 +74,16 @@ fn every_working_example_compiles_with_the_cost_it_documents() {
         ("horner.lyth", 6.0, 8.0, 1, 1),
         ("lerp.lyth", 3.0, 12.0, 2, 1),
         ("split.lyth", 3.0, 12.0, 1, 2),
+        // Reductions: the store is the block partial, written by thread 0.
+        ("dot.lyth", 2.0, 8.0, 2, 1),
+        ("sum.lyth", 1.0, 4.0, 1, 1),
     ];
     for (name, flops, bytes, loads, stores) in cases {
         let src = example(name);
         let unit = parse(&src).unwrap_or_else(|e| panic!("{name}: {e}"));
         let ir = ir::lower(&unit, &unit.kernels[0]).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(ir.cost.flops_per_element, *flops, "{name} flops");
-        assert_eq!(ir.cost.bytes_per_element, *bytes, "{name} bytes");
+        assert_eq!(ir.cost.bytes_per_element(), *bytes, "{name} bytes");
         let m = emit(&ir, "sm_120").unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(
             m.ptx.matches("ld.global.f32").count(),
@@ -103,4 +106,52 @@ fn horner_becomes_a_chain_of_fused_multiply_adds() {
     assert_eq!(m.ptx.matches("fma.rn.f32").count(), 3, "{}", m.ptx);
     assert_eq!(m.ptx.matches("mul.rn.f32").count(), 0, "{}", m.ptx);
     assert_eq!(m.ptx.matches("ld.global.f32").count(), 1, "{}", m.ptx);
+}
+
+#[test]
+fn a_reduction_emits_a_shared_tree_and_one_store_per_block() {
+    let m = compile("dot.lyth").expect("dot should compile");
+    // Dynamic shared memory, so the block size is not baked into the module.
+    assert!(m.ptx.contains(".extern .shared"), "{}", m.ptx);
+    // Threads past the end reach the barrier with the identity instead of branching out.
+    assert!(m.ptx.contains("$L_idle_dot"), "{}", m.ptx);
+    assert!(m.ptx.contains("mov.f32 %f4, 0f00000000"), "{}", m.ptx);
+    // Both barriers: after the initial store, and after each combine.
+    assert_eq!(m.ptx.matches("bar.sync 0;").count(), 2, "{}", m.ptx);
+    assert!(m.ptx.contains("ld.shared.f32"), "{}", m.ptx);
+    assert!(m.ptx.contains("st.shared.f32"), "{}", m.ptx);
+    // One global store, guarded on tid == 0.
+    assert_eq!(m.ptx.matches("st.global.f32").count(), 1, "{}", m.ptx);
+    assert!(m.ptx.contains("setp.ne.u32 %p4, %r4, 0"), "{}", m.ptx);
+}
+
+#[test]
+fn a_local_nothing_consumes_does_not_compile() {
+    let e = compile("dead-local.lyth").expect_err("dead work must not compile");
+    assert!(e.contains("computed and then discarded"), "{e}");
+}
+
+#[test]
+fn streaming_a_reduction_target_does_not_compile() {
+    // Streaming it would claim per-element traffic for a buffer written once per block,
+    // which inflates the byte count and understates the intensity.
+    let e = compile("reduce-streamed.lyth").expect_err("must not compile");
+    assert!(e.contains("one value per BLOCK"), "{e}");
+}
+
+#[test]
+fn the_cost_model_reports_shared_traffic_beside_dram_not_mixed_into_it() {
+    let src = example("dot.lyth");
+    let unit = parse(&src).unwrap();
+    let ir = ir::lower(&unit, &unit.kernels[0]).unwrap();
+    let dram = ir.cost.at(lyth_lang::Level::Dram).expect("dram traffic");
+    let smem = ir.cost.at(lyth_lang::Level::Smem).expect("smem traffic");
+    assert_eq!(dram.total(), 8.0, "x and y, per element");
+    assert_eq!(smem.total(), 16.0, "the tree");
+    // The roofline is about DRAM. Folding the shared traffic in would move it.
+    assert_eq!(ir.cost.bytes_per_element(), 8.0);
+    assert_eq!(ir.cost.intensity, 0.25);
+    // The partial is one write per block, reported separately rather than divided by a
+    // block size the compiler would have to invent.
+    assert_eq!(ir.cost.dram_bytes_per_block, 4.0);
 }

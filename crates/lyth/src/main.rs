@@ -16,7 +16,7 @@ use serde::Deserialize;
 
 use lyth_cuda::{grid_for, Arg, Context};
 use lyth_lang::ast::Ty;
-use lyth_lang::eval::{eval, Inputs};
+use lyth_lang::eval::{eval_with_block, Inputs};
 use lyth_lang::{check_intensity, ir, parse, KernelIr, Ridge};
 use lyth_ptx::emit;
 
@@ -219,9 +219,9 @@ fn print_cost(ir: &KernelIr, report: &lyth_lang::IntensityReport) {
     );
     println!(
         "  traffic  {} read + {} written, at {}",
-        ir.cost.read_bytes_per_element,
-        ir.cost.write_bytes_per_element,
-        ir.cost.level.name()
+        ir.cost.read_bytes_per_element(),
+        ir.cost.write_bytes_per_element(),
+        ir.cost.level().name()
     );
     match report.declared {
         Some(d) => println!("  declared {d} — matches"),
@@ -308,7 +308,7 @@ fn evidence_json(ir: &KernelIr, elements: u32) -> String {
         if s.read {
             moves.push(serde_json::json!({
                 "name": format!("{}_read", s.buffer),
-                "level": ir.cost.level.name(),
+                "level": ir.cost.level().name(),
                 "bytes": 4.0,
                 "dir": "r"
             }));
@@ -316,7 +316,7 @@ fn evidence_json(ir: &KernelIr, elements: u32) -> String {
         if s.drain {
             moves.push(serde_json::json!({
                 "name": format!("{}_write", s.buffer),
-                "level": ir.cost.level.name(),
+                "level": ir.cost.level().name(),
                 "bytes": 4.0,
                 "dir": "w"
             }));
@@ -372,6 +372,11 @@ fn cmd_run(file: &Path, machine: Option<&Path>, n: u32, sets: &[String], tol: f6
         }
     }
 
+    let grid = grid_for(n, BLOCK);
+    // A reduction writes one value per block, so its target is sized by the grid, not by the
+    // element count. Sizing it by n would work and would hide a real constraint on the caller.
+    let reduce_target = ir.reduction.as_ref().map(|r| r.into.clone());
+
     // Deterministic inputs. A fixed generator rather than random ones so a disagreement is
     // reproducible from the command line alone, and so the same bytes are compared every run.
     let mut inputs = Inputs::default();
@@ -398,7 +403,7 @@ fn cmd_run(file: &Path, machine: Option<&Path>, n: u32, sets: &[String], tol: f6
         }
     }
 
-    let expected = match eval(ir, n as usize, &inputs) {
+    let expected = match eval_with_block(ir, n as usize, &inputs, BLOCK as usize) {
         Ok(o) => o,
         Err(e) => {
             eprintln!("error[reference]: {e}");
@@ -468,9 +473,10 @@ fn cmd_run(file: &Path, machine: Option<&Path>, n: u32, sets: &[String], tol: f6
         })
         .collect();
 
-    let grid = grid_for(n, BLOCK);
-    println!("  launch grid {grid} x block {BLOCK} over {n} elements");
-    if let Err(e) = func.launch(grid, BLOCK, &args) {
+    // One f32 slot per thread for the reduction tree; nothing without a reduction.
+    let shared = if ir.reduction.is_some() { BLOCK * 4 } else { 0 };
+    println!("  launch   grid {grid} x block {BLOCK} over {n} elements, {shared} B shared");
+    if let Err(e) = func.launch_shared(grid, BLOCK, shared, &args) {
         eprintln!("error[cuda]: {e}");
         return ExitCode::from(EXIT_UNUSABLE);
     }
@@ -484,9 +490,17 @@ fn cmd_run(file: &Path, machine: Option<&Path>, n: u32, sets: &[String], tol: f6
     let mut mismatches = 0usize;
     let mut first: Option<(String, usize, f32, f32)> = None;
     for (name, buf) in &buffers {
-        if !ir.drains.iter().any(|(b, _)| b == name) {
+        let is_drain = ir.drains.iter().any(|(b, _)| b == name);
+        let is_partial = Some(name) == reduce_target.as_ref();
+        if !is_drain && !is_partial {
             continue;
         }
+        // Only the first `grid` entries of a reduction target are written.
+        let count = if is_partial {
+            grid as usize
+        } else {
+            n as usize
+        };
         let got = match buf.download() {
             Ok(v) => v,
             Err(e) => {
@@ -495,7 +509,7 @@ fn cmd_run(file: &Path, machine: Option<&Path>, n: u32, sets: &[String], tol: f6
             }
         };
         let want = &expected.buffers[name];
-        for i in 0..(n as usize) {
+        for i in 0..count {
             if got[i].to_bits() != want[i].to_bits() {
                 mismatches += 1;
                 if first.is_none() {
@@ -506,7 +520,19 @@ fn cmd_run(file: &Path, machine: Option<&Path>, n: u32, sets: &[String], tol: f6
     }
 
     if mismatches == 0 {
-        println!("  verify BIT-EXACT against the IR evaluated on the host, {n} elements");
+        println!("  verify   BIT-EXACT against the IR evaluated on the host, {n} elements");
+        if let Some(name) = &reduce_target {
+            // Finish the reduction the way the caller has to: sum the block partials. Printed
+            // because a bit-exact match between two buffers of zeros is not evidence of
+            // anything, and this is the number the kernel was written to produce.
+            let partials = &expected.buffers[name];
+            let total: f64 = partials[..grid as usize].iter().map(|v| *v as f64).sum();
+            println!(
+                "           {} block partials in `{name}`, summed in the same tree order",
+                grid
+            );
+            println!("  reduced  {total:.6e}  (the caller adds the partials; ADR-0011)");
+        }
         println!("ok");
         ExitCode::SUCCESS
     } else {

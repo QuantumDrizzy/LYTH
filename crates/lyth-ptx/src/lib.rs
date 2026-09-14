@@ -82,7 +82,7 @@ pub fn emit(ir: &KernelIr, arch: &str) -> Result<Module, EmitError> {
         .find(|p| p.ty == Ty::U32)
         .map(|p| p.name.clone())
         .ok_or_else(|| EmitError::NoBound(ir.name.clone()))?;
-    if ir.drains.is_empty() {
+    if ir.drains.is_empty() && ir.reduction.is_none() {
         return Err(EmitError::NoDrain(ir.name.clone()));
     }
 
@@ -105,20 +105,27 @@ pub fn emit(ir: &KernelIr, arch: &str) -> Result<Module, EmitError> {
     let _ = writeln!(
         ptx,
         "//   derived   {:.6} flop/byte = {} flop / {} byte per element",
-        ir.cost.intensity, ir.cost.flops_per_element, ir.cost.bytes_per_element
+        ir.cost.intensity,
+        ir.cost.flops_per_element,
+        ir.cost.bytes_per_element()
     );
     let _ = writeln!(
         ptx,
         "//   traffic   {} read + {} written, per element, at {}",
-        ir.cost.read_bytes_per_element,
-        ir.cost.write_bytes_per_element,
-        ir.cost.level.name()
+        ir.cost.read_bytes_per_element(),
+        ir.cost.write_bytes_per_element(),
+        ir.cost.level().name()
     );
     let _ = writeln!(ptx, "//");
     let _ = writeln!(ptx, ".version {}", isa_for(arch)?);
     let _ = writeln!(ptx, ".target {arch}");
     let _ = writeln!(ptx, ".address_size 64");
     let _ = writeln!(ptx);
+    if ir.reduction.is_some() {
+        // Dynamic, sized at launch, so the block size is not baked into the module.
+        let _ = writeln!(ptx, ".extern .shared .align 4 .b8 lyth_smem[];");
+        let _ = writeln!(ptx);
+    }
     let _ = writeln!(ptx, ".visible .entry {}(", ir.name);
     let params: Vec<String> = ir
         .params
@@ -229,15 +236,28 @@ impl Emitter {
         line(out, &format!("mov.u32 {ntid}, %ntid.x;"));
         line(out, &format!("mov.u32 {tid}, %tid.x;"));
         line(out, &format!("mad.lo.s32 {idx}, {ctaid}, {ntid}, {tid};"));
+        // WITHOUT a reduction an out-of-range thread simply leaves. WITH one it must still
+        // reach the barrier and contribute the identity, or the shared slot it owns holds
+        // whatever was there before and the tree sums garbage. Different shape, same check.
         let p = self.pred();
         line(out, &format!("setp.ge.u32 {p}, {idx}, {r_bound};"));
-        line(out, &format!("@{p} bra $L_done_{k};"));
+        if ir.reduction.is_none() {
+            line(out, &format!("@{p} bra $L_done_{k};"));
+        } else {
+            line(out, &format!("@{p} bra $L_idle_{k};"));
+        }
 
         // --- one element address per buffer ------------------------------------------
         let off = self.b64();
         line(out, &format!("mul.wide.u32 {off}, {idx}, 4;"));
+        let reduce_target = ir.reduction.as_ref().map(|r| r.into.as_str());
         let mut addrs: Vec<(String, String)> = Vec::new();
         for (name, base) in &buffers {
+            // The reduction's target is indexed by block, never by element: computing an
+            // element address for it would put an instruction in the listing nothing uses.
+            if Some(name.as_str()) == reduce_target {
+                continue;
+            }
             let a = self.b64();
             line(out, &format!("add.s64 {a}, {base}, {off};"));
             addrs.push((name.clone(), a));
@@ -329,8 +349,113 @@ impl Emitter {
             );
         }
 
+        if let Some(r) = &ir.reduction {
+            self.reduction(ir, r, &buffers, &regs, &tid, &ctaid, &ntid, out)?;
+        }
+
         let _ = writeln!(out, "$L_done_{k}:");
         line(out, "ret;");
+        Ok(())
+    }
+}
+
+impl Emitter {
+    /// The tree, in shared memory, matching `lyth_lang::eval::tree_reduce` step for step.
+    ///
+    /// Any divergence between the two orders shows up as a wrong last bit on a correct
+    /// kernel, so the two are written to be read side by side.
+    #[allow(clippy::too_many_arguments)]
+    fn reduction(
+        &mut self,
+        ir: &KernelIr,
+        r: &lyth_lang::ir::ReductionIr,
+        buffers: &[(String, String)],
+        regs: &[(RegId, String)],
+        tid: &str,
+        ctaid: &str,
+        ntid: &str,
+        out: &mut String,
+    ) -> Result<(), EmitError> {
+        let k = &ir.name;
+        let value = regs
+            .iter()
+            .find(|(i, _)| *i == r.value)
+            .map(|(_, reg)| reg.clone())
+            .ok_or_else(|| EmitError::Message("the reduced value has no register".into()))?;
+
+        // The in-range path falls through with its value; the idle path joins here with the
+        // identity. Both reach every barrier below, which is what makes the barriers legal.
+        let acc = self.f32();
+        line(out, &format!("mov.f32 {acc}, {value};"));
+        line(out, &format!("bra $L_store_{k};"));
+        let _ = writeln!(out, "$L_idle_{k}:");
+        line(
+            out,
+            &format!("mov.f32 {acc}, {};", hex_f32(r.op.identity())),
+        );
+        let _ = writeln!(out, "$L_store_{k}:");
+
+        // slot = lyth_smem + tid * 4
+        let smem = self.b64();
+        let off = self.b64();
+        let slot = self.b64();
+        line(out, &format!("mov.u64 {smem}, lyth_smem;"));
+        line(out, &format!("mul.wide.u32 {off}, {tid}, 4;"));
+        line(out, &format!("add.s64 {slot}, {smem}, {off};"));
+        line(out, &format!("st.shared.f32 [{slot}], {acc};"));
+        line(out, "bar.sync 0;");
+
+        // for (stride = ntid / 2; stride > 0; stride >>= 1)
+        let stride = self.b32();
+        line(out, &format!("shr.u32 {stride}, {ntid}, 1;"));
+        let _ = writeln!(out, "$L_tree_{k}:");
+        let done = self.pred();
+        line(out, &format!("setp.eq.u32 {done}, {stride}, 0;"));
+        line(out, &format!("@{done} bra $L_tree_end_{k};"));
+
+        let active = self.pred();
+        let a = self.f32();
+        let b = self.f32();
+        let sum = self.f32();
+        let mate_off = self.b64();
+        let mate = self.b64();
+        let partner = self.b32();
+        line(out, &format!("setp.ge.u32 {active}, {tid}, {stride};"));
+        line(out, &format!("@{active} bra $L_skip_{k};"));
+        line(out, &format!("add.u32 {partner}, {tid}, {stride};"));
+        line(out, &format!("mul.wide.u32 {mate_off}, {partner}, 4;"));
+        line(out, &format!("add.s64 {mate}, {smem}, {mate_off};"));
+        line(out, &format!("ld.shared.f32 {a}, [{slot}];"));
+        line(out, &format!("ld.shared.f32 {b}, [{mate}];"));
+        match r.op {
+            lyth_lang::ast::ReduceOp::Sum => {
+                line(out, &format!("add.rn.f32 {sum}, {a}, {b};"));
+            }
+        }
+        line(out, &format!("st.shared.f32 [{slot}], {sum};"));
+        let _ = writeln!(out, "$L_skip_{k}:");
+        // Every thread reaches this barrier, including the ones that skipped the combine.
+        line(out, "bar.sync 0;");
+        line(out, &format!("shr.u32 {stride}, {stride}, 1;"));
+        line(out, &format!("bra $L_tree_{k};"));
+        let _ = writeln!(out, "$L_tree_end_{k}:");
+
+        // Thread 0 writes the block's result.
+        let not_zero = self.pred();
+        line(out, &format!("setp.ne.u32 {not_zero}, {tid}, 0;"));
+        line(out, &format!("@{not_zero} bra $L_done_{k};"));
+        let result = self.f32();
+        line(out, &format!("ld.shared.f32 {result}, [{smem}];"));
+        let into = buffers
+            .iter()
+            .find(|(n, _)| *n == r.into)
+            .map(|(_, base)| base.clone())
+            .ok_or_else(|| EmitError::Message(format!("no base address for `{}`", r.into)))?;
+        let block_off = self.b64();
+        let block_addr = self.b64();
+        line(out, &format!("mul.wide.u32 {block_off}, {ctaid}, 4;"));
+        line(out, &format!("add.s64 {block_addr}, {into}, {block_off};"));
+        line(out, &format!("st.global.f32 [{block_addr}], {result};"));
         Ok(())
     }
 }

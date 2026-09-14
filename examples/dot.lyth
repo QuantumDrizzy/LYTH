@@ -1,0 +1,12 @@
+machine sm_120
+
+# Dot product. Each block writes its partial sum; the caller adds them up.
+kernel dot(n: u32, x: [f32], y: [f32], partial: [f32])
+    intensity 0.25
+
+    stream x : dram -> reg
+    stream y : dram -> reg
+    reduce sum p : reg -> smem -> dram into partial
+
+    at reg:
+        p = x * y

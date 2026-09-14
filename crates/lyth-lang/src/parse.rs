@@ -172,6 +172,7 @@ impl Parser {
         let mut declared_intensity = None;
         let mut intensity_span = None;
         let mut streams = Vec::new();
+        let mut reductions = Vec::new();
         let mut blocks = Vec::new();
 
         loop {
@@ -196,10 +197,12 @@ impl Parser {
                 intensity_span = Some(s);
             } else if self.at_word("stream") {
                 streams.push(self.stream()?);
+            } else if self.at_word("reduce") {
+                reductions.push(self.reduce()?);
             } else if self.at_word("at") {
                 blocks.push(self.block()?);
             } else {
-                return self.expected("`intensity`, `stream` or `at`");
+                return self.expected("`intensity`, `stream`, `reduce` or `at`");
             }
         }
 
@@ -210,7 +213,50 @@ impl Parser {
             declared_intensity,
             intensity_span,
             streams,
+            reductions,
             blocks,
+        })
+    }
+
+    /// `reduce sum p : reg -> smem -> dram into partial`
+    fn reduce(&mut self) -> Result<ReduceDecl, ParseError> {
+        let span = self.span();
+        self.expect(Tok::Word("reduce".into()))?;
+        let (op_word, op_span) = self.word()?;
+        let Some(op) = ReduceOp::parse(&op_word) else {
+            return Err(ParseError::Message {
+                span: op_span,
+                msg: format!("`{op_word}` is not a reduction in v1; only `sum`"),
+            });
+        };
+        let (source, _) = self.word()?;
+        self.expect(Tok::Colon)?;
+
+        // The path, written out: reg -> smem -> dram.
+        let mut path = Vec::new();
+        loop {
+            let (w, s) = self.word()?;
+            let Some(level) = Level::parse(&w) else {
+                return Err(ParseError::Message {
+                    span: s,
+                    msg: format!("`{w}` is not a level; dram, l2, smem, reg"),
+                });
+            };
+            path.push(level);
+            if !self.eat(&Tok::Arrow) {
+                break;
+            }
+        }
+        if !self.eat_word("into") {
+            return self.expected("`into <buffer>` naming where the block result lands");
+        }
+        let (into, _) = self.word()?;
+        Ok(ReduceDecl {
+            op,
+            source,
+            path,
+            into,
+            span,
         })
     }
 

@@ -1,0 +1,12 @@
+machine sm_120
+
+# The simplest reduction: sum a vector.
+# No arithmetic at all in the body -- the only flops are the tree.
+kernel sum(n: u32, x: [f32], partial: [f32])
+    intensity 0.25
+
+    stream x : dram -> reg
+    reduce sum v : reg -> smem -> dram into partial
+
+    at reg:
+        v = x

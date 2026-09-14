@@ -372,8 +372,21 @@ pub enum Arg<'a> {
 }
 
 impl Function<'_> {
-    /// Launch with a 1-D grid.
+    /// Launch with a 1-D grid and no dynamic shared memory.
     pub fn launch(&self, grid: u32, block: u32, args: &[Arg]) -> Result<(), CudaError> {
+        self.launch_shared(grid, block, 0, args)
+    }
+
+    /// Launch with `shared_bytes` of dynamic shared memory, which a `.extern .shared` array
+    /// in the module is sized by. Passing 0 to a kernel that declares one is not an error the
+    /// driver reports: the array is simply empty and the kernel reads whatever is there.
+    pub fn launch_shared(
+        &self,
+        grid: u32,
+        block: u32,
+        shared_bytes: u32,
+        args: &[Arg],
+    ) -> Result<(), CudaError> {
         if block == 0 || grid == 0 {
             return Err(CudaError::Message(
                 "a launch with an empty grid or block does no work".into(),
@@ -410,7 +423,7 @@ impl Function<'_> {
                     block,
                     1,
                     1,
-                    0,
+                    shared_bytes,
                     std::ptr::null_mut(),
                     ptrs.as_mut_ptr(),
                     std::ptr::null_mut(),

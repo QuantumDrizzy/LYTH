@@ -1,0 +1,11 @@
+machine sm_120
+
+# A reduction writes once per BLOCK. Streaming its target claims per-element traffic
+# that does not happen, which would inflate the byte count. Refused.
+kernel reduce_streamed(n: u32, x: [f32], partial: [f32])
+    stream x : dram -> reg
+    stream partial : dram -> reg, drain
+    reduce sum v : reg -> smem -> dram into partial
+
+    at reg:
+        v = x
