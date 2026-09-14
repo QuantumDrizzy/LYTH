@@ -1,8 +1,12 @@
-# LITH
+<p align="center">
+  <img src="assets/lyth_banner.jpg" alt="LYTH" width="550"/>
+</p>
+
+# LYTH
 
 > A kernel that cannot say what it costs does not compile.
 
-Memory-first kernel dialect. **Not a language yet** — `lith-probe` over CUDA you already have.
+Memory-first kernel dialect for bare-metal HPC & quantum computing. **Not a language yet** — `lith-probe` over CUDA you already have.
 
 ## Status
 
