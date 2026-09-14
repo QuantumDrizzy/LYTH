@@ -1,0 +1,5 @@
+"ID","Process ID","Process Name","Host Name","Kernel Name","Context","Stream","Block Size","Grid Size","Device","CC","Section Name","Metric Name","Metric Unit","Metric Value"
+"0","17084","lyth.exe","127.0.0.1","saxpy","1","7","(256, 1, 1)","(65536, 1, 1)","0","12.0","Command line profiler metrics","dram__bytes.sum","byte","182.320.640"
+"0","17084","lyth.exe","127.0.0.1","saxpy","1","7","(256, 1, 1)","(65536, 1, 1)","0","12.0","Command line profiler metrics","dram__bytes_op_read.sum","byte","134.222.848"
+"0","17084","lyth.exe","127.0.0.1","saxpy","1","7","(256, 1, 1)","(65536, 1, 1)","0","12.0","Command line profiler metrics","dram__bytes_op_write.sum","byte","48.097.792"
+"0","17084","lyth.exe","127.0.0.1","saxpy","1","7","(256, 1, 1)","(65536, 1, 1)","0","12.0","Command line profiler metrics","lts__t_bytes.sum","byte","201.348.736"

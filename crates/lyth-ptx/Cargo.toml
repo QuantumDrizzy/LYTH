@@ -1,0 +1,11 @@
+[package]
+name = "lyth-ptx"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "LYTH back end: IR to PTX text. No CUDA dependency."
+
+[dependencies]
+lyth-lang = { path = "../lyth-lang" }
+thiserror = "2"

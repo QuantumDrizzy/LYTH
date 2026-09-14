@@ -1,0 +1,10 @@
+[package]
+name = "lyth-lang"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "LYTH front end: lexer, parser, semantic IR, and cost derived from the AST."
+
+[dependencies]
+thiserror = "2"

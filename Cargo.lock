@@ -296,6 +296,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
+name = "lyth"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "lyth-cuda",
+ "lyth-lang",
+ "lyth-ptx",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "lyth-cuda"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
+name = "lyth-lang"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
 name = "lyth-probe"
 version = "0.1.0"
 dependencies = [
@@ -304,6 +330,14 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "lyth-ptx"
+version = "0.1.0"
+dependencies = [
+ "lyth-lang",
  "thiserror",
 ]
 

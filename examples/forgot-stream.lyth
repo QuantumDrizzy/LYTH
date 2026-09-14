@@ -1,0 +1,7 @@
+machine sm_120
+
+kernel forgot(n: u32, x: [f32], y: [f32])
+    stream y : dram -> reg, drain
+
+    at reg:
+        y = x + 1

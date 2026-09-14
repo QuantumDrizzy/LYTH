@@ -1,0 +1,12 @@
+machine sm_120
+
+# y = a*x + y, one element per thread.
+# The intensity below is checked against the body, not trusted.
+kernel saxpy(n: u32, a: f32, x: [f32], y: [f32])
+    intensity 0.1667
+
+    stream x : dram -> reg
+    stream y : dram -> reg, drain
+
+    at reg:
+        y = a * x + y

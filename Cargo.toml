@@ -1,6 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["crates/lyth-probe"]
+members = [
+    "crates/lyth-probe",
+    "crates/lyth-lang",
+    "crates/lyth-ptx",
+    "crates/lyth-cuda",
+    "crates/lyth",
+]
 
 [workspace.package]
 edition = "2021"

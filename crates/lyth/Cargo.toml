@@ -1,0 +1,23 @@
+[package]
+name = "lyth"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "The LYTH compiler: build, run and check a .lyth source file."
+
+[[bin]]
+name = "lyth"
+path = "src/main.rs"
+
+[dev-dependencies]
+lyth-lang = { path = "../lyth-lang" }
+lyth-ptx = { path = "../lyth-ptx" }
+
+[dependencies]
+lyth-lang = { path = "../lyth-lang" }
+lyth-ptx = { path = "../lyth-ptx" }
+lyth-cuda = { path = "../lyth-cuda" }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

@@ -185,7 +185,7 @@ pub fn check_with_machine(
                 flops = case.body.flops
             ),
             format!("declaration claims {declared:.4} flop/byte (rel err {rel_err:.3} > tol {tol})"),
-            "options: (1) fix the declaration to match the body traffic\n           (2) fix the body.moves / body.flops accounting\n           (3) raise --tol only with a known_limit stating why".into(),
+            "options: (1) fix the declaration to match the body traffic\n (2) fix the body.moves / body.flops accounting\n (3) raise --tol only with a known_limit stating why".into(),
         ];
         if let Some(r) = &ridge {
             hints.push(format!(
