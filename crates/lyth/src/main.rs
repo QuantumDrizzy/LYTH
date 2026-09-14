@@ -25,11 +25,18 @@ const EXIT_UNUSABLE: u8 = 2;
 /// Threads per block. 256 is the conventional starting point and is not tuned here.
 const BLOCK: u32 = 256;
 
-/// Blocks per SM in the default grid.
+/// Largest grid launched by default.
 ///
-/// **[KNOWN LIMIT] This is a guess until swept.** A starting point, not a tuned value, which is
-/// exactly why `--grid` exists: the choice is meant to be measured rather than believed.
-const WAVES: u32 = 4;
+/// The default WAS the device's SM count times four waves, on the reasoning that a grid-stride
+/// loop wants enough blocks to fill the machine and no more. **The sweep says that reasoning is
+/// wrong for a memory-bound kernel** (`tools/grid_sweep.py`, ADR-0012): at 36 SMs x 4 waves
+/// saxpy reaches 386.63 GB/s against 399.70 at one element per thread, 3.3% slower and well
+/// outside the 0.4% spread of both points. More threads in flight is more outstanding loads.
+///
+/// So the default is one element per thread, and the loop engages only past this cap or when
+/// `--grid` asks for it. The cap exists because a grid is a u32 and a large enough `n` would
+/// need more blocks than one launch can carry.
+const MAX_GRID: u32 = 1 << 20;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -89,6 +96,10 @@ enum Cmd {
         /// bandwidth against the machine file's measured figure. 0 disables timing.
         #[arg(long, default_value_t = 0)]
         time: u32,
+        /// Also write the timing as one JSON object, for a sweep to re-analyse. Evidence
+        /// that has to be recovered by parsing prose depends on nobody editing a println.
+        #[arg(long)]
+        json: Option<PathBuf>,
         /// Value for each `f32` parameter, as `name=value`. Repeatable.
         #[arg(long = "set", value_name = "NAME=VALUE")]
         sets: Vec<String>,
@@ -147,9 +158,21 @@ fn main() -> ExitCode {
             n,
             grid,
             time,
+            json,
             sets,
             tol,
-        } => cmd_run(&file, machine.as_deref(), n, grid, time, &sets, tol),
+        } => cmd_run(
+            &file,
+            machine.as_deref(),
+            RunOpts {
+                n,
+                grid,
+                reps: time,
+                json: json.as_deref(),
+                sets: &sets,
+                tol,
+            },
+        ),
     }
 }
 
@@ -363,15 +386,26 @@ fn evidence_json(ir: &KernelIr, elements: u32) -> String {
 "
 }
 
-fn cmd_run(
-    file: &Path,
-    machine: Option<&Path>,
+/// Everything `run` needs beyond the source and the machine. Grouped because they are one
+/// decision about how to execute, and eight loose parameters invite transposing two of them.
+struct RunOpts<'a> {
     n: u32,
-    grid_arg: Option<u32>,
+    grid: Option<u32>,
     reps: u32,
-    sets: &[String],
+    json: Option<&'a Path>,
+    sets: &'a [String],
     tol: f64,
-) -> ExitCode {
+}
+
+fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
+    let RunOpts {
+        n,
+        grid: grid_arg,
+        reps,
+        json,
+        sets,
+        tol,
+    } = o;
     let f = match front(file, machine, tol) {
         Ok(f) => f,
         Err(code) => return code,
@@ -404,13 +438,13 @@ fn cmd_run(
     };
     println!("  device   {}", ctx.device_name);
 
-    // The grid stops being a function of `n` under grid-stride, so something has to
-    // choose it. Derived from the device -- SMs times WAVES -- and capped at the blocks
-    // the problem actually needs, since launching more would leave them with no elements.
+    // One element per thread by default, because that is what measured fastest -- not because
+    // it is obvious. `--grid` takes anything, and below `want` the loop starts doing real work.
     let want = grid_for(n, BLOCK);
-    let grid = grid_arg.unwrap_or_else(|| (ctx.sm_count * WAVES).min(want).max(1));
+    let grid = grid_arg.unwrap_or_else(|| want.clamp(1, MAX_GRID));
+    let per_thread = (n as f64 / (grid as f64 * BLOCK as f64)).ceil() as u64;
     println!(
-        "  grid     {grid} blocks of {BLOCK} ({} SMs x {WAVES} waves, capped at {want})",
+        "  grid     {grid} blocks of {BLOCK} on {} SMs, {per_thread} element(s) per thread",
         ctx.sm_count
     );
     // A reduction writes one value per block, so its target is sized by the grid, not by the
@@ -551,7 +585,9 @@ fn cmd_run(
     }
 
     if mismatches == 0 && reps > 0 {
-        if let Err(e) = report_timing(&ctx, &func, grid, shared, &args, reps, n, ir, &f.machine) {
+        if let Err(e) = report_timing(
+            &ctx, &func, grid, shared, &args, reps, n, ir, &f.machine, json,
+        ) {
             eprintln!("error[timing]: {e}");
             return ExitCode::from(EXIT_UNUSABLE);
         }
@@ -605,6 +641,7 @@ fn report_timing(
     n: u32,
     ir: &KernelIr,
     machine: &Option<Machine>,
+    json: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // One warm-up per five runs, at least one: the first launch pays for module residency and
     // clock ramp, neither of which is the kernel's cost.
@@ -660,5 +697,37 @@ fn report_timing(
     println!("  [LIMIT]  kernel only: allocation and the host copy are outside the events.");
     println!("           Buffers stay resident across runs; L2 state is not controlled.");
     println!("           Clocks not locked, as the baseline's were not.");
+
+    if let Some(path) = json {
+        // Every sample, not just the summary: a median whose raw runs were discarded cannot
+        // be re-analysed, and a sweep that can only read summaries cannot tell a slow drift
+        // from a real difference.
+        let record = serde_json::json!({
+            "kernel": ir.name,
+            "machine": ir.machine,
+            "elements": n,
+            "grid": grid,
+            "block": BLOCK,
+            "reps": reps,
+            "warmup": warmup,
+            "ms_samples": samples,
+            "ms_median": median_ms,
+            "ms_spread": spread,
+            "bytes_source": "derived by the compiler, not measured",
+            "bytes": bytes,
+            "achieved_gbs": gbs,
+            "baseline_gbs": machine.as_ref().and_then(|m| {
+                m.levels.iter().find(|l| l.name == "dram").map(|l| l.bandwidth_gbs)
+            }),
+            "clock_state": "unlocked",
+            "cache_state": "buffers resident across runs; L2 not controlled",
+        });
+        std::fs::write(
+            path,
+            serde_json::to_string_pretty(&record)?
+                + "
+",
+        )?;
+    }
     Ok(())
 }

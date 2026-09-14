@@ -122,3 +122,73 @@ the sweep is the point of exposing `--grid`.
   means anything.
 - The reported byte count is the compiler's derived one. It is checked against `ncu` separately
   (ADR-0009) and that check is not automatic here.
+
+---
+
+## The falsification, tested — and it came back negative (2026-09-14)
+
+The section above recorded that this ADR's own falsification had not been tested, and why:
+
+> The one-element-per-thread path no longer exists to compare against, which was a scoping
+> mistake. It can be recovered by forcing `--grid` to `ceil(n / block)`.
+
+`tools/grid_sweep.py` does that. saxpy, n = 67,108,864 (256 MB per buffer, far past L2), five
+**interleaved** passes of seven timed runs each. Interleaved because running every repetition of
+one grid and then the next attributes a thermal drift to whichever grid was measured late; each
+pass visits every grid once, so a drift becomes noise shared by all points instead of a result
+at one of them. Raw records: `fixtures/sweeps/grid-sweep-saxpy-sm_120-2026-09-14.json`.
+
+```
+      grid      GB/s         ms   within   across   vs base
+         1      9.41    85.5819    0.8%    1.5%      2.6%
+         9     82.04     9.8154    0.3%    0.2%     22.9%
+        18    150.24     5.3601    0.4%    5.3%     41.9%
+        36    258.99     3.1094    0.4%    0.1%     72.3%     1 block/SM
+        72    370.34     2.1745    1.6%    0.1%    103.3%     2 blocks/SM
+       144    386.63     2.0829    1.6%    0.4%    107.9%     the old default
+       288    383.34     2.1007   15.0%    0.3%    107.0%
+       576    389.53     2.0674    1.4%    0.1%    108.7%
+      1152    391.20     2.0586    1.7%    0.1%    109.1%
+      4608    393.71     2.0454    1.7%    0.1%    109.8%
+    262144    399.70     2.0148    1.9%    0.1%    111.5%     one element per thread
+```
+
+**The answer is negative, and it is the useful direction.** At the default grid, grid-stride was
+**3.3% slower** than the shape it replaced — outside the 0.4% across-pass spread of both points,
+so not noise. The best grid-stride point (4608) is still 1.5% slower.
+
+The reason is the expected one for a memory-bound kernel: at grid 144 there are 36,864 threads
+each folding ~1,820 elements; at 262,144 there are 67 million threads each doing one. **More
+threads in flight is more outstanding loads**, and this kernel is waiting on memory, not on
+arithmetic.
+
+### Acted on
+
+The default was SM count × 4 waves, justified by "a grid-stride loop wants enough blocks to fill
+the machine and no more". The sweep says that reasoning is wrong here, so **the default is now
+one element per thread**, capped at 2^20 blocks because a large enough `n` would need more than
+one launch can carry. The loop engages past that cap or when `--grid` asks. `WAVES` is gone.
+
+Measured after the change, same command as the section above: **399.64 GB/s, spread 1.9%** —
+against 386.95 and 16.2% before it. The larger grid is both faster and considerably steadier.
+
+### Two things the table says that the verdict does not
+
+**The saturation curve is the more useful result.** One block per SM reaches 72% of the plateau,
+two reach 93%, four reach 97%. For anyone sizing a launch on this device, that curve is worth
+more than the 3.3%.
+
+**Interleaving earned its keep.** Grid 288 shows a 15.0% `within` spread — one timing call caught
+something else running — while its `across` spread is 0.3%. Had the passes not been interleaved,
+that one bad call would have been the whole figure for that grid.
+
+### [KNOWN LIMIT] What was *not* measured
+
+The comparison is **small grid against large grid, both with the loop**. It is not loop against
+no-loop: at 262,144 blocks each thread still executes the loop head twice, once to enter and once
+to find itself past the end. The old no-loop codegen was deleted before the comparison was taken,
+so the loop's own overhead remains unmeasured. It is bounded above by the numbers here — whatever
+it costs, the full-grid shape pays it too and still wins.
+
+One kernel, one size, one device, one block size. `--grid` and `tools/grid_sweep.py` exist so the
+next person does not have to take this on faith.

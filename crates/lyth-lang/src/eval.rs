@@ -101,22 +101,61 @@ pub fn eval_with_launch(
         reduced.reserve(n);
     }
 
+    // Registers are dense small integers, so the environment is a Vec indexed by RegId,
+    // allocated once and reused. It was a BTreeMap built fresh per element, which is one heap
+    // allocation and a tree of comparisons for every element: 67 million of them made a sweep
+    // over launch shapes take longer than every kernel in it put together.
+    let n_regs = ir
+        .ops
+        .iter()
+        .map(|o| o.dst() as usize + 1)
+        .max()
+        .unwrap_or(0);
+    let mut regs: Vec<f32> = vec![0.0; n_regs];
+
+    // Resolve buffer names to indices once, rather than hashing a String per element.
+    let buffer_order: Vec<String> = out.buffers.keys().cloned().collect();
+    let index_of = |name: &str| -> Option<usize> { buffer_order.iter().position(|b| b == name) };
+    let mut columns: Vec<Vec<f32>> = buffer_order
+        .iter()
+        .map(|b| out.buffers[b].clone())
+        .collect();
+    let loads: Vec<(RegId, usize)> = ir
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            Op::Load { dst, buffer } => index_of(buffer).map(|i| (*dst, i)),
+            _ => None,
+        })
+        .collect();
+    let drain_cols: Vec<(usize, RegId)> = ir
+        .drains
+        .iter()
+        .filter_map(|(b, r)| index_of(b).map(|i| (i, *r)))
+        .collect();
+    let _ = &loads;
+    let _ = &drain_cols;
+
+    // clippy would rather this were an iterator, but the body indexes several columns at the
+    // same position and writes back into one of them; an index is the honest expression of that.
+    #[allow(clippy::needless_range_loop)]
     for i in 0..n {
-        let mut regs: BTreeMap<RegId, f32> = BTreeMap::new();
         for op in &ir.ops {
             let v = match op {
-                Op::Load { buffer, .. } => out
-                    .buffers
-                    .get(buffer)
-                    .ok_or_else(|| EvalError::MissingBuffer(buffer.clone()))?[i],
+                Op::Load { dst, buffer } => {
+                    let col =
+                        index_of(buffer).ok_or_else(|| EvalError::MissingBuffer(buffer.clone()))?;
+                    let _ = dst;
+                    columns[col][i]
+                }
                 Op::Param { name, .. } => *out
                     .scalars
                     .get(name)
                     .ok_or_else(|| EvalError::MissingScalar(name.clone()))?,
                 Op::Const { value, .. } => *value as f32,
                 Op::Bin { op, lhs, rhs, .. } => {
-                    let a = regs[lhs];
-                    let b = regs[rhs];
+                    let a = regs[*lhs as usize];
+                    let b = regs[*rhs as usize];
                     match op {
                         BinOp::Add => a + b,
                         BinOp::Sub => a - b,
@@ -126,22 +165,25 @@ pub fn eval_with_launch(
                 }
                 // A true FMA: one rounding, matching `fma.rn.f32`. Writing `a * b + c` here
                 // would round twice and disagree with the GPU on the last bit.
-                Op::Fma { a, b, c, .. } => regs[a].mul_add(regs[b], regs[c]),
-                Op::Neg { src, .. } => -regs[src],
+                Op::Fma { a, b, c, .. } => {
+                    regs[*a as usize].mul_add(regs[*b as usize], regs[*c as usize])
+                }
+                Op::Neg { src, .. } => -regs[*src as usize],
             };
-            regs.insert(op.dst(), v);
+            regs[op.dst() as usize] = v;
         }
         // Every drain lands after the whole body, so a kernel that reads y and writes y sees
         // the old value throughout the element, exactly as the generated code does.
-        for (buffer, reg) in &ir.drains {
-            let v = regs[reg];
-            out.buffers
-                .get_mut(buffer)
-                .ok_or_else(|| EvalError::MissingBuffer(buffer.clone()))?[i] = v;
+        for (col, reg) in &drain_cols {
+            columns[*col][i] = regs[*reg as usize];
         }
         if let Some(r) = &ir.reduction {
-            reduced.push(regs[&r.value]);
+            reduced.push(regs[r.value as usize]);
         }
+    }
+
+    for (name, col) in buffer_order.iter().zip(columns) {
+        out.buffers.insert(name.clone(), col);
     }
 
     if let Some(r) = &ir.reduction {
