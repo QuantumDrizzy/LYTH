@@ -14,7 +14,20 @@ pub struct Machine {
     pub schema: String,
     pub id: String,
     pub levels: Vec<Level>,
-    /// Peak FP32 (or stated) TFLOPS for ridge = peak*1e3/dram_gbs. Optional until measured.
+    /// **Achieved** FP32 TFLOP/s, the numerator of `ridge = peak * 1e3 / dram_gbs`.
+    ///
+    /// ACHIEVED, NOT THEORETICAL, AND THE DISTINCTION IS NOT A DETAIL. This field held the
+    /// words "(or stated)" until someone asked where the ridge came from, which is a licence
+    /// to drop a datasheet figure in here and the exact mistake that question was chasing.
+    ///
+    /// The denominator is a measured bandwidth. A ridge is only a statement about a machine
+    /// when **both terms come from the same source**: an achieved SGEMM over an achieved
+    /// bandwidth answers "is this kernel memory-bound on this machine", and a datasheet pair
+    /// answers a procurement question. One of each answers nothing.
+    ///
+    /// For sm_120 the achieved pair is 15.37 TFLOP/s over 358.43 GB/s, a ridge of 42.9; the
+    /// datasheet pair is 23.7 over 448, a ridge of 52.9. Substituting 23.7 here makes
+    /// `machine-check` fail against the measurement, which is the point — see ADR-0004.
     #[serde(default)]
     pub peak_tflops: Option<f64>,
     /// Achieved FP16/TC-class GEMM peak when measured separately.
@@ -384,11 +397,14 @@ mod tests {
             r#"{
               "schema":"lyth-machine/0.1","id":"sm_120","peak_tflops":23.7,
               "levels":[{"name":"dram","bandwidth_gbs":358.43}],
+              "ridge_flop_per_byte":{"fp32":66.12},
               "ops":[]
             }"#,
         )
         .unwrap();
-        // A datasheet peak against a measured one: 23.7 claimed, 15.37 achieved.
+        // The hard version of the scenario: whoever wrote 23.7 also recomputed the stored
+        // ridge so the file agrees with itself. Internal consistency passes; the second term
+        // is what catches it, which is why both halves of the ridge are checked.
         let mut meas = meas_with_runs(358.43, vec![358.43]);
         meas.peak_tflops = Some(15.37);
         match check(&machine, &meas, 0.05).unwrap() {

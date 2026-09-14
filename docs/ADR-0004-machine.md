@@ -94,3 +94,35 @@ it expecting FAIL.
 That would install vendor numbers as the authority, which is the arrangement this whole ADR
 exists to replace. The useful half of that idea is the one implemented above — a file that cannot
 contradict itself.
+
+### `peak_tflops` is achieved, and the file is defended mechanically
+
+Stated once, at the point where it matters: **`peak_tflops` is an achieved cuBLAS SGEMM at
+n = 8192, not a theoretical peak.** For sm_120 that is 15.37 TFLOP/s against a datasheet 23.7.
+
+Raised as a worry that someone reads the JSON in six months, recognises the card, and "corrects"
+15.37 to 23.7 by the same intuition that prompted this section. Three things stand in the way,
+in increasing order of usefulness:
+
+1. The file's own `notes` say every figure is measured. A reader has to read them.
+2. The `peak_tflops` field in `machine.rs` says so. Someone editing the *code* sees it. It did
+   not say so before this question: it read `Peak FP32 (or stated) TFLOPS`, and "(or stated)" is
+   a licence to put a datasheet number there. That wording is gone.
+3. **`machine-check` refuses the file.** This is the only defence that does not depend on anyone
+   reading anything:
+
+```
+$ machine-check <file with peak_tflops: 23.7> meas-sm_120-2026-09-14.json
+verdict: FAIL — machine file lies (or measurement disagrees)
+[1] peak_tflops: machine file claims 23.70, measured 15.37 (rel 0.351 > tol 0.05)
+```
+
+The scenario tested is the hard one: the hypothetical editor *also* recomputed the stored ridge,
+so the file is internally consistent. The internal check passes and the comparison against
+measurement is what catches it — which is the argument for checking both terms of the ridge
+rather than one. Frozen as a test.
+
+**[KNOWN LIMIT]** Editing the machine file *and* the measurement file together defeats all three.
+Nothing in a static check can prevent falsified evidence; what it can do is make the falsification
+have to be deliberate and leave two edits behind. The measurement file records the method
+(`tools/peak_probe.py`) so the claim stays re-runnable by anyone who doubts it.
