@@ -61,3 +61,46 @@ fn the_generated_ptx_records_the_cost_it_was_compiled_under() {
     assert!(m.ptx.contains("0.166667 flop/byte"), "{}", m.ptx);
     assert!(m.ptx.contains("8 read + 4 written"), "{}", m.ptx);
 }
+
+/// Every example in `examples/` that is meant to compile, with the cost the compiler should
+/// derive for it. An example that stops compiling, or whose cost moves, fails here rather than
+/// being found by a reader.
+#[test]
+fn every_working_example_compiles_with_the_cost_it_documents() {
+    // name, flops/element, bytes/element, loads, stores
+    let cases: &[(&str, f64, f64, usize, usize)] = &[
+        ("saxpy.lyth", 2.0, 12.0, 2, 1),
+        ("axpby.lyth", 3.0, 12.0, 2, 1),
+        ("horner.lyth", 6.0, 8.0, 1, 1),
+        ("lerp.lyth", 3.0, 12.0, 2, 1),
+        ("split.lyth", 3.0, 12.0, 1, 2),
+    ];
+    for (name, flops, bytes, loads, stores) in cases {
+        let src = example(name);
+        let unit = parse(&src).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let ir = ir::lower(&unit, &unit.kernels[0]).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(ir.cost.flops_per_element, *flops, "{name} flops");
+        assert_eq!(ir.cost.bytes_per_element, *bytes, "{name} bytes");
+        let m = emit(&ir, "sm_120").unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(
+            m.ptx.matches("ld.global.f32").count(),
+            *loads,
+            "{name} loads"
+        );
+        assert_eq!(
+            m.ptx.matches("st.global.f32").count(),
+            *stores,
+            "{name} stores"
+        );
+    }
+}
+
+#[test]
+fn horner_becomes_a_chain_of_fused_multiply_adds() {
+    // The point of the example: same traffic as a copy, six times the arithmetic. One load,
+    // three fma, one store is what hand-written CUDA compiles to for the same polynomial.
+    let m = compile("horner.lyth").expect("horner should compile");
+    assert_eq!(m.ptx.matches("fma.rn.f32").count(), 3, "{}", m.ptx);
+    assert_eq!(m.ptx.matches("mul.rn.f32").count(), 0, "{}", m.ptx);
+    assert_eq!(m.ptx.matches("ld.global.f32").count(), 1, "{}", m.ptx);
+}

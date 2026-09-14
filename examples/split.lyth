@@ -1,0 +1,13 @@
+machine sm_120
+
+# Two outputs from one input. Several statements, several drains.
+kernel split(n: u32, a: f32, x: [f32], lo: [f32], hi: [f32])
+    intensity 0.25
+
+    stream x  : dram -> reg
+    stream lo : dram -> reg, drain
+    stream hi : dram -> reg, drain
+
+    at reg:
+        lo = a * x
+        hi = x - a * x

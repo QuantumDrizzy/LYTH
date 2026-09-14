@@ -1,0 +1,12 @@
+machine sm_120
+
+# A cubic by Horner. Same traffic as a copy, six times the arithmetic:
+# the intensity climbs while the bytes stay put. This is the roofline moving.
+kernel horner(n: u32, c0: f32, c1: f32, c2: f32, c3: f32, x: [f32], y: [f32])
+    intensity 0.75
+
+    stream x : dram -> reg
+    stream y : dram -> reg, drain
+
+    at reg:
+        y = ((c3 * x + c2) * x + c1) * x + c0
