@@ -7,12 +7,21 @@
     {
       "name": "dram",
       "bandwidth_gbs": 358.43,
-      "runs": [350.84, 352.26, 354.38, 362.48, 368.32, 368.42]
+      "runs": [
+        350.84,
+        352.26,
+        354.38,
+        362.48,
+        368.32,
+        368.42
+      ]
     }
   ],
   "known_limits": [
     "[KNOWN LIMIT] Clocks not locked. Bandwidth moves with clock state and this number is the median of an unlocked run; a locked-clock measurement is not interchangeable with it.",
     "[KNOWN LIMIT] The benchmark is a torch.sum reduction, not a pure streaming read, so it is a lower bound on achievable read bandwidth.",
-    "[KNOWN LIMIT] The previously recorded 398.39 GB/s did not reproduce: it sits 10% above every one of these six runs. Its provenance was a copy out of Unibit/docs/host-reference.json, which is why it survived unchecked."
-  ]
+    "[KNOWN LIMIT] The previously recorded 398.39 GB/s did not reproduce: it sits 10% above every one of these six runs. Its provenance was a copy out of Unibit/docs/host-reference.json, which is why it survived unchecked.",
+    "[KNOWN LIMIT] peak_tflops is an achieved cuBLAS SGEMM at n=8192, one shape, same session. No repetition count is recorded for it, unlike the six bandwidth runs."
+  ],
+  "peak_tflops": 15.37
 }

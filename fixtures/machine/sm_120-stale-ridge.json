@@ -67,10 +67,7 @@
     }
   ],
   "notes": [
-    "EVERY NUMBER HERE IS MEASURED ON THIS MACHINE, NOT A DATASHEET. peak_tflops 15.37 is an achieved cuBLAS SGEMM at n=8192; bandwidth 358.43 GB/s is the median of six runs. Both via tools/peak_probe.py on 2026-09-14.",
-    "Ridge FP32 = 15.37e3 / 358.43 = 42.9 flop/byte. Both terms are achieved figures, which is the only way the ratio describes a real machine: mixing a datasheet peak with a measured bandwidth, or the reverse, produces a number that describes nothing.",
-    "For contrast, and NOT used anywhere: this card's datasheet figures are 23.7 TFLOP/s FP32 and 448 GB/s, a ridge of 52.9. Measurement reaches 65% of the first and 80% of the second, which is ordinary. The datasheet ridge is the right number for a procurement decision and the wrong one for asking whether a kernel on THIS machine is memory-bound.",
-    "l2/smem/reg bandwidth stays 0 until a probe names them."
+    "DELIBERATELY WRONG FIXTURE. Identical to sm_120.json except the stored ridge still reads 37.7, the value it had when bandwidth was recorded as 398.39 GB/s. That is the exact shape of the defect this fixture exists to catch: an input was corrected and the number derived from it was not."
   ],
   "measurement": {
     "method": "tools/peak_probe.py, torch.sum over 1 GiB (read) and cuBLAS GEMM n=8192",
@@ -84,14 +81,11 @@
     "clock_state": "default boost, not locked"
   },
   "ridge_flop_per_byte": {
-    "fp32": 42.9,
+    "fp32": 37.7,
     "fp16_tensor": 123.5,
     "note": "FP32 class unless the kernel is tensor-core dominant. State which one you used."
   },
   "known_limits": [
-    "The previous file claimed 398.39 GB/s. Six fresh runs gave 350.8-368.4, median 358.4. The old value does not reproduce and is 10% above every run.",
-    "torch.sum is a reduction, not a streaming read benchmark. The 5% run-to-run spread and the warm-up trend (first three runs 351-354, last three 362-368) are consistent with clock boost settling rather than with a stable bandwidth measurement. A stream-style kernel would be a better probe.",
-    "Clocks were not locked. A locked-clock number would be lower and more reproducible.",
-    "[KNOWN LIMIT] 15.37 TFLOP/s is what cuBLAS achieved on an SGEMM, so it is a floor on what the silicon can retire, not a ceiling. A kernel that beats cuBLAS would sit above this ridge; none here does."
+    "[KNOWN LIMIT] Not a description of any machine. A regression fixture."
   ]
 }

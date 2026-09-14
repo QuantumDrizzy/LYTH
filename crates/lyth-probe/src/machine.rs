@@ -22,8 +22,25 @@ pub struct Machine {
     pub peak_tflops_fp16: Option<f64>,
     #[serde(default)]
     pub ops: Vec<OpDecl>,
+    /// The ridge, precomputed in the file for a human to read.
+    ///
+    /// A derived number stored beside its own inputs drifts the moment one of them is edited
+    /// and the other is not. `check` recomputes it and refuses a file whose stated ridge
+    /// disagrees with its own peak and bandwidth.
+    #[serde(default)]
+    pub ridge_flop_per_byte: Option<RidgeDecl>,
     #[serde(default)]
     pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RidgeDecl {
+    #[serde(default)]
+    pub fp32: Option<f64>,
+    #[serde(default)]
+    pub fp16_tensor: Option<f64>,
+    #[serde(default)]
+    pub note: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -55,6 +72,10 @@ pub struct MachineMeasurement {
     /// provenance is another file is a copy, and a copy cannot be re-run.
     #[serde(default)]
     pub source: String,
+    /// Achieved FLOPS, for the same reason bandwidth is here: the ridge has two terms and
+    /// leaving one unchecked lets half of it drift.
+    #[serde(default)]
+    pub peak_tflops: Option<f64>,
     /// `locked` | `unlocked` | `base`. Bandwidth moves with clock state, so a measurement
     /// that does not say which one it ran under cannot be compared to one that does.
     #[serde(default)]
@@ -206,11 +227,66 @@ pub fn check(
         }
     }
 
+    // The ridge has two terms. Checking bandwidth and leaving peak unchecked lets the other
+    // half of every roofline claim drift unobserved.
+    if let (Some(claimed), Some(measured)) = (machine.peak_tflops, meas.peak_tflops) {
+        let rel = (measured - claimed).abs() / claimed.max(f64::MIN_POSITIVE);
+        if rel <= tol {
+            checked.push(format!(
+                "peak: claimed {claimed:.2} TFLOP/s, measured {measured:.2} TFLOP/s (rel {rel:.3} ≤ {tol})"
+            ));
+        } else {
+            mismatches.push(format!(
+                "peak_tflops: machine file claims {claimed:.2}, measured {measured:.2} (rel {rel:.3} > tol {tol})"
+            ));
+        }
+    }
+
+    // A precomputed ridge is a derived number living next to its own inputs. Recompute it.
+    if let Some(decl) = &machine.ridge_flop_per_byte {
+        if let (Some(stated), Some(derived)) = (decl.fp32, ridge_fp32(machine)) {
+            let rel = (stated - derived).abs() / derived.max(f64::MIN_POSITIVE);
+            // Tighter than `tol`: this is arithmetic on two numbers in the same file, not a
+            // measurement, so anything past rounding is a stale edit.
+            if rel <= 0.005 {
+                checked.push(format!(
+                    "ridge fp32: stated {stated:.2}, derived {derived:.2} flop/byte from this file"
+                ));
+            } else {
+                mismatches.push(format!(
+                    "ridge_flop_per_byte.fp32 states {stated:.2} but {peak:.2} TFLOP/s over {bw:.2} GB/s derives {derived:.2}
+  a stored ridge drifts when one of its inputs is edited and it is not;
+  recompute it, or remove it and let the tool derive it",
+                    peak = machine.peak_tflops.unwrap_or(0.0),
+                    bw = machine
+                        .levels
+                        .iter()
+                        .find(|l| l.name == "dram")
+                        .map(|l| l.bandwidth_gbs)
+                        .unwrap_or(0.0),
+                ));
+            }
+        }
+    }
+
     if mismatches.is_empty() {
         Ok(MachineVerdict::Pass { checked })
     } else {
         Ok(MachineVerdict::Fail { mismatches })
     }
+}
+
+/// FP32 ridge derived from this file: achieved TFLOP/s over achieved GB/s.
+///
+/// Both terms must come from the same source. Mixing a datasheet peak with a measured
+/// bandwidth (or the reverse) produces a number that describes no machine.
+pub fn ridge_fp32(machine: &Machine) -> Option<f64> {
+    let peak = machine.peak_tflops?;
+    let dram = machine.levels.iter().find(|l| l.name == "dram")?;
+    if dram.bandwidth_gbs <= 0.0 {
+        return None;
+    }
+    Some(peak * 1e3 / dram.bandwidth_gbs)
 }
 
 pub fn format_verdict(machine: &Machine, v: &MachineVerdict) -> String {
@@ -249,6 +325,7 @@ mod tests {
             schema: MEASUREMENT_SCHEMA.into(),
             machine_id: "sm_120".into(),
             source: "test".into(),
+            peak_tflops: None,
             clock_state: Some("unlocked".into()),
             known_limits: vec![],
             levels: vec![MeasuredLevel {
@@ -256,6 +333,72 @@ mod tests {
                 bandwidth_gbs: headline,
                 runs,
             }],
+        }
+    }
+
+    #[test]
+    fn the_stored_ridge_is_recomputed_from_the_file_that_stores_it() {
+        // The defect this catches is one that shipped: an input was corrected and the number
+        // derived from it was not. Both live in the same file, so nothing external can notice.
+        let machine: Machine = serde_json::from_str(
+            r#"{
+              "schema":"lyth-machine/0.1","id":"sm_120","peak_tflops":15.37,
+              "levels":[{"name":"dram","bandwidth_gbs":358.43}],
+              "ridge_flop_per_byte":{"fp32":37.7},
+              "ops":[]
+            }"#,
+        )
+        .unwrap();
+        let meas = meas_with_runs(358.43, vec![358.43]);
+        match check(&machine, &meas, 0.05).unwrap() {
+            MachineVerdict::Fail { mismatches } => {
+                assert!(mismatches[0].contains("42.88"), "{}", mismatches[0]);
+                assert!(mismatches[0].contains("drifts"), "{}", mismatches[0]);
+            }
+            other => panic!("a stale stored ridge must be refused, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_ridge_is_measured_over_measured_and_the_terms_are_not_mixed() {
+        let machine: Machine = serde_json::from_str(
+            r#"{
+              "schema":"lyth-machine/0.1","id":"sm_120","peak_tflops":15.37,
+              "levels":[{"name":"dram","bandwidth_gbs":358.43}],
+              "ops":[]
+            }"#,
+        )
+        .unwrap();
+        // Achieved SGEMM over achieved bandwidth.
+        assert!((ridge_fp32(&machine).unwrap() - 42.88).abs() < 0.05);
+
+        // The datasheet pair for this card is 23.7 TFLOP/s over 448 GB/s, a ridge of 52.9.
+        // It is a different, also-valid number and it is not what this file describes. What
+        // must never happen is one term from each source.
+        assert!((23.7e3_f64 / 448.0 - 52.90).abs() < 0.05);
+    }
+
+    #[test]
+    fn peak_tflops_is_checked_against_measurement_like_bandwidth_is() {
+        let machine: Machine = serde_json::from_str(
+            r#"{
+              "schema":"lyth-machine/0.1","id":"sm_120","peak_tflops":23.7,
+              "levels":[{"name":"dram","bandwidth_gbs":358.43}],
+              "ops":[]
+            }"#,
+        )
+        .unwrap();
+        // A datasheet peak against a measured one: 23.7 claimed, 15.37 achieved.
+        let mut meas = meas_with_runs(358.43, vec![358.43]);
+        meas.peak_tflops = Some(15.37);
+        match check(&machine, &meas, 0.05).unwrap() {
+            MachineVerdict::Fail { mismatches } => {
+                assert!(
+                    mismatches.iter().any(|m| m.contains("peak_tflops")),
+                    "{mismatches:?}"
+                );
+            }
+            other => panic!("a datasheet peak must not pass as a measured one: {other:?}"),
         }
     }
 

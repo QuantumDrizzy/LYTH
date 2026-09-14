@@ -2,11 +2,26 @@
   "schema": "lyth-suite/0.1",
   "name": "lyth-fase1-smoke",
   "steps": [
-    { "kind": "validate", "path": "fixtures/adopted/int4-gate-proj.json" },
-    { "kind": "validate", "path": "fixtures/adopted/lif-integrate.json" },
-    { "kind": "validate", "path": "fixtures/adopted/oracle-gate-0.5-fail.json" },
-    { "kind": "validate", "path": "fixtures/adopted/chiasma-k-integrate-intensity.json" },
-    { "kind": "validate", "path": "fixtures/adopted/peak-tflops-sm_120.json" },
+    {
+      "kind": "validate",
+      "path": "fixtures/adopted/int4-gate-proj.json"
+    },
+    {
+      "kind": "validate",
+      "path": "fixtures/adopted/lif-integrate.json"
+    },
+    {
+      "kind": "validate",
+      "path": "fixtures/adopted/oracle-gate-0.5-fail.json"
+    },
+    {
+      "kind": "validate",
+      "path": "fixtures/adopted/chiasma-k-integrate-intensity.json"
+    },
+    {
+      "kind": "validate",
+      "path": "fixtures/adopted/peak-tflops-sm_120.json"
+    },
     {
       "kind": "oracle-check",
       "path": "fixtures/oracle/case-gpu-gflops-2026-09-14.json",
@@ -21,6 +36,12 @@
     {
       "kind": "machine-check",
       "machine": "fixtures/machine/sm_120-lie.json",
+      "measurement": "fixtures/machine/meas-sm_120-2026-09-14.json",
+      "expect": "fail"
+    },
+    {
+      "kind": "machine-check",
+      "machine": "fixtures/machine/sm_120-stale-ridge.json",
       "measurement": "fixtures/machine/meas-sm_120-2026-09-14.json",
       "expect": "fail"
     },
