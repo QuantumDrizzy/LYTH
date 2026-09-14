@@ -1,0 +1,23 @@
+{
+  "schema": "lith-intensity/0.1",
+  "kernel": "gate_proj_int4_gemv",
+  "declared_intensity": 0.4444,
+  "unit": "flops_per_byte",
+  "machine_id": "sm_120",
+  "body": {
+    "moves": [
+      { "name": "W_int4", "level": "dram", "bytes": 0.5, "dir": "r" },
+      { "name": "x_fp16", "level": "dram", "bytes": 2.0, "dir": "r" },
+      { "name": "y_fp16_share", "level": "dram", "bytes": 2.0, "dir": "w" }
+    ],
+    "flops": 2.0,
+    "flop_note": "2 FLOPs (mul+add) per output column contribution; INT4 pack = 0.5B/weight."
+  },
+  "notes": [
+    "Honest twin of gemv-declare-lie.json. Same body, declaration matches.",
+    "Roofline: 0.44 << ridge 60 → MemoryBound — matches int4-gemv 83.9% DRAM story."
+  ],
+  "known_limits": [
+    "Ignores scale/zero-point table traffic and shared-memory staging — lower-bound DRAM model."
+  ]
+}

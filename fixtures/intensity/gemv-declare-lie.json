@@ -1,0 +1,21 @@
+{
+  "schema": "lith-intensity/0.1",
+  "kernel": "gemv_int4_lie_example",
+  "declared_intensity": 2.0,
+  "unit": "flops_per_byte",
+  "machine_id": "sm_120",
+  "body": {
+    "moves": [
+      { "name": "W_elem", "level": "dram", "bytes": 0.5, "dir": "r" },
+      { "name": "x_elem", "level": "dram", "bytes": 2.0, "dir": "r" },
+      { "name": "y_accum_share", "level": "dram", "bytes": 2.0, "dir": "w" }
+    ],
+    "flops": 2.0,
+    "flop_note": "Classic GEMV: 2 FLOPs per output element. Bytes are the honest traffic."
+  },
+  "notes": [
+    "Pedagogical FAIL: someone declares 2.0 flop/byte (confusing FLOPs with intensity) while body is 2/4.5 ≈ 0.444.",
+    "Error message must name the ridge — this is the product (ADR-0001)."
+  ],
+  "known_limits": []
+}

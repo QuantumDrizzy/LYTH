@@ -1,0 +1,27 @@
+{
+  "schema": "lith-intensity/0.1",
+  "kernel": "k_integrate",
+  "declared_intensity": 0.2069,
+  "unit": "flops_per_byte",
+  "machine_id": "sm_120",
+  "body": {
+    "moves": [
+      { "name": "ring_slot", "level": "dram", "bytes": 8.0, "dir": "rw" },
+      { "name": "v", "level": "dram", "bytes": 8.0, "dir": "rw" },
+      { "name": "adapt", "level": "dram", "bytes": 8.0, "dir": "rw" },
+      { "name": "refrac", "level": "dram", "bytes": 4.0, "dir": "rw" },
+      { "name": "is_stim", "level": "dram", "bytes": 1.0, "dir": "r" }
+    ],
+    "flops": 6.0,
+    "flop_note": "Per neuron, non-refractory path (amortized): adapt_decay mul; (v_rest-vm)*leak; +gain*acc; -w. Spike path / atomics excluded from FLOP count (control + atomics)."
+  },
+  "notes": [
+    "Accounting from rse-hpc-lab/exercises/08-connectome-lif/connectome_kernels.cuh k_integrate — per-neuron lower bound on DRAM traffic.",
+    "29 bytes / 6 FLOPs ⇒ 0.2069 flop/byte. Ridge sm_120 ≈ 60 ⇒ deeply memory-bound (correct for LIF integrate).",
+    "Spike queue atomics + hash stim are latency/control — not added to FLOP numerator on purpose."
+  ],
+  "known_limits": [
+    "Refractory path does fewer FLOPs and still touches the same traffic — intensity is an upper bound on arithmetic density.",
+    "peak_tflops on machine file is estimate until measured."
+  ]
+}

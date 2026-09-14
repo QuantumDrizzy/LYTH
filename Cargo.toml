@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = ["crates/lith-probe"]
+
+[workspace.package]
+edition = "2021"
+license = "UNLICENSED"
+authors = ["QuantumDrizzy"]

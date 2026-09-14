@@ -1,0 +1,46 @@
+{
+  "schema": "lith-evidence/0.1",
+  "claim": "k_integrate on fly CNS (N≈166700) is memory-bound at ~0.21 flop/byte vs sm_120 ridge ~60 — intensity type matches body traffic",
+  "value": 0.2069,
+  "unit": "flops_per_byte",
+  "baseline": {
+    "name": "naive declaration confusing FLOPs with intensity (2.0)",
+    "value": 2.0,
+    "unit": "flops_per_byte"
+  },
+  "n_reps": 1,
+  "arch": "sm_120",
+  "compile_flags": ["nvcc", "-arch=sm_120", "connectome_kernels.cuh"],
+  "clock_state": { "kind": "unknown" },
+  "cache_state": { "kind": "unknown" },
+  "known_limits": [
+    {
+      "id": "clock-unmeasured",
+      "text": "Intensity accounting is static from source; no clock policy.",
+      "status": "open"
+    },
+    {
+      "id": "cache-unmeasured",
+      "text": "Assumes cold DRAM lower bound; L2 hits would raise effective intensity.",
+      "status": "open"
+    },
+    {
+      "id": "peak-tflops-estimate",
+      "text": "Ridge uses peak_tflops=24 placeholder on machine.sm_120.",
+      "status": "open"
+    },
+    {
+      "id": "quant-cast-weights",
+      "text": "Sibling kernel k_propagate (int)weights — CHIASMA E15b plasticity bite. Outside this intensity claim.",
+      "status": "open"
+    }
+  ],
+  "verified": false,
+  "device": "NVIDIA GeForce RTX 5060 Ti",
+  "source_repo": "CHIASMA + rse-hpc-lab/exercises/08-connectome-lif",
+  "notes": [
+    "lith-probe intensity-check fixtures/intensity/k_integrate.json --machine fixtures/machine/sm_120.json",
+    "Timing twin: fixtures/adopted/lif-integrate.json (10.76 µs/step graph vs 52 µs plain).",
+    "Dogfood #1 for @gpu — parser still blocked; accounting JSON is the contract."
+  ]
+}

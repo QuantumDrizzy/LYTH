@@ -1,0 +1,23 @@
+{
+  "schema": "lith-kernel-ir/0.1",
+  "name": "tma_load_refused",
+  "machine_id": "sm_120",
+  "declared_intensity": 1.0,
+  "streams": [
+    {
+      "name": "W",
+      "from": "dram",
+      "to": "smem",
+      "bytes": 128,
+      "dir": "r",
+      "via": "tma",
+      "once": true
+    }
+  ],
+  "ops": [{ "at": "reg", "flops": 128.0, "note": "dummy" }],
+  "requires": [{ "op": "wgmma" }],
+  "notes": [
+    "Pedagogical FAIL: requires wgmma which is absent on this sm_120 consumer part."
+  ],
+  "known_limits": []
+}

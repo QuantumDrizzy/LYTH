@@ -1,0 +1,47 @@
+{
+  "schema": "lith-machine/0.1",
+  "id": "sm_120",
+  "peak_tflops": 15.03,
+  "peak_tflops_fp16": 44.08,
+  "levels": [
+    {
+      "name": "dram",
+      "capacity": "16GiB GDDR7",
+      "bandwidth_gbs": 398.39,
+      "latency_cyc": null
+    },
+    {
+      "name": "l2",
+      "capacity": "device-dependent",
+      "bandwidth_gbs": 0.0,
+      "latency_cyc": null
+    },
+    {
+      "name": "smem",
+      "capacity": "~100KiB/block class",
+      "bandwidth_gbs": 0.0,
+      "latency_cyc": null
+    },
+    {
+      "name": "reg",
+      "capacity": "warp register file",
+      "bandwidth_gbs": 0.0,
+      "latency_cyc": null
+    }
+  ],
+  "ops": [
+    { "name": "fma.f32", "status": "present", "at": "reg" },
+    { "name": "fma.f16", "status": "present", "at": "reg" },
+    { "name": "tcgen05", "status": "present", "at": "sm" },
+    { "name": "nvfp4", "status": "present", "at": "sm" },
+    { "name": "tma_2nd_gen", "status": "present", "at": "sm" },
+    { "name": "tma", "status": "present", "at": "sm" },
+    { "name": "wgmma", "status": "absent", "at": "sm" }
+  ],
+  "notes": [
+    "dram 398.39 GB/s: Unibit host_reference.py 2026-09-14. peak_probe same day saw 357 GB/s — unlocked clock variance ~10%.",
+    "peak_tflops 15.03 / peak_tflops_fp16 44.08: achieved cuBLAS GEMM 8192 via lith/tools/peak_probe.py (not datasheet).",
+    "ridge FP32 ≈ 15.03e3/398.39 ≈ 37.7 flop/byte. TC/FP16 ridge ≈ 110.6.",
+    "l2/smem/reg bandwidth 0 until a probe names them."
+  ]
+}

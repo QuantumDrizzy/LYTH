@@ -1,0 +1,26 @@
+{
+  "schema": "lith-poly/0.1",
+  "name": "fake_poly_same_bytes",
+  "machine_id": "sm_120",
+  "instances": [
+    {
+      "layout": "A",
+      "declared_intensity": 0.5,
+      "streams": [
+        { "name": "W", "from": "dram", "to": "reg", "bytes": 4.0, "dir": "r" }
+      ],
+      "ops": [{ "at": "reg", "flops": 2.0 }],
+      "requires": [{ "op": "fma.f16", "at": "reg" }]
+    },
+    {
+      "layout": "B",
+      "declared_intensity": 0.5,
+      "streams": [
+        { "name": "W", "from": "dram", "to": "reg", "bytes": 4.0, "dir": "r" }
+      ],
+      "ops": [{ "at": "reg", "flops": 2.0 }],
+      "requires": [{ "op": "fma.f16", "at": "reg" }]
+    }
+  ],
+  "notes": ["Pedagogical FAIL: two layouts, identical bytes — poly is theater."]
+}

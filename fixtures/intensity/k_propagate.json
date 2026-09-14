@@ -1,0 +1,24 @@
+{
+  "schema": "lith-intensity/0.1",
+  "kernel": "k_propagate_edge",
+  "declared_intensity": 0.125,
+  "unit": "flops_per_byte",
+  "machine_id": "sm_120",
+  "body": {
+    "moves": [
+      { "name": "col_idx", "level": "dram", "bytes": 4.0, "dir": "r" },
+      { "name": "weight_f32", "level": "dram", "bytes": 4.0, "dir": "r" },
+      { "name": "ring_atomic_add", "level": "dram", "bytes": 4.0, "dir": "rw" }
+    ],
+    "flops": 1.5,
+    "flop_note": "Cast weight to int (not a FLOP) + scale/sign into ring. Counted ~1.5 FP ops per edge as honest upper bound; real path is int-dominated."
+  },
+  "notes": [
+    "CHIASMA / exercise 08 k_propagate — memory-first: CSR edge walk.",
+    "CRITICAL: kernel historically read (int)weights[e] — plasticity in the float fractional part was invisible. That is a correctness KNOWN_LIMIT, not an intensity miss."
+  ],
+  "known_limits": [
+    "quant-cast-weights: (int)weights swallows fractional plasticity (CHIASMA RESULTS-E15b). Float shadow + stochastic round is the fix path.",
+    "Delay-from-hash is modelling choice with zero DRAM (ADR-002) — not in moves."
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "schema": "lith-machine-measurement/0.1",
+  "machine_id": "sm_120",
+  "source": "Unibit/docs/host-reference.json host.gpu_read_gbs 2026-09-14",
+  "levels": [
+    {
+      "name": "dram",
+      "bandwidth_gbs": 398.38843599246957
+    }
+  ]
+}

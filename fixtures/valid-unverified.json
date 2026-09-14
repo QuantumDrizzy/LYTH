@@ -1,0 +1,34 @@
+{
+  "schema": "lith-evidence/0.1",
+  "claim": "k_integrate median ≤ 12 µs/step on sm_120 (N=166700, CUDA graph)",
+  "value": 10.76,
+  "unit": "us/step",
+  "baseline": {
+    "name": "same work, one launch per kernel (no graph)",
+    "value": 52.08,
+    "unit": "us/step"
+  },
+  "n_reps": 12,
+  "arch": "sm_120",
+  "compile_flags": ["-O3", "-arch=sm_120"],
+  "clock_state": { "kind": "unknown" },
+  "cache_state": { "kind": "unknown" },
+  "known_limits": [
+    {
+      "id": "clock-unmeasured",
+      "text": "Application clocks not locked for this historical rse-hpc-lab row.",
+      "status": "open"
+    },
+    {
+      "id": "cache-unmeasured",
+      "text": "L2 flush policy not recorded in the original evidence.json.",
+      "status": "open"
+    }
+  ],
+  "verified": false,
+  "device": "NVIDIA GeForce RTX 5060 Ti",
+  "source_repo": "rse-hpc-lab/exercises/08-connectome-lif",
+  "notes": [
+    "Numbers from exercises/08-connectome-lif/evidence.json integrate_only / plain medians — adopted as a lith example, not re-measured."
+  ]
+}

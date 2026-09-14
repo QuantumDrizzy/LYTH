@@ -1,0 +1,26 @@
+{
+  "schema": "lith-oracle-case/0.1",
+  "metric_oracle": "flops_per_instruction",
+  "metric_silicon": "pct_of_measured_dram_bandwidth",
+  "metric_note": "Higher is better on both axes for this case. Oracle values from Unibit docs/kernel-cost.md. Silicon incomplete → expect INCONCLUSIVE.",
+  "kernels": [
+    {
+      "id": "mps_chain",
+      "oracle_score": 69.57,
+      "silicon_score": null,
+      "silicon_note": "PENDING — MPS/zipper on sm_120, %DRAM or ns/op with stated bytes"
+    },
+    {
+      "id": "llm_matvec",
+      "oracle_score": 13.60,
+      "silicon_score": 83.9,
+      "silicon_note": "int4-gemv gate_proj INT4, % of 384.95 GB/s DRAM, clocks free (README)"
+    },
+    {
+      "id": "ising_energy",
+      "oracle_score": 10.48,
+      "silicon_score": null,
+      "silicon_note": "PENDING — Ising/QUBO energy kernel on same device, comparable metric"
+    }
+  ]
+}

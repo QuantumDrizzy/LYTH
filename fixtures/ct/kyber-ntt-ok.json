@@ -1,0 +1,35 @@
+{
+  "schema": "lith-ct/0.1",
+  "name": "kyber_butterfly_public_idx",
+  "secrets": ["coeff_region"],
+  "values": [
+    { "id": "coeff_region", "taint": "secret" },
+    { "id": "zeta", "taint": "public" },
+    { "id": "i", "taint": "public" },
+    { "id": "j", "taint": "public" }
+  ],
+  "ops": [
+    {
+      "kind": "load",
+      "addr": "i",
+      "into": "a",
+      "payload": "secret",
+      "note": "public NTT index into secret coefficient array"
+    },
+    {
+      "kind": "load",
+      "addr": "j",
+      "into": "b",
+      "payload": "secret"
+    },
+    { "kind": "assign", "dst": "t", "args": ["b", "zeta"], "note": "montgomery mul" },
+    { "kind": "assign", "dst": "a2", "args": ["a", "t"] },
+    { "kind": "assign", "dst": "b2", "args": ["a", "t"] },
+    { "kind": "store", "addr": "i", "from": "a2" },
+    { "kind": "store", "addr": "j", "from": "b2" }
+  ],
+  "notes": [
+    "Fase 4 PQC NTT scaffold: secret payloads, public indices — PASS.",
+    "coeff_region is documentary; payload:secret on loads is the operational taint."
+  ]
+}

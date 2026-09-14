@@ -1,0 +1,14 @@
+{
+  "schema": "lith-machine/0.1",
+  "id": "sm_120",
+  "peak_tflops": 24.0,
+  "levels": [
+    {
+      "name": "dram",
+      "capacity": "16GiB GDDR7",
+      "bandwidth_gbs": 500.0
+    }
+  ],
+  "ops": [],
+  "notes": ["Intentional lie fixture — 500 GB/s vs measured ~398."]
+}

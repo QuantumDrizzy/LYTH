@@ -1,0 +1,44 @@
+{
+  "schema": "lith-evidence/0.1",
+  "claim": "k_integrate (N=166700) median ≤ 11 µs/step on sm_120 with CUDA-graph replay",
+  "value": 10.76,
+  "unit": "us/step",
+  "baseline": {
+    "name": "same integrate work, one kernel launch per step (no graph)",
+    "value": 52.08,
+    "unit": "us/step"
+  },
+  "n_reps": 12,
+  "arch": "sm_120",
+  "compile_flags": [],
+  "clock_state": { "kind": "unknown" },
+  "cache_state": { "kind": "unknown" },
+  "known_limits": [
+    {
+      "id": "clock-unmeasured",
+      "text": "rse-hpc-lab/08 evidence did not record boost lock.",
+      "status": "open"
+    },
+    {
+      "id": "cache-unmeasured",
+      "text": "L2 vs DRAM domain varies with fly batch; flush policy not in bundle.",
+      "status": "open"
+    },
+    {
+      "id": "compile-flags-empty",
+      "text": "Original evidence omitted nvcc flags — empty array is honest, not verified.",
+      "status": "open"
+    },
+    {
+      "id": "quant-cast-weights",
+      "text": "CHIASMA/k_propagate (int)weights quantisation swallowed plasticity — related LIF stack bite.",
+      "status": "open"
+    }
+  ],
+  "verified": false,
+  "device": "NVIDIA GeForce RTX 5060 Ti",
+  "source_repo": "rse-hpc-lab/exercises/08-connectome-lif",
+  "notes": [
+    "Values from integrate_only / plain samples in evidence.json. CHIASMA dogfood candidate for @gpu."
+  ]
+}

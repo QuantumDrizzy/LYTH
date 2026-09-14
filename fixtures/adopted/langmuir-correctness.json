@@ -1,0 +1,39 @@
+{
+  "schema": "lith-evidence/0.1",
+  "claim": "CUDA Langmuir 512² grid matches host reference (max abs err ≤ 1e-6); C==Kd diagonal is 0.5",
+  "value": 1.1920929e-07,
+  "unit": "max_abs_err",
+  "baseline": {
+    "name": "host CPU reference (same closed form)",
+    "value": 0.0,
+    "unit": "max_abs_err"
+  },
+  "n_reps": 1,
+  "arch": "sm_120",
+  "compile_flags": [],
+  "clock_state": { "kind": "unknown" },
+  "cache_state": { "kind": "unknown" },
+  "known_limits": [
+    {
+      "id": "clock-unmeasured",
+      "text": "Correctness probe — timing not the claim; clock unset.",
+      "status": "open"
+    },
+    {
+      "id": "cache-unmeasured",
+      "text": "No cache policy; claim is bit-agreement not bandwidth.",
+      "status": "open"
+    },
+    {
+      "id": "not-a-roofline",
+      "text": "kernel_ms=0.136 reported in foreign bundle but deliberately not the claim here.",
+      "status": "closed"
+    }
+  ],
+  "verified": false,
+  "device": "NVIDIA GeForce RTX 5060 Ti",
+  "source_repo": "cannabinoid-compute-lab/experiments/11-cuda-langmuir-grid",
+  "notes": [
+    "Adopted from neuromod-compute-evidence/0.1. Baseline is the host reference the CUDA path must match."
+  ]
+}

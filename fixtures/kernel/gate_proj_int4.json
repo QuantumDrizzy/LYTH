@@ -1,0 +1,26 @@
+{
+  "schema": "lith-kernel-ir/0.1",
+  "name": "gate_proj_int4",
+  "machine_id": "sm_120",
+  "declared_intensity": 0.4444,
+  "streams": [
+    { "name": "W_int4", "from": "dram", "to": "reg", "bytes": 0.5, "dir": "r", "once": true },
+    { "name": "x_fp16", "from": "dram", "to": "reg", "bytes": 2.0, "dir": "r", "once": true },
+    { "name": "y_fp16", "from": "reg", "to": "dram", "bytes": 2.0, "dir": "w", "once": true }
+  ],
+  "ops": [
+    { "at": "reg", "flops": 2.0, "note": "mul+add per output contribution after unpack4" }
+  ],
+  "requires": [
+    { "op": "fma.f16", "at": "reg" },
+    { "op": "nvfp4", "at": "sm" }
+  ],
+  "notes": [
+    "int4-gemv gate_proj — MemoryBound vs ridge 37.7; silicon hit 83.9% DRAM.",
+    "nvfp4 require is aspirational capability pin for Blackwell path; INT4 unpack today is hand PTX."
+  ],
+  "known_limits": [
+    "Scale/ZP table + smem staging omitted from streams (lower-bound DRAM).",
+    "requires.nvfp4: present on sm_120 machine file; kernel may still use legacy INT4 path."
+  ]
+}

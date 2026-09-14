@@ -1,0 +1,35 @@
+{
+  "schema": "lith-evidence/0.1",
+  "claim": "Achieved SGEMM peak on RTX 5060 Ti sm_120 is 15.03 TFLOP/s (cuBLAS 8192); HGEMM 44.08 — not datasheet",
+  "value": 15.03,
+  "unit": "TFLOP/s",
+  "baseline": {
+    "name": "placeholder peak_tflops=24 used before live probe",
+    "value": 24.0,
+    "unit": "TFLOP/s"
+  },
+  "n_reps": 30,
+  "arch": "sm_120",
+  "compile_flags": ["python", "lith/tools/peak_probe.py", "torch.cuda", "cublas"],
+  "clock_state": { "kind": "unknown" },
+  "cache_state": { "kind": "warm", "detail": "cuBLAS warmup 10 iters before timed 30" },
+  "known_limits": [
+    {
+      "id": "clock-unmeasured",
+      "text": "Application clocks not locked; BW twin run saw 357 vs 398 GB/s.",
+      "status": "open"
+    },
+    {
+      "id": "cublas-not-hand-kernel",
+      "text": "Peak is library GEMM, not a lith-authored kernel.",
+      "status": "closed"
+    }
+  ],
+  "verified": false,
+  "device": "NVIDIA GeForce RTX 5060 Ti",
+  "source_repo": "lith/tools/peak_probe.py",
+  "notes": [
+    "Raw: fixtures/machine/meas-peak-sm_120.json",
+    "machine.sm_120.peak_tflops updated to 15.03; ridge ≈ 37.7 flop/byte"
+  ]
+}

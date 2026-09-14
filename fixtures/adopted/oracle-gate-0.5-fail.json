@@ -1,0 +1,51 @@
+{
+  "schema": "lith-evidence/0.1",
+  "claim": "Unibit FLOPs/instruction rank-order (mps>llm>ising) does NOT match live silicon GPU GFLOP/s rank-order (llm>ising>mps) on RTX 5060 Ti sm_120",
+  "value": "FAIL",
+  "unit": "oracle_rank_order_vs_silicon",
+  "baseline": {
+    "name": "oracle density order",
+    "value": "mps_chain(69.57) > llm_matvec(13.60) > ising_energy(10.48)",
+    "unit": "flops_per_instruction_desc"
+  },
+  "n_reps": 1,
+  "arch": "sm_120",
+  "compile_flags": ["python", "Unibit/tools/host_reference.py", "torch+cuda"],
+  "clock_state": {
+    "kind": "unknown"
+  },
+  "cache_state": {
+    "kind": "unknown"
+  },
+  "known_limits": [
+    {
+      "id": "clock-unmeasured",
+      "text": "Boost/locked not pinned for host_reference.py run.",
+      "status": "open"
+    },
+    {
+      "id": "cache-unmeasured",
+      "text": "Cache flush/warm not pinned for host_reference.py run.",
+      "status": "open"
+    },
+    {
+      "id": "mps-gpu-launch-bound",
+      "text": "MPS GPU GFLOP/s ~0.0007 is launch-latency dominated (serial einsum); contaminated as throughput proxy. CPU side still diverges (ising>llm>mps vs mps>llm>ising).",
+      "status": "open"
+    },
+    {
+      "id": "metric-family",
+      "text": "Silicon metric is GFLOP/s wall throughput, not %DRAM roofline. Density≠throughput is the point of the gate.",
+      "status": "closed"
+    }
+  ],
+  "verified": false,
+  "device": "NVIDIA GeForce RTX 5060 Ti sm_120 36 SMs",
+  "source_repo": "Unibit + lith",
+  "notes": [
+    "lith-probe oracle-check fixtures/oracle/case-gpu-gflops-2026-09-14.json → exit 1 FAIL",
+    "CPU twin fixtures/oracle/case-cpu-gflops-2026-09-14.json also FAIL (ising>llm>mps)",
+    "ADR-0001 falsifier (2): drop @oracle from v1 design path; keep Unibit as museum/density instrument",
+    "Raw: Unibit/docs/host-reference.json"
+  ]
+}

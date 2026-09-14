@@ -1,0 +1,20 @@
+{
+  "schema": "lith-machine-measurement/0.1",
+  "machine_id": "sm_120",
+  "source": "lith/tools/peak_probe.py torch 2.12.0.dev20260408+cu128",
+  "levels": [
+    {
+      "name": "dram",
+      "bandwidth_gbs": 357.40642452065583
+    }
+  ],
+  "peak_tflops_fp32": 15.027377388810164,
+  "peak_tflops_fp16": 44.08221862849626,
+  "peak_tflops": 15.027377388810164,
+  "arch": "sm_120",
+  "device": "NVIDIA GeForce RTX 5060 Ti",
+  "notes": [
+    "peak_tflops is achieved cuBLAS GEMM, not marketing datasheet.",
+    "Use peak_tflops_fp32 for ridge unless the kernel is tensor-core dominant."
+  ]
+}

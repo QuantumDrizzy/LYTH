@@ -1,0 +1,27 @@
+{
+  "schema": "lith-kernel-ir/0.1",
+  "name": "k_propagate",
+  "machine_id": "sm_120",
+  "declared_intensity": 0.125,
+  "streams": [
+    { "name": "col_idx", "from": "dram", "to": "reg", "bytes": 4, "dir": "r", "once": true },
+    { "name": "weight_f32", "from": "dram", "to": "reg", "bytes": 4, "dir": "r", "once": true },
+    { "name": "ring_atomic", "from": "dram", "to": "reg", "bytes": 4, "dir": "rw", "once": true }
+  ],
+  "ops": [
+    {
+      "at": "reg",
+      "flops": 1.5,
+      "note": "upper bound; real path is int cast + atomicAdd. hash delay is modelling, zero DRAM."
+    }
+  ],
+  "requires": [{ "op": "fma.f32", "at": "reg" }],
+  "notes": [
+    "Per-edge accounting from connectome_kernels.cuh k_propagate.",
+    "row_offsets[src]/[src+1] amortized outside per-edge intensity."
+  ],
+  "known_limits": [
+    "quant-cast-weights: (int)weights[e] swallows float fractional plasticity (CHIASMA E15b).",
+    "Delay-from-hash: modelling choice, not measured axon delay."
+  ]
+}

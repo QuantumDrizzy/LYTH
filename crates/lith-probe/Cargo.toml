@@ -1,0 +1,18 @@
+[package]
+name = "lith-probe"
+version = "0.1.0"
+edition = "2021"
+description = "Evidence CLI for LITH — Fase 0, no language. A claim without a baseline does not ship."
+license = "UNLICENSED"
+
+[[bin]]
+name = "lith-probe"
+path = "src/main.rs"
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"

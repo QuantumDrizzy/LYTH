@@ -1,0 +1,86 @@
+{
+  "schema": "lith-suite/0.1",
+  "name": "lith-fase1-smoke",
+  "steps": [
+    { "kind": "validate", "path": "fixtures/adopted/int4-gate-proj.json" },
+    { "kind": "validate", "path": "fixtures/adopted/lif-integrate.json" },
+    { "kind": "validate", "path": "fixtures/adopted/oracle-gate-0.5-fail.json" },
+    { "kind": "validate", "path": "fixtures/adopted/chiasma-k-integrate-intensity.json" },
+    { "kind": "validate", "path": "fixtures/adopted/peak-tflops-sm_120.json" },
+    {
+      "kind": "oracle-check",
+      "path": "fixtures/oracle/case-gpu-gflops-2026-09-14.json",
+      "expect": "fail"
+    },
+    {
+      "kind": "machine-check",
+      "machine": "fixtures/machine/sm_120.json",
+      "measurement": "fixtures/machine/meas-sm_120-2026-09-14.json",
+      "expect": "pass"
+    },
+    {
+      "kind": "machine-check",
+      "machine": "fixtures/machine/sm_120-lie.json",
+      "measurement": "fixtures/machine/meas-sm_120-2026-09-14.json",
+      "expect": "fail"
+    },
+    {
+      "kind": "intensity-check",
+      "path": "fixtures/intensity/k_integrate.json",
+      "machine": "fixtures/machine/sm_120.json",
+      "expect": "pass"
+    },
+    {
+      "kind": "intensity-check",
+      "path": "fixtures/intensity/k_propagate.json",
+      "machine": "fixtures/machine/sm_120.json",
+      "expect": "pass"
+    },
+    {
+      "kind": "intensity-check",
+      "path": "fixtures/intensity/gate-proj-honest.json",
+      "machine": "fixtures/machine/sm_120.json",
+      "expect": "pass"
+    },
+    {
+      "kind": "intensity-check",
+      "path": "fixtures/intensity/gemv-declare-lie.json",
+      "machine": "fixtures/machine/sm_120.json",
+      "expect": "fail"
+    },
+    {
+      "kind": "kernel-check",
+      "path": "fixtures/kernel/k_integrate.json",
+      "machine": "fixtures/machine/sm_120.json",
+      "expect": "pass"
+    },
+    {
+      "kind": "kernel-check",
+      "path": "fixtures/kernel/k_propagate.json",
+      "machine": "fixtures/machine/sm_120.json",
+      "expect": "pass"
+    },
+    {
+      "kind": "kernel-check",
+      "path": "fixtures/kernel/gate_proj_int4.json",
+      "machine": "fixtures/machine/sm_120.json",
+      "expect": "pass"
+    },
+    {
+      "kind": "kernel-check",
+      "path": "fixtures/kernel/wgmma-refuse.json",
+      "machine": "fixtures/machine/sm_120.json",
+      "expect": "fail"
+    },
+    {
+      "kind": "ct-check",
+      "path": "fixtures/ct/kyber-ntt-ok.json",
+      "expect": "pass"
+    },
+    {
+      "kind": "ct-check",
+      "path": "fixtures/ct/secret-gather-fail.json",
+      "expect": "fail"
+    }
+  ]
+}

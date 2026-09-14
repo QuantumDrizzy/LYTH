@@ -1,0 +1,66 @@
+{
+  "schema": "lith-poly/0.1",
+  "name": "gate_proj_gemv",
+  "machine_id": "sm_120",
+  "instances": [
+    {
+      "layout": "int4_g128",
+      "declared_intensity": 0.4429,
+      "streams": [
+        { "name": "W_int4", "from": "dram", "to": "reg", "bytes": 0.5, "dir": "r" },
+        { "name": "scale_fp16_g128", "from": "dram", "to": "reg", "bytes": 0.015625, "dir": "r" },
+        { "name": "x_fp16", "from": "dram", "to": "reg", "bytes": 2.0, "dir": "r" },
+        { "name": "y_fp16", "from": "reg", "to": "dram", "bytes": 2.0, "dir": "w" }
+      ],
+      "ops": [
+        { "at": "reg", "flops": 2.0, "note": "MAC after dequant" }
+      ],
+      "requires": [{ "op": "fma.f16", "at": "reg" }],
+      "silicon": {
+        "kernel_us": 96.384,
+        "gbs": 363.22,
+        "bytes": 35008512,
+        "pct_dram": 83.9,
+        "source": "int4-gemv/bench/kernel.json gate_proj int4"
+      },
+      "known_limits": [
+        "Per-elem model; full matrix bytes in silicon.bytes for the shape."
+      ]
+    },
+    {
+      "layout": "nf4_b64",
+      "declared_intensity": 0.4384,
+      "streams": [
+        { "name": "W_nf4", "from": "dram", "to": "reg", "bytes": 0.5, "dir": "r" },
+        { "name": "scale_fp32_b64", "from": "dram", "to": "reg", "bytes": 0.0625, "dir": "r" },
+        { "name": "x_fp16", "from": "dram", "to": "reg", "bytes": 2.0, "dir": "r" },
+        { "name": "y_fp16", "from": "reg", "to": "dram", "bytes": 2.0, "dir": "w" }
+      ],
+      "ops": [
+        { "at": "reg", "flops": 2.0, "note": "MAC; LUT via shfl in reg — zero extra DRAM" }
+      ],
+      "requires": [{ "op": "fma.f16", "at": "reg" }],
+      "silicon": {
+        "kernel_us": 122.080,
+        "gbs": 312.84,
+        "bytes": 38191104,
+        "source": "int4-gemv/bench/kernel.json gate_proj nf4"
+      },
+      "known_limits": [
+        "NF4 LUT lives in register file (shfl) — not in streams on purpose."
+      ]
+    }
+  ],
+  "claim": {
+    "baseline_layout": "int4_g128",
+    "compare_layout": "nf4_b64",
+    "expected_min": 0.19,
+    "expected_max": 0.31,
+    "note": "int4-gemv README: holding kernel constant, format alone costs 19–31%. gate_proj ≈ 27.3%."
+  },
+  "notes": [
+    "ADR-0001 polymorphism axis: layout × machine, cost re-checked per instance.",
+    "Scale traffic: INT4 group128 FP16 = 16b/128 = 0.125 bit/w = 0.015625 B/w; NF4 block64 FP32 absmax = 32b/64 = 0.5 bit/w = 0.0625 B/w.",
+    "Identical MAC flops; more scale bytes on NF4 ⇒ slightly lower intensity — needle moves."
+  ]
+}

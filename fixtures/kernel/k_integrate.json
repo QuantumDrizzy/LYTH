@@ -1,0 +1,29 @@
+{
+  "schema": "lith-kernel-ir/0.1",
+  "name": "k_integrate",
+  "machine_id": "sm_120",
+  "declared_intensity": 0.2069,
+  "streams": [
+    { "name": "ring_slot", "from": "dram", "to": "reg", "bytes": 8, "dir": "rw", "once": true },
+    { "name": "v", "from": "dram", "to": "reg", "bytes": 8, "dir": "rw", "once": true },
+    { "name": "adapt", "from": "dram", "to": "reg", "bytes": 8, "dir": "rw", "once": true },
+    { "name": "refrac", "from": "dram", "to": "reg", "bytes": 4, "dir": "rw", "once": true },
+    { "name": "is_stim", "from": "dram", "to": "reg", "bytes": 1, "dir": "r", "once": true }
+  ],
+  "ops": [
+    {
+      "at": "reg",
+      "flops": 6.0,
+      "note": "non-refrac path: adapt_decay; (v_rest-vm)*leak; +gain*acc; -w"
+    }
+  ],
+  "requires": [{ "op": "fma.f32", "at": "reg" }],
+  "notes": [
+    "Lowered from CHIASMA/rse-hpc-lab connectome_kernels.cuh k_integrate.",
+    "Future .lith frontend must emit this shape — not CUDA AST."
+  ],
+  "known_limits": [
+    "Spike atomics / hash stim excluded from FLOP numerator.",
+    "Cold DRAM lower bound."
+  ]
+}

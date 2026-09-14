@@ -1,0 +1,45 @@
+{
+  "schema": "lith-evidence/0.1",
+  "claim": "gate_proj INT4 fused GEMV reaches 83.9% of measured DRAM (384.95 GB/s) on sm_120",
+  "value": 83.9,
+  "unit": "%_of_dram_roofline",
+  "baseline": {
+    "name": "bitsandbytes NF4 same shape (format-matched)",
+    "value": 66.1,
+    "unit": "%_of_dram_roofline"
+  },
+  "n_reps": 1,
+  "arch": "sm_120",
+  "compile_flags": ["nvcc", "-arch=sm_120"],
+  "clock_state": {
+    "kind": "measured",
+    "detail": "Clocks free: 96.9 µs / 83.9% BW. Locked clocks ~14% slower (ncu lesson) — see known_limits."
+  },
+  "cache_state": {
+    "kind": "unknown"
+  },
+  "known_limits": [
+    {
+      "id": "cache-unmeasured",
+      "text": "L2 flush / warm policy not pinned in the published README row.",
+      "status": "open"
+    },
+    {
+      "id": "n-reps-from-readme",
+      "text": "n_reps=1 here: figure adopted from int4-gemv README headline, not re-sampled by lith-probe.",
+      "status": "open"
+    },
+    {
+      "id": "clock-sensitivity-14pct",
+      "text": "Boost vs locked changes the same kernel by ~14% time / BW fraction — always state clock policy.",
+      "status": "closed"
+    }
+  ],
+  "verified": false,
+  "device": "NVIDIA GeForce RTX 5060 Ti",
+  "source_repo": "int4-gemv",
+  "notes": [
+    "Birthday adopt 2026-09-14. Token-level 6% was wrong attribution; GEMV is not where the 15× lives.",
+    "Format alone (INT4 vs NF4) is 19–31% — layout polymorphism case for Fase 3."
+  ]
+}
