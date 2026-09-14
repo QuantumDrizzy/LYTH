@@ -47,3 +47,6 @@ cargo run -p lyth-probe -- intensity-check fixtures/intensity/k_integrate.json  
 ## Docs
 
 ADR-0001 … ADR-0009 under `docs/`.
+
+`docs/DOGFOOD.md` is the running record for the ADR-0001 parser gate: one row per kernel
+put through the tool, and for each one whether a Rust macro would have done the same job.

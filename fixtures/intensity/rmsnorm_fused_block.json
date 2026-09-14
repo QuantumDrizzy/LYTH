@@ -1,0 +1,43 @@
+{
+  "schema": "lyth-intensity/0.1",
+  "kernel": "rmsnorm_fused_block",
+  "declared_intensity": 0.4999,
+  "unit": "flops_per_byte",
+  "machine_id": "sm_120",
+  "elements": 16777216,
+  "body": {
+    "moves": [
+      {
+        "name": "x",
+        "level": "dram",
+        "bytes": 4.0,
+        "dir": "r"
+      },
+      {
+        "name": "y",
+        "level": "dram",
+        "bytes": 4.0,
+        "dir": "w"
+      },
+      {
+        "name": "gamma_amortised",
+        "level": "dram",
+        "bytes": 0.00195,
+        "dir": "r"
+      }
+    ],
+    "flops": 4.0,
+    "flop_note": "Per element of x. Pass 1: v*v then accumulate (2). Pass 2: xv*gv then *rms (2). The 256-wide block reduction and one rsqrtf per row are 0.03 flop/element and are not counted."
+  },
+  "notes": [
+    "rse-hpc-lab/exercises/01-fused-rmsnorm rmsnorm_fused_block, DRAM regime N=2048 D=8192.",
+    "THE JUDGEMENT CALL THIS CASE EXISTS TO SETTLE: the kernel reads x twice — once for the sum of squares, once to normalise. The accounting declares ONE dram read, claiming the second is served by L2. gamma is D=8192 floats read by every block; at dram it is 32 KiB once, hence 0.00195 bytes/element.",
+    "MEASURED 2026-09-14, ncu 2025.3.1, RTX 5060 Ti, grid 2048 x block 256: lts__t_bytes.sum = 214,566,432 B = 12.79 B/element, which is x read TWICE plus y written once. The L2 claim is confirmed: the second pass never reaches the memory controller.",
+    "THE FINDING. Same launch, dram__bytes.sum = 118,885,888 B = 7.086 B/element, 0.886x the counted 8. Exercise 01 reports 385.71 GB/s for this kernel by dividing its 128 MiB analytic working set by 348.06 us. Measured traffic gives 341.57 GB/s. The headline is overstated by 12.9% because it counts bytes instead of measuring them -- and 385.71 is 107.6% of this machine's own measured reference bandwidth (358.43 GB/s), which is the tell that should have stopped it."
+  ],
+  "known_limits": [
+    "[KNOWN LIMIT] gamma at L2 is not modelled. Every one of the 2048 blocks reads all 32 KiB of it, which would be 4 B/element of L2 traffic, yet total L2 is 12.79 B/element — so it is largely served below L2. This accounting makes no claim about L1 or constant cache.",
+    "[KNOWN LIMIT] One launch inside a repeated timing loop over the same 128 MiB buffers. Cache carry-over between iterations is part of what is measured here; a cold single pass is not.",
+    "[KNOWN LIMIT] `385.71 is above peak` is NOT established. The 358.43 GB/s reference is itself a lower bound (a torch.sum reduction, clocks unlocked) and the card's spec figure is 448 GB/s, so 385.71 is not physically impossible. What is established is narrower and enough: the kernel moves 12.9% fewer bytes than the headline divides by."
+  ]
+}

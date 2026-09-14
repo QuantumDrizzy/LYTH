@@ -97,6 +97,18 @@ now resolves the separator by position and by unit rather than assuming a conven
 real report is checked in as a regression test. `--csv` implies `--print-units base`, so a
 byte metric is an exact count and a lone separator in it must be grouping.
 
+## Second kernel: the check pointed back at the lab
+
+`rmsnorm_fused_block`, exercise 01, N=2048 × D=8192. The kernel reads `x` twice; the
+accounting declared one DRAM read on the claim that L2 serves the second. Measurement agrees
+at L2 (12.79 B/element ≈ x twice + y once) and comes in **11.4% under** the count at DRAM.
+
+That gap is the finding. Exercise 01 publishes **385.71 GB/s** by dividing its analytic 128 MiB
+working set by 348.06 µs; measured traffic gives **341.57 GB/s**. Overstated by 12.9%, and
+385.71 is **107.6% of this machine's own measured reference bandwidth**.
+
+Full record, including what is and is not established, in `docs/DOGFOOD.md`.
+
 ## What would falsify this
 
 - If `--ncu` reports `CONFIRMED` on an accounting that is demonstrably wrong about a kernel,

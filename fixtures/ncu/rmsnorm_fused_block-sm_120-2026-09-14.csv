@@ -1,0 +1,4 @@
+"ID","Process ID","Process Name","Host Name","Kernel Name","Context","Stream","Block Size","Grid Size","Device","CC","Section Name","Metric Name","Metric Unit","Metric Value"
+"0","2620","rmsnorm.exe","127.0.0.1","rmsnorm_fused_block(const float *, const float *, float *, int, int, float)","1","7","(256, 1, 1)","(2048, 1, 1)","0","12.0","Command line profiler metrics","dram__bytes.sum","byte","118.885.888"
+"0","2620","rmsnorm.exe","127.0.0.1","rmsnorm_fused_block(const float *, const float *, float *, int, int, float)","1","7","(256, 1, 1)","(2048, 1, 1)","0","12.0","Command line profiler metrics","launch__grid_size","","2.048"
+"0","2620","rmsnorm.exe","127.0.0.1","rmsnorm_fused_block(const float *, const float *, float *, int, int, float)","1","7","(256, 1, 1)","(2048, 1, 1)","0","12.0","Command line profiler metrics","lts__t_bytes.sum","byte","214.566.432"
