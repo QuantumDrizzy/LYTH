@@ -5,12 +5,12 @@
   "levels": [
     {
       "name": "dram",
-      "bandwidth_gbs": 357.40642452065583
+      "bandwidth_gbs": 354.3790106153365
     }
   ],
-  "peak_tflops_fp32": 15.027377388810164,
-  "peak_tflops_fp16": 44.08221862849626,
-  "peak_tflops": 15.027377388810164,
+  "peak_tflops_fp32": 14.882119534870178,
+  "peak_tflops_fp16": 44.24505051210574,
+  "peak_tflops": 14.882119534870178,
   "arch": "sm_120",
   "device": "NVIDIA GeForce RTX 5060 Ti",
   "notes": [

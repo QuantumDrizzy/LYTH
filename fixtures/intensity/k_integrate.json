@@ -17,11 +17,11 @@
   },
   "notes": [
     "Accounting from rse-hpc-lab/exercises/08-connectome-lif/connectome_kernels.cuh k_integrate — per-neuron lower bound on DRAM traffic.",
-    "29 bytes / 6 FLOPs ⇒ 0.2069 flop/byte. Ridge sm_120 ≈ 60 ⇒ deeply memory-bound (correct for LIF integrate).",
+    "29 bytes / 6 FLOPs ⇒ 0.2069 flop/byte. Ridge sm_120 = 42.9 flop/byte (FP32 class, measured 2026-09-14) ⇒ deeply memory-bound (correct for LIF integrate).",
     "Spike queue atomics + hash stim are latency/control — not added to FLOP numerator on purpose."
   ],
   "known_limits": [
     "Refractory path does fewer FLOPs and still touches the same traffic — intensity is an upper bound on arithmetic density.",
-    "peak_tflops on machine file is estimate until measured."
+    "peak_tflops measured 2026-09-14: 15.37 TFLOP/s achieved SGEMM. DRAM 358.43 GB/s, median of 6 runs, 4.9% spread, clocks not locked."
   ]
 }

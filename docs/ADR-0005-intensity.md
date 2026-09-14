@@ -16,7 +16,7 @@ and classifies MemoryBound / NearRidge / ComputeBound.
 ```bash
 lith-probe intensity-check fixtures/intensity/k_integrate.json \
   --machine fixtures/machine/sm_120.json
-# PASS — ~0.21 flop/byte, MemoryBound vs ridge ~60
+# PASS — ~0.21 flop/byte, MemoryBound vs ridge 42.9 (FP32 class)
 
 lith-probe intensity-check fixtures/intensity/gemv-declare-lie.json \
   --machine fixtures/machine/sm_120.json

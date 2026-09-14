@@ -1,13 +1,13 @@
 {
   "schema": "lith-machine/0.1",
   "id": "sm_120",
-  "peak_tflops": 15.03,
-  "peak_tflops_fp16": 44.08,
+  "peak_tflops": 15.37,
+  "peak_tflops_fp16": 44.25,
   "levels": [
     {
       "name": "dram",
       "capacity": "16GiB GDDR7",
-      "bandwidth_gbs": 398.39,
+      "bandwidth_gbs": 358.43,
       "latency_cyc": null
     },
     {
@@ -30,18 +30,67 @@
     }
   ],
   "ops": [
-    { "name": "fma.f32", "status": "present", "at": "reg" },
-    { "name": "fma.f16", "status": "present", "at": "reg" },
-    { "name": "tcgen05", "status": "present", "at": "sm" },
-    { "name": "nvfp4", "status": "present", "at": "sm" },
-    { "name": "tma_2nd_gen", "status": "present", "at": "sm" },
-    { "name": "tma", "status": "present", "at": "sm" },
-    { "name": "wgmma", "status": "absent", "at": "sm" }
+    {
+      "name": "fma.f32",
+      "status": "present",
+      "at": "reg"
+    },
+    {
+      "name": "fma.f16",
+      "status": "present",
+      "at": "reg"
+    },
+    {
+      "name": "tcgen05",
+      "status": "present",
+      "at": "sm"
+    },
+    {
+      "name": "nvfp4",
+      "status": "present",
+      "at": "sm"
+    },
+    {
+      "name": "tma_2nd_gen",
+      "status": "present",
+      "at": "sm"
+    },
+    {
+      "name": "tma",
+      "status": "present",
+      "at": "sm"
+    },
+    {
+      "name": "wgmma",
+      "status": "absent",
+      "at": "sm"
+    }
   ],
   "notes": [
-    "dram 398.39 GB/s: Unibit host_reference.py 2026-09-14. peak_probe same day saw 357 GB/s — unlocked clock variance ~10%.",
+    "dram 398.39 GB/s: Unibit host_reference.py 2026-09-14. peak_probe same day saw 357 GB/s \u00e2\u20ac\u201d unlocked clock variance ~10%.",
     "peak_tflops 15.03 / peak_tflops_fp16 44.08: achieved cuBLAS GEMM 8192 via lith/tools/peak_probe.py (not datasheet).",
-    "ridge FP32 ≈ 15.03e3/398.39 ≈ 37.7 flop/byte. TC/FP16 ridge ≈ 110.6.",
+    "ridge FP32 \u00e2\u2030\u02c6 15.03e3/398.39 \u00e2\u2030\u02c6 37.7 flop/byte. TC/FP16 ridge \u00e2\u2030\u02c6 110.6.",
     "l2/smem/reg bandwidth 0 until a probe names them."
+  ],
+  "measurement": {
+    "method": "tools/peak_probe.py, torch.sum over 1 GiB (read) and cuBLAS GEMM n=8192",
+    "runs": 6,
+    "dram_gbs_median": 358.43,
+    "dram_gbs_min": 350.84,
+    "dram_gbs_max": 368.42,
+    "dram_spread_pct": 4.9,
+    "sgemm_tflops_steady": 15.37,
+    "date": "2026-09-14",
+    "clock_state": "default boost, not locked"
+  },
+  "ridge_flop_per_byte": {
+    "fp32": 42.9,
+    "fp16_tensor": 123.5,
+    "note": "FP32 class unless the kernel is tensor-core dominant. State which one you used."
+  },
+  "known_limits": [
+    "The previous file claimed 398.39 GB/s. Six fresh runs gave 350.8-368.4, median 358.4. The old value does not reproduce and is 10% above every run.",
+    "torch.sum is a reduction, not a streaming read benchmark. The 5% run-to-run spread and the warm-up trend (first three runs 351-354, last three 362-368) are consistent with clock boost settling rather than with a stable bandwidth measurement. A stream-style kernel would be a better probe.",
+    "Clocks were not locked. A locked-clock number would be lower and more reproducible."
   ]
 }
