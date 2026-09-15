@@ -127,18 +127,58 @@ So the asymmetry is kept and made explicit: **traffic and arithmetic are derived
 instruction count is measured and not claimed.** `tools/inst_sweep.py` produces it, this ADR
 records what it said on this device, and `Cost` stays silent about it rather than guessing.
 
-## [KNOWN LIMIT] the two that are not integers
+## The coefficient that was not an integer, and what it turned out to be
 
-`S` for the reductions is 115.0195, not 115. Every other coefficient came out a whole number, as
-a straight-line instruction count should. The fractional part survives the held-out check, so it
-is not fitting noise; the likely cause is the ragged tail, where `n` is not a multiple of the
-thread count and the last partial iteration is not identical across threads. It is not chased
-here, and 115.0195 is reported rather than rounded to the number it probably is.
+`S` for the reductions came out 115.0195 where every other coefficient was whole. The first
+explanation written here was the ragged tail -- `n` not dividing the thread count -- and it was
+wrong. `--block` was added to `lyth run` to find out, because the tree's width could not be
+varied and therefore could not be tested.
+
+At one element per thread, on `sum`, n = 2^20:
+
+| block | blocks | thread-instructions | per block | per thread | denominator | per block mod block |
+|---|---|---|---|---|---|---|
+| 64 | 16384 | 103,890,944 | 6341 | 99.078125 | 64 | 5 |
+| 128 | 8192 | 115,384,320 | 14085 | 110.039062 | 128 | 5 |
+| 256 | 4096 | 126,898,176 | 30981 | 121.019531 | 256 | 5 |
+| 512 | 2048 | 138,422,272 | 67589 | 132.009766 | 512 | 5 |
+
+**Per block the count is always a whole number; per thread it never is, and the denominator is
+always exactly the block size.** That settles what kind of quantity it is. The tree is the only
+divergent code in these kernels -- in the round with stride `s` only the threads below `s`
+combine, and the final partial is stored by thread 0 alone -- so a per-thread figure for it is an
+average over threads that did not do the same work. **The tree's cost is per block. "Per thread"
+is not a unit it has.**
+
+The residue is 5 at every width, so it is not an artefact of one shape. Subtracting it and
+dividing gives 99, 110, 121, 132 against log2(block) of 6, 7, 8, 9: a straight line of slope 11,
+no residual. The whole thing closes:
+
+```
+S(block) = 11 * log2(block) + 27 + 5 / block
+```
+
+11 instructions per tree round per thread, 27 per thread for everything outside the tree, and 5
+instructions that exactly one thread in the block executes. At block 256 that is
+88 + 27 + 5/256 = 115.01953125, and it predicts the other three widths exactly.
+
+So the fraction was never noise and never the ragged tail. It is the tail of the tree, where one
+thread writes the block's result while 255 wait, divided by a block size it was never per-thread
+in the first place.
+
+### What this costs the model
+
+Nothing is added to `Cost`, for the reason in the previous section, but the shape is worth
+recording: **a reduction's setup grows with the logarithm of the block width**, and at one
+element per thread that setup is paid per element. A block of 512 pays 132 instructions per
+element where a block of 64 pays 99. Under grid-stride it is paid once per thread instead, which
+is what turns the 12x in the table above into 12x rather than 2x.
 
 ## Files
 
 | | |
 |---|---|
 | `tools/inst_sweep.py` | the measurement, the affine solve, and the held-out check |
+| `crates/lyth/src/main.rs` | `--block`, added to test the tree rather than assume it |
 | `docs/ADR-0012-grid-stride.md` | the time result this completes |
 | `docs/ADR-0013-max-min.md` | the known limit this turns into a number |

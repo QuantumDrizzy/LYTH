@@ -220,3 +220,22 @@ fn a_max_reduction_declares_zero_intensity_and_is_believed() {
     lyth_lang::check_intensity(&ir, Some(0.0), None, 0.05)
         .expect("a kernel with no arithmetic may declare none");
 }
+
+/// `--block` is a launch parameter with a real constraint, so it gets a real refusal.
+///
+/// The tree halves its stride down to 1. At a width that is not a power of two the halving
+/// never reaches the elements above the last power of two below it, and they are silently left
+/// out of the result -- a wrong answer rather than an error, which is the kind this project
+/// refuses at the door. No GPU is needed: the check runs before the context is created.
+#[test]
+fn a_block_width_that_would_break_the_tree_is_refused() {
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/sum.lyth");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_lyth"))
+        .args(["run", src.to_str().unwrap(), "-n", "1024", "--block", "100"])
+        .output()
+        .expect("the binary should run");
+    assert!(!out.status.success(), "a non-power-of-two block must not be accepted");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("power of two"), "{err}");
+    assert!(err.contains("got 100"), "the refusal must name the value: {err}");
+}

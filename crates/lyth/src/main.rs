@@ -92,6 +92,12 @@ enum Cmd {
         /// Exposed so the choice can be swept and measured rather than assumed (ADR-0012).
         #[arg(long)]
         grid: Option<u32>,
+        /// Threads per block. Must be a power of two: the reduction tree halves its stride,
+        /// so anything else leaves elements uncombined. Exposed for the same reason as
+        /// `--grid` -- ADR-0014 needed it to show that the tree's cost is per block and not
+        /// per thread, and could not vary it.
+        #[arg(long)]
+        block: Option<u32>,
         /// Time the kernel over this many runs after a warm-up, and report achieved
         /// bandwidth against the machine file's measured figure. 0 disables timing.
         #[arg(long, default_value_t = 0)]
@@ -157,6 +163,7 @@ fn main() -> ExitCode {
             machine,
             n,
             grid,
+            block,
             time,
             json,
             sets,
@@ -167,6 +174,7 @@ fn main() -> ExitCode {
             RunOpts {
                 n,
                 grid,
+                block,
                 reps: time,
                 json: json.as_deref(),
                 sets: &sets,
@@ -391,6 +399,7 @@ fn evidence_json(ir: &KernelIr, elements: u32) -> String {
 struct RunOpts<'a> {
     n: u32,
     grid: Option<u32>,
+    block: Option<u32>,
     reps: u32,
     json: Option<&'a Path>,
     sets: &'a [String],
@@ -401,11 +410,22 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
     let RunOpts {
         n,
         grid: grid_arg,
+        block: block_arg,
         reps,
         json,
         sets,
         tol,
     } = o;
+
+    // A launch parameter, not a language one: the source says nothing about block size, so
+    // nothing here can be checked against it. The power-of-two rule is the reduction tree's --
+    // it halves its stride to 1, and an odd width would drop the elements above the halving
+    // point without ever combining them.
+    let block = block_arg.unwrap_or(BLOCK);
+    if !block.is_power_of_two() || block > 1024 {
+        eprintln!("error[launch]: --block must be a power of two no greater than 1024, got {block}");
+        return ExitCode::from(EXIT_UNUSABLE);
+    }
     let f = match front(file, machine, tol) {
         Ok(f) => f,
         Err(code) => return code,
@@ -440,11 +460,11 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
 
     // One element per thread by default, because that is what measured fastest -- not because
     // it is obvious. `--grid` takes anything, and below `want` the loop starts doing real work.
-    let want = grid_for(n, BLOCK);
+    let want = grid_for(n, block);
     let grid = grid_arg.unwrap_or_else(|| want.clamp(1, MAX_GRID));
-    let per_thread = (n as f64 / (grid as f64 * BLOCK as f64)).ceil() as u64;
+    let per_thread = (n as f64 / (grid as f64 * block as f64)).ceil() as u64;
     println!(
-        "  grid     {grid} blocks of {BLOCK} on {} SMs, {per_thread} element(s) per thread",
+        "  grid     {grid} blocks of {block} on {} SMs, {per_thread} element(s) per thread",
         ctx.sm_count
     );
     // A reduction writes one value per block, so its target is sized by the grid, not by the
@@ -477,7 +497,7 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
         }
     }
 
-    let expected = match eval_with_launch(ir, n as usize, &inputs, grid as usize, BLOCK as usize) {
+    let expected = match eval_with_launch(ir, n as usize, &inputs, grid as usize, block as usize) {
         Ok(o) => o,
         Err(e) => {
             eprintln!("error[reference]: {e}");
@@ -539,9 +559,9 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
         .collect();
 
     // One f32 slot per thread for the reduction tree; nothing without a reduction.
-    let shared = if ir.reduction.is_some() { BLOCK * 4 } else { 0 };
-    println!("  launch   grid {grid} x block {BLOCK} over {n} elements, {shared} B shared");
-    if let Err(e) = func.launch_shared(grid, BLOCK, shared, &args) {
+    let shared = if ir.reduction.is_some() { block * 4 } else { 0 };
+    println!("  launch   grid {grid} x block {block} over {n} elements, {shared} B shared");
+    if let Err(e) = func.launch_shared(grid, block, shared, &args) {
         eprintln!("error[cuda]: {e}");
         return ExitCode::from(EXIT_UNUSABLE);
     }
