@@ -96,6 +96,19 @@ differs:
 from full 32-way serialisation, so the skew is not correlated with the absence of conflicts —
 it removes exactly the serialisation the derivation says it removes.
 
+And the time, because 4.87x less traffic implying "faster" is exactly the sort of unmeasured
+implication this repository refuses elsewhere:
+
+| kernel | median of 7 | spread | payload GB/s |
+|---|---|---|---|
+| `transpose` | 1.8816 ms | 33.0% | 71.33 |
+| `transpose-tiled` | **0.4604 ms** | **1.3%** | 291.53 |
+| `copy2d` | 0.3522 ms | 1.4% | 381.06 |
+
+**4.09x faster** against 4.87x less traffic; the gap is the shared round trip and the barriers
+the tile adds. The spread is the other half of the result — the untiled kernel's time swings by
+a third between runs because it depends on what the cache evicted, and the tiled one does not.
+
 This is the first claim in the project that a competent engineer would not get right by
 inspection, and the first cost that is a function of a schedule the author declared rather than
 of the body they wrote. The 33 in the shared layout is derived from the bank count, not typed.

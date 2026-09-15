@@ -890,7 +890,14 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
         println!("           A tiled kernel that is still correct here never staged anything.");
     }
     println!("  launch   grid {grid} x block {block} over {n} elements, {shared} B shared");
-    if let Err(e) = func.launch_shared(grid, block, shared, &args) {
+    // One shape, built once, used by the verified launch and by the timed one. They diverged
+    // when they were two sets of loose integers.
+    let shape = Launch {
+        grid,
+        block,
+        shared,
+    };
+    if let Err(e) = func.launch_shared(shape.grid, shape.block, shape.shared, &args) {
         eprintln!("error[cuda]: {e}");
         return ExitCode::from(EXIT_UNUSABLE);
     }
@@ -934,9 +941,7 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
     }
 
     if mismatches == 0 && reps > 0 {
-        if let Err(e) = report_timing(
-            &ctx, &func, grid, shared, &args, reps, n, ir, &f.machine, json,
-        ) {
+        if let Err(e) = report_timing(&ctx, &func, shape, &args, reps, n, ir, &f.machine, json) {
             eprintln!("error[timing]: {e}");
             return ExitCode::from(EXIT_UNUSABLE);
         }
@@ -996,8 +1001,12 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
 fn report_timing(
     ctx: &Context,
     func: &lyth_cuda::Function,
-    grid: u32,
-    shared: u32,
+    // The whole shape, not grid and shared with the block filled in here. `Launch` exists
+    // because "grid, block and shared size are one decision", and this function took two of
+    // the three and supplied the constant for the other -- so a tiled kernel verified at 1024
+    // threads was timed at 256, ran a quarter of each tile, produced wrong results nothing
+    // checked, and reported a bandwidth above what the device has.
+    shape: Launch,
     args: &[lyth_cuda::Arg],
     reps: u32,
     n: u32,
@@ -1008,16 +1017,13 @@ fn report_timing(
     // One warm-up per five runs, at least one: the first launch pays for module residency and
     // clock ramp, neither of which is the kernel's cost.
     let warmup = (reps / 5).max(1);
-    let shape = Launch {
-        grid,
-        block: BLOCK,
-        shared,
-    };
+
     let samples = time_launches(ctx, func, shape, args, warmup, reps)?;
     let (median_ms, spread) =
         median_and_spread(&samples).ok_or("a timing with no runs has no median")?;
 
-    let bytes = ir.cost.bytes_per_element() * n as f64 + ir.cost.dram_bytes_per_block * grid as f64;
+    let bytes =
+        ir.cost.bytes_per_element() * n as f64 + ir.cost.dram_bytes_per_block * shape.grid as f64;
     let gbs = bytes / (median_ms * 1e-3) / 1e9;
 
     println!("  time     {median_ms:.4} ms median of n={reps} (warm-up {warmup} discarded), spread {:.1}%", spread * 100.0);
@@ -1079,8 +1085,8 @@ fn report_timing(
             "kernel": ir.name,
             "machine": ir.machine,
             "elements": n,
-            "grid": grid,
-            "block": BLOCK,
+            "grid": shape.grid,
+            "block": shape.block,
             "reps": reps,
             "warmup": warmup,
             "ms_samples": samples,
