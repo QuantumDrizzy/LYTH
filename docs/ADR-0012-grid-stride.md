@@ -2,6 +2,14 @@
 
 **Status:** Accepted
 **Date:** 2026-09-14
+
+> **[SCOPE, added 2026-09-16]** Everything below was measured on `saxpy`, and the default
+> it established was applied to every kernel. For a **reduction** it is wrong by a factor of
+> two: the block tree runs once per thread, so one element per thread runs it once per
+> element. `sum` at n = 2^26 measures 213.69 GB/s at that default against 419.68 at grid
+> 36864. The default is now per kernel kind. A conclusion carries the kernel it was measured
+> on — see ADR-0000.
+
 **Depends on:** ADR-0010 (executable LYTH), ADR-0011 (reductions), ADR-0004 (machine as value)
 
 ## Why this is not really about a loop

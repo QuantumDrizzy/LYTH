@@ -102,6 +102,26 @@ do with the thing being tested — which is how a real result gets thrown out wi
 prediction. Both of these were caught by measuring rather than by review, and review is where
 they should have been caught, because the derivation was sitting in the same document.
 
+## The other rule, learned three times
+
+> **A conclusion has a domain, and the domain is the kernel it was measured on.**
+
+ADR-0012 swept `saxpy` across launch shapes and found one element per thread faster than
+filling the machine. That became *the* default, for every kernel. ADR-0014 then measured that
+grid-stride cuts a reduction's instruction count by twelve and concluded it bought no time —
+citing the saxpy sweep. Both conclusions were correct about the kernel in front of them. Applied
+to `sum`, the default runs at **half the achievable bandwidth**, because a reduction's block
+tree runs once per thread and at one element per thread that is once per element.
+
+It is the same shape as the timing bug: `cmd_run` verified its launch, `report_timing` assumed
+that verification and assembled its own shape, and nothing re-checked. Something measured in one
+place was carried to another without being measured again.
+
+So: **an ADR's conclusion carries the kernel it was measured on, and applying it elsewhere is a
+new measurement, not an inference.** The fix for the grid default is written that way — one
+element per thread for elementwise, grid-stride for reductions, each confirmed on both kernels
+before either was changed — rather than as a special case for `sum`.
+
 ## Why this is written down late, and kept
 
 Every ADR after this one derives a number and then measures it. The reason the numbers are bytes

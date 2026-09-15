@@ -2,6 +2,12 @@
 
 **Status:** Accepted
 **Date:** 2026-09-15
+
+> **[SCOPE, added 2026-09-16]** "Grid-stride bought no time" is ADR-0012's result on
+> `saxpy`, repeated here. It does not hold for a reduction: the twelvefold instruction
+> saving this ADR measures **is** a twofold bandwidth saving on `sum`, which nobody checked
+> because the conclusion had already been drawn on another kernel. See ADR-0000.
+
 **Depends on:** ADR-0012 (grid-stride), ADR-0009 (measured traffic), ADR-0013 (max and min)
 
 ## The question ADR-0012 answered and the one it did not
