@@ -1,3 +1,7 @@
 /target/
 /evidence/
 *.pdb
+
+# Python bytecode from the tools in tools/
+__pycache__/
+*.pyc
