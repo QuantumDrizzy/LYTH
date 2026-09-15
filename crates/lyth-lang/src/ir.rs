@@ -32,6 +32,9 @@ pub struct KernelIr {
     /// `None` is one element per thread. A tile blocks the space into patches, one per block,
     /// and is what makes a staged stream legal.
     pub tile: Option<Vec<u32>>,
+    /// How the staged buffers sit in shared memory, and the bytes the launch must request.
+    /// `None` when nothing is staged.
+    pub shared: Option<SharedLayout>,
     /// Flattened straight-line body, in evaluation order.
     pub ops: Vec<Op>,
     /// Registers holding the final value of each drained buffer.
@@ -786,6 +789,27 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
         }
     }
 
+    // Shared memory layout, once the tile and the staged streams are both known.
+    let shared = kernel.tile.as_ref().and_then(|t| {
+        let staged: Vec<&StreamIr> = streams.iter().filter(|s| s.staged).collect();
+        if staged.is_empty() {
+            return None;
+        }
+        let rows = t.dims[0];
+        let stride = skewed_stride(*t.dims.last().expect("a tile has a width"));
+        let tiles: Vec<(String, u32, u32)> = staged
+            .iter()
+            .map(|s| (s.buffer.clone(), rows, stride))
+            .collect();
+        let bytes = tiles.len() as u32 * rows * stride * SMEM_BANK_WIDTH;
+        Some(SharedLayout {
+            tiles,
+            bytes,
+            // Zero, by the coprimality above. This is the claim, not an observation.
+            predicted_bank_conflicts: 0,
+        })
+    });
+
     let cost = derive_cost(&streams, &ops, reduction.as_ref());
 
     Ok(KernelIr {
@@ -795,6 +819,7 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
         streams,
         space,
         tile: kernel.tile.as_ref().map(|t| t.dims.clone()),
+        shared,
         ops,
         drains,
         reduction,
@@ -809,6 +834,56 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
 /// does not get to inflate the denominator, and an unread stream is caught elsewhere.
 /// A 32-byte sector is the smallest thing the memory system moves.
 const SECTOR: f64 = 32.0;
+
+/// Shared memory banks, and the width of one.
+///
+/// A constant rather than a machine-file field, and the reason is worth stating: 32 banks of
+/// 4 bytes has held across every NVIDIA architecture since Fermi, and the derivation below
+/// would be wrong rather than imprecise on a machine where it did not. So it is written here,
+/// and `l1tex__data_bank_conflicts_pipe_lsu.sum` is what checks the consequence -- the same
+/// shape as every other claim in this compiler: derive it, then let the silicon answer.
+const SMEM_BANKS: u32 = 32;
+const SMEM_BANK_WIDTH: u32 = 4;
+
+/// How a tile is laid out in shared memory, and what that costs.
+///
+/// **The skew is derived, not declared.** A column of a tile whose rows are `stride` elements
+/// apart puts thread `t` on bank `(t * stride + c) mod 32`. The 32 threads of a warp land on
+/// 32 distinct banks exactly when `stride` is coprime to 32, and since 32 is a power of two
+/// that is exactly when `stride` is **odd**.
+///
+/// So the rule is not "add one". It is "pad until the row stride is odd", which for the usual
+/// 32-wide tile gives 33 and for a tile of odd width gives no padding at all. A rule that
+/// always added one would waste a row of shared memory on half of all tile widths.
+///
+/// This assumes the element and the bank are the same width, which for f32 they are. A
+/// language with f64 would need this again and differently.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SharedLayout {
+    /// Per staged buffer: its name, rows, and the padded row stride in elements.
+    pub tiles: Vec<(String, u32, u32)>,
+    /// Dynamic shared memory the launch must request.
+    pub bytes: u32,
+    /// What the skew is for. Pre-registered so ADR-0017 step 5 can falsify it.
+    pub predicted_bank_conflicts: u32,
+}
+
+/// Pad the row stride until it is coprime to the bank count.
+fn skewed_stride(width: u32) -> u32 {
+    let mut stride = width;
+    while gcd(stride, SMEM_BANKS) != 1 {
+        stride += 1;
+    }
+    stride
+}
+
+fn gcd(a: u32, b: u32) -> u32 {
+    if b == 0 {
+        a
+    } else {
+        gcd(b, a % b)
+    }
+}
 
 fn derive_cost(streams: &[StreamIr], ops: &[Op], reduction: Option<&ReductionIr>) -> Cost {
     let elem = Ty::BufF32.bytes() as f64;
@@ -1221,5 +1296,64 @@ kernel saxpy(n: u32, a: f32, x: [f32; n], y: [f32; n])
         x = x\n";
         let e = ir(src).unwrap_err();
         assert!(e.to_string().contains("not implemented"), "{e}");
+    }
+}
+
+#[cfg(test)]
+mod shared_layout {
+    use super::*;
+
+    /// The skew is "pad until the row stride is coprime to the bank count", not "add one".
+    #[test]
+    fn a_tile_is_padded_until_its_row_stride_is_odd() {
+        // 32 banks is a power of two, so coprime means odd.
+        assert_eq!(skewed_stride(32), 33, "the usual tile");
+        assert_eq!(skewed_stride(16), 17);
+        assert_eq!(skewed_stride(64), 65);
+        // An odd width already lands every thread on its own bank. A rule that always added
+        // one would waste a row of shared memory here for nothing.
+        assert_eq!(skewed_stride(31), 31);
+        assert_eq!(skewed_stride(33), 33);
+    }
+
+    #[test]
+    fn every_thread_of_a_warp_lands_on_its_own_bank() {
+        // The property the skew exists for, checked directly rather than trusted: reading a
+        // column of the padded tile, thread t is at offset t * stride and must be on bank
+        // (t * stride) mod 32, all distinct.
+        for width in [8u32, 16, 32, 64] {
+            let stride = skewed_stride(width);
+            let mut banks: Vec<u32> = (0..SMEM_BANKS).map(|t| (t * stride) % SMEM_BANKS).collect();
+            banks.sort();
+            banks.dedup();
+            assert_eq!(
+                banks.len(),
+                SMEM_BANKS as usize,
+                "width {width} with stride {stride} serialises"
+            );
+        }
+        // And without the skew it collapses to one bank, which is the 32-way conflict.
+        let mut unpadded: Vec<u32> = (0..SMEM_BANKS).map(|t| (t * 32) % SMEM_BANKS).collect();
+        unpadded.dedup();
+        assert_eq!(unpadded.len(), 1, "an unpadded 32-wide tile is one bank");
+    }
+
+    #[test]
+    fn a_staged_tile_costs_what_the_skew_makes_it_cost() {
+        let src = "machine sm_120\n\nkernel t(rows: u32, cols: u32, a: [f32; rows, cols], b: [f32; cols, rows])\n    space i, j : rows, cols\n    tile 32, 32\n    stream a : dram -> smem -> reg\n    stream b : dram -> reg, drain\n    at reg:\n        b[j, i] = a[i, j]\n";
+        let unit = crate::parse::parse(src).unwrap();
+        let ir = lower(&unit, &unit.kernels[0]).unwrap();
+        let l = ir.shared.expect("a staged stream has a layout");
+        assert_eq!(l.tiles, vec![("a".to_string(), 32, 33)]);
+        assert_eq!(l.bytes, 32 * 33 * 4, "4224 bytes, not 4096");
+        assert_eq!(l.predicted_bank_conflicts, 0);
+    }
+
+    #[test]
+    fn a_tile_with_nothing_staged_needs_no_shared_memory() {
+        let src = "machine sm_120\n\nkernel t(rows: u32, cols: u32, a: [f32; rows, cols], b: [f32; cols, rows])\n    space i, j : rows, cols\n    tile 32, 32\n    stream a : dram -> reg\n    stream b : dram -> reg, drain\n    at reg:\n        b[j, i] = a[i, j]\n";
+        let unit = crate::parse::parse(src).unwrap();
+        let ir = lower(&unit, &unit.kernels[0]).unwrap();
+        assert!(ir.shared.is_none(), "a tile alone stages nothing");
     }
 }

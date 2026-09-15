@@ -575,6 +575,21 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
     };
     let ir = &f.ir;
 
+    // A tile fixes the block: one thread per element of the tile. A `--block` beside it would
+    // be two answers to one question, and the launch would honour whichever was read last.
+    if let (Some(t), Some(b)) = (&ir.tile, block_arg) {
+        let want: u32 = t.iter().product();
+        eprintln!(
+            "error[launch]: this kernel declares `tile {}`, which fixes the block at {want}. Remove `--block {b}`, or the tile.",
+            t.iter().map(u32::to_string).collect::<Vec<_>>().join(", ")
+        );
+        return ExitCode::from(EXIT_UNUSABLE);
+    }
+    let block = match &ir.tile {
+        Some(t) => t.iter().product(),
+        None => block,
+    };
+
     let mut scalars: BTreeMap<String, f32> = BTreeMap::new();
     for s in sets {
         let Some((name, value)) = s.split_once('=') else {

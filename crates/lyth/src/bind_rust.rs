@@ -174,13 +174,35 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
     }
     push(&mut out, "}");
     push(&mut out, "");
-    push(&mut out, "/// Blocks the default launch uses: one element per thread, capped.");
-    push(&mut out, &format!("pub fn grid({extent_args}) -> Option<u32> {{"));
-    push(
-        &mut out,
-        &format!("    Some(elements({extent_pass})?.div_ceil(BLOCK).max(1).min(MAX_GRID))"),
-    );
-    push(&mut out, "}");
+    match &m.launch.grid {
+        crate::manifest::GridRule::Elementwise { .. } => {
+            push(&mut out, "/// Blocks the default launch uses: one element per thread, capped.");
+            push(&mut out, &format!("pub fn grid({extent_args}) -> Option<u32> {{"));
+            push(
+                &mut out,
+                &format!("    Some(elements({extent_pass})?.div_ceil(BLOCK).max(1).min(MAX_GRID))"),
+            );
+            push(&mut out, "}");
+        }
+        crate::manifest::GridRule::Tiled { tile, extents } => {
+            push(&mut out, "/// Blocks the default launch uses: one per tile.");
+            push(&mut out, "///");
+            push(&mut out, "/// Not the elementwise rule. A generator that reused that one would");
+            push(&mut out, "/// launch a fraction of the work and compile cleanly doing it.");
+            push(&mut out, &format!("pub fn grid({extent_args}) -> Option<u32> {{"));
+            let terms: Vec<String> = extents
+                .iter()
+                .zip(tile)
+                .map(|(e, t)| format!("{e}.div_ceil({t})"))
+                .collect();
+            push(&mut out, &format!("    let mut blocks: u32 = {};", terms[0]));
+            for t in &terms[1..] {
+                push(&mut out, &format!("    blocks = blocks.checked_mul({t})?;"));
+            }
+            push(&mut out, "    Some(blocks.max(1).min(MAX_GRID))");
+            push(&mut out, "}");
+        }
+    }
     push(&mut out, "");
 
     if let Some(p) = m.params.iter().find(|p| p.sized_by_grid) {
@@ -270,5 +292,51 @@ mod tests {
         // A PTX comment containing the closing sequence would end the literal early.
         assert_eq!(fence("// \"# oops"), "##");
         assert_eq!(fence("// \"# and \"## oops"), "###");
+    }
+}
+
+#[cfg(test)]
+mod tiled {
+    use super::*;
+    use crate::manifest::Manifest;
+    use lyth_lang::{ir::lower, parse::parse};
+
+    const SRC: &str = "machine sm_120\n\nkernel t(rows: u32, cols: u32, a: [f32; rows, cols], b: [f32; cols, rows])\n    space i, j : rows, cols\n    tile 32, 32\n    stream a : dram -> smem -> reg\n    stream b : dram -> reg, drain\n    at reg:\n        b[j, i] = a[i, j]\n";
+
+    fn all_three() -> (String, String, String) {
+        let unit = parse(SRC).unwrap();
+        let ir = lower(&unit, &unit.kernels[0]).unwrap();
+        let m = Manifest::of(&ir, None, 256, 1 << 20, vec![]);
+        (
+            generate(&m, "// ptx", "t.lyth"),
+            crate::bind_c::generate(&m, "// ptx", "t.lyth"),
+            crate::bind_py::generate(&m, "// ptx", "t.lyth"),
+        )
+    }
+
+    #[test]
+    fn every_binding_launches_one_block_per_tile() {
+        // The elementwise rule would launch rows*cols/1024 blocks instead of
+        // ceil(rows/32)*ceil(cols/32) -- a fraction of the work, compiling cleanly. This is
+        // the failure the structured grid rule exists to prevent in all three at once.
+        let (rs, c, py) = all_three();
+        assert!(rs.contains("rows.div_ceil(32)") && rs.contains("cols.div_ceil(32)"), "{rs}");
+        assert!(c.contains("(rows + 31u) / 32u") && c.contains("(cols + 31u) / 32u"), "{c}");
+        assert!(py.contains("-(-rows // 32) * -(-cols // 32)"), "{py}");
+        for s in [&rs, &c, &py] {
+            assert!(!s.contains("BLOCK - 1"), "an elementwise rule leaked in");
+        }
+    }
+
+    #[test]
+    fn every_binding_carries_the_shared_bytes_so_the_caller_does_not() {
+        // Rule 1 of ADR-0016: the signature of `launch` does not change when a kernel becomes
+        // tiled. The 4224 is embedded, not a parameter.
+        let (rs, c, py) = all_three();
+        assert!(rs.contains("pub const SHARED_BYTES: u32 = 4224;"), "{rs}");
+        assert!(c.contains("#define LYTH_T_SHARED_BYTES 4224u"), "{c}");
+        assert!(py.contains("SHARED_BYTES = 4224"), "{py}");
+        // And the block is the tile, not the compiler's 256.
+        assert!(rs.contains("pub const BLOCK: u32 = 1024;"), "{rs}");
     }
 }

@@ -139,11 +139,25 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
     w("");
     w("");
     w(&format!("def grid({extent_args}):"));
-    w("    \"\"\"Blocks the default launch uses: one element per thread, capped.\"\"\"");
-    w(&format!("    total = elements({extent_args})"));
-    w("    if total is None:");
-    w("        return None");
-    w("    return min(max(-(-total // BLOCK), 1), MAX_GRID)");
+    match &m.launch.grid {
+        crate::manifest::GridRule::Elementwise { .. } => {
+            w("    \"\"\"Blocks the default launch uses: one element per thread, capped.\"\"\"");
+            w(&format!("    total = elements({extent_args})"));
+            w("    if total is None:");
+            w("        return None");
+            w("    return min(max(-(-total // BLOCK), 1), MAX_GRID)");
+        }
+        crate::manifest::GridRule::Tiled { tile, extents } => {
+            w("    \"\"\"Blocks the default launch uses: one per tile, not one per element.\"\"\"");
+            let terms: Vec<String> = extents
+                .iter()
+                .zip(tile)
+                .map(|(e, t)| format!("-(-{e} // {t})"))
+                .collect();
+            w(&format!("    blocks = {}", terms.join(" * ")));
+            w("    return blocks if 0 < blocks <= MAX_GRID else None");
+        }
+    }
     w("");
     if let Some(p) = m.sized_by_grid() {
         w("");

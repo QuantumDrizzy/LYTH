@@ -179,6 +179,29 @@ memory once, coalesced, and the body reads it from there. That is how a transpos
 the memory bus, where it costs 32 bytes per element, and into shared memory, where a one-element
 skew makes it cost nothing.
 
+The tile also fixes the **block** — one thread per element of it, so `tile 32, 32` is 1024
+threads — and the **grid**, which becomes one block per tile rather than one thread per element.
+Passing `--block` beside a tile is refused: two answers to one question.
+
+### The skew is derived
+
+Shared memory on this hardware is 32 banks of 4 bytes. Reading a column of a `[32][32]` tile
+puts all 32 threads of a warp on the same bank and serialises them 32 ways. One element of skew
+per row fixes it, and **the rule is not "add one"**: a column access puts thread `t` on bank
+`(t * stride) mod 32`, so the threads land on distinct banks exactly when `stride` is coprime to
+32 — and since 32 is a power of two, exactly when `stride` is odd.
+
+So the compiler pads until the row stride is odd. A 32-wide tile becomes 33 and costs
+`32 x 33 x 4 = 4224` bytes; a 31-wide tile is already conflict-free and gets no padding at all.
+A rule that always added one would waste a row of shared memory on half of all tile widths.
+
+The caller never computes that number. It is derived, carried in the manifest, and embedded in
+the generated Rust, C and Python, so the signature of `launch` does not change when a kernel
+becomes tiled.
+
+**And it is a claim, not an observation.** The compiler states zero bank conflicts;
+`l1tex__data_bank_conflicts_pipe_lsu.sum` is what decides.
+
 [IN PROGRESS] ADR-0017. The front end parses, checks and carries a tile; the back end **refuses**
 to emit one rather than dropping it, because compiling the untiled kernel for a tiled source
 would produce working code whose cost is nothing like the derived one.

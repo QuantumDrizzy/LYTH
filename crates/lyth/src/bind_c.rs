@@ -221,22 +221,38 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
     w("");
     w(&format!("unsigned int lyth_{k}_grid({extent_args})"));
     w("{");
-    // Not `n`: at rank 1 the extent is itself called `n`, and `unsigned int n = f(n)`
-    // initialises the new local from its own indeterminate value. The compiler is within its
-    // rights to do anything at all with that.
-    w(&format!(
-        "    unsigned int total = lyth_{k}_elements({extent_pass});"
-    ));
-    w("    unsigned int g;");
-    w("    if (total == 0u) return 0u;");
-    w(&format!(
-        "    g = (total + LYTH_{guard}_BLOCK - 1u) / LYTH_{guard}_BLOCK;"
-    ));
-    w("    if (g == 0u) g = 1u;");
-    w(&format!(
-        "    if (g > LYTH_{guard}_MAX_GRID) g = LYTH_{guard}_MAX_GRID;"
-    ));
-    w("    return g;");
+    match &m.launch.grid {
+        crate::manifest::GridRule::Elementwise { .. } => {
+            // Not `n`: at rank 1 the extent is itself called `n`, and `unsigned int n = f(n)`
+            // initialises the new local from its own indeterminate value. The compiler is
+            // within its rights to do anything at all with that.
+            w(&format!(
+                "    unsigned int total = lyth_{k}_elements({extent_pass});"
+            ));
+            w("    unsigned int g;");
+            w("    if (total == 0u) return 0u;");
+            w(&format!(
+                "    g = (total + LYTH_{guard}_BLOCK - 1u) / LYTH_{guard}_BLOCK;"
+            ));
+            w("    if (g == 0u) g = 1u;");
+            w(&format!(
+                "    if (g > LYTH_{guard}_MAX_GRID) g = LYTH_{guard}_MAX_GRID;"
+            ));
+            w("    return g;");
+        }
+        crate::manifest::GridRule::Tiled { tile, extents } => {
+            w("    /* One block per tile, not one thread per element. */");
+            w("    unsigned long long blocks = 1ull;");
+            for (e, t) in extents.iter().zip(tile) {
+                w(&format!("    blocks *= ({e} + {}u) / {t}u;", t - 1));
+            }
+            w("    if (blocks == 0ull) blocks = 1ull;");
+            w(&format!(
+                "    if (blocks > LYTH_{guard}_MAX_GRID) return 0u;"
+            ));
+            w("    return (unsigned int)blocks;");
+        }
+    }
     w("}");
     w("");
     if let Some(p) = m.sized_by_grid() {
