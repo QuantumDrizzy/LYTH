@@ -75,6 +75,13 @@ pub struct StreamIr {
     /// Register the loaded element lands in. `None` for a buffer that is only written.
     pub loaded: Option<RegId>,
     pub read: bool,
+    /// Whether consecutive threads touch consecutive elements of this buffer.
+    ///
+    /// True at rank 1, where every access is the loop index. At rank 2 it holds exactly when
+    /// the buffer's **innermost** index is the space's **fastest** variable, because that is
+    /// the one that advances between neighbouring threads. `a[i, j]` under `space i, j` is
+    /// coalesced; `b[j, i]` is not, and that is the whole of a transpose.
+    pub coalesced: bool,
 }
 
 pub type RegId = u32;
@@ -170,6 +177,25 @@ pub struct Cost {
     pub flops_per_element: f64,
     /// FLOPs/byte at the deepest level with traffic. This is the roofline number.
     pub intensity: f64,
+    /// Traffic at the granularity the memory system actually moves, rather than the payload.
+    ///
+    /// A 32-byte sector is eight f32. A coalesced access has consecutive threads on
+    /// consecutive elements, so a warp's 32 threads cover 128 contiguous bytes in four
+    /// sectors and every byte fetched is a byte wanted: 4 per element. A strided access has
+    /// each thread in its own sector, so 32 bytes move for every 4 wanted.
+    ///
+    /// **These are upper bounds, and deliberately.** The exact figure is
+    /// `min(32, 4 * stride)` where `stride` is the element distance between neighbouring
+    /// threads, which for a strided access is the buffer's own row length -- a *launch* value,
+    /// not something the source says. A matrix four columns wide wastes four times, not eight.
+    /// The bound here assumes a row of eight or more; `lyth run` refines it once the extents
+    /// are known, and `--ncu` measures what actually happened.
+    ///
+    /// [KNOWN LIMIT] The model is a warp at a time and ignores the warp that straddles a row
+    /// boundary, where the pattern is neither of the two cases. At `cols >= 32` that is at
+    /// most one warp per row.
+    pub sector_read_per_element: f64,
+    pub sector_write_per_element: f64,
     /// DRAM bytes written once per block rather than once per element: a reduction's partial.
     ///
     /// Deliberately **not** folded into `intensity`. Per element it is this over the block
@@ -191,6 +217,21 @@ impl Cost {
 
     pub fn bytes_per_element(&self) -> f64 {
         self.roofline().map(LevelCost::total).unwrap_or(0.0)
+    }
+
+    /// Payload over sectors: 1.0 when every byte fetched is a byte wanted.
+    ///
+    /// Reported beside the payload rather than folded into it. The payload is what the source
+    /// asks for and what `intensity` is checked against; this is what the bus carries. Two
+    /// numbers, because they answer different questions and a single one would hide whichever
+    /// question the reader had.
+    pub fn coalescence(&self) -> f64 {
+        let sectors = self.sector_read_per_element + self.sector_write_per_element;
+        if sectors > 0.0 {
+            self.bytes_per_element() / sectors
+        } else {
+            1.0
+        }
     }
 
     pub fn read_bytes_per_element(&self) -> f64 {
@@ -489,6 +530,7 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
             index: Vec::new(),
             loaded: None,
             read: false,
+            coalesced: true,
         });
     }
 
@@ -678,6 +720,15 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
         )));
     }
 
+    // Coalescence, once the indices are known. The fast variable is the innermost one of the
+    // space, because the flattening puts it in the ones place of the linear index.
+    if let Some(sp) = &space {
+        let fast = sp.vars.last().expect("a space has at least one variable");
+        for st in streams.iter_mut() {
+            st.coalesced = st.index.last().map(|v| v == fast).unwrap_or(true);
+        }
+    }
+
     let cost = derive_cost(&streams, &ops, reduction.as_ref());
 
     Ok(KernelIr {
@@ -698,6 +749,9 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
 /// A stream contributes a read only if the body actually reads it, and a write only if it
 /// drains. A buffer that is streamed and never read costs nothing to read — the declaration
 /// does not get to inflate the denominator, and an unread stream is caught elsewhere.
+/// A 32-byte sector is the smallest thing the memory system moves.
+const SECTOR: f64 = 32.0;
+
 fn derive_cost(streams: &[StreamIr], ops: &[Op], reduction: Option<&ReductionIr>) -> Cost {
     let elem = Ty::BufF32.bytes() as f64;
     let mut dram = LevelCost {
@@ -705,6 +759,18 @@ fn derive_cost(streams: &[StreamIr], ops: &[Op], reduction: Option<&ReductionIr>
         read: 0.0,
         write: 0.0,
     };
+    // The same accounting at sector granularity. A coalesced access costs the payload; a
+    // strided one costs a whole sector per element, which is the bound documented on `Cost`.
+    let (mut sector_read, mut sector_write) = (0.0, 0.0);
+    for s in streams {
+        let per = if s.coalesced { elem } else { SECTOR };
+        if s.read {
+            sector_read += per;
+        }
+        if s.drain {
+            sector_write += per;
+        }
+    }
     for s in streams {
         if s.read {
             dram.read += elem;
@@ -748,6 +814,8 @@ fn derive_cost(streams: &[StreamIr], ops: &[Op], reduction: Option<&ReductionIr>
 
     Cost {
         levels,
+        sector_read_per_element: sector_read,
+        sector_write_per_element: sector_write,
         flops_per_element: flops,
         intensity: if roofline > 0.0 {
             flops / roofline

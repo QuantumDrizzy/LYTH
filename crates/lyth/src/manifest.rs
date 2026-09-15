@@ -89,6 +89,12 @@ pub struct ContractSpec {
     /// A reduction writes one partial per block rather than per element, so this is reported
     /// beside the per-element figures and never folded into them.
     pub dram_bytes_per_block: f64,
+    /// What the bus carries, at 32-byte sector granularity, against what the source asked
+    /// for. `1.0` is every fetched byte wanted. Below that, `strided` names the buffers.
+    pub coalescence: f64,
+    pub sector_read_per_element: f64,
+    pub sector_write_per_element: f64,
+    pub strided_buffers: Vec<String>,
 }
 
 impl Manifest {
@@ -153,6 +159,15 @@ impl Manifest {
                 read_bytes_per_element: ir.cost.read_bytes_per_element(),
                 write_bytes_per_element: ir.cost.write_bytes_per_element(),
                 dram_bytes_per_block: ir.cost.dram_bytes_per_block,
+                coalescence: ir.cost.coalescence(),
+                sector_read_per_element: ir.cost.sector_read_per_element,
+                sector_write_per_element: ir.cost.sector_write_per_element,
+                strided_buffers: ir
+                    .streams
+                    .iter()
+                    .filter(|s| !s.coalesced)
+                    .map(|s| s.buffer.clone())
+                    .collect(),
             },
             known_limits,
         }

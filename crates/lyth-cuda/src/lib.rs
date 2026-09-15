@@ -77,6 +77,13 @@ extern "C" {
 /// `CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT`, from `cuda.h`.
 const CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT: c_int = 16;
 
+/// `CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE`, from `cuda.h`.
+///
+/// Read rather than looked up. Whether a working set fits in L2 decides whether measured DRAM
+/// traffic matches an analytic model at all, and a wrong constant there turns a sound model
+/// into a failed comparison.
+const CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE: c_int = 38;
+
 /// JIT compile options. Values from `cuda.h`.
 const CU_JIT_ERROR_LOG_BUFFER: c_int = 5;
 const CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES: c_int = 6;
@@ -161,6 +168,8 @@ pub struct Context {
     /// that is present, and a machine file disagreeing with it would be describing a different
     /// card. The machine file states what the device *achieves*; this states what it *is*.
     pub sm_count: u32,
+    /// L2 capacity in bytes, from the driver.
+    pub l2_bytes: u64,
 }
 
 impl Context {
@@ -196,6 +205,15 @@ impl Context {
             )?
         };
 
+        let mut l2: c_int = 0;
+        // SAFETY: `l2` is a live out-parameter for the duration of the call.
+        unsafe {
+            check(
+                "cuDeviceGetAttribute",
+                cuDeviceGetAttribute(&mut l2, CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE, dev),
+            )?
+        };
+
         let mut ctx: *mut c_void = std::ptr::null_mut();
         // SAFETY: `ctx` is a live out-parameter; the context it returns is freed in Drop.
         unsafe { check("cuCtxCreate", cuCtxCreate_v2(&mut ctx, 0, dev))? };
@@ -203,6 +221,7 @@ impl Context {
             ctx,
             device_name,
             sm_count: sms.max(1) as u32,
+            l2_bytes: l2.max(0) as u64,
         })
     }
 

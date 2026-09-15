@@ -332,7 +332,68 @@ fn the_report_keeps_its_columns() {
     // an aligned report into ragged prose. The alignment is the readable part.
     let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/main.rs");
     let text = std::fs::read_to_string(src).unwrap();
-    for line in ["  derived  ", "  traffic  ", "  grid     ", "  moved    "] {
+    for line in [
+        "  derived  ",
+        "  payload  ",
+        "  sectors  ",
+        "  exact    ",
+        "  grid     ",
+        "  moved    ",
+    ] {
         assert!(text.contains(line), "the report lost its alignment at {line:?}");
     }
+}
+
+#[test]
+fn a_coalesced_kernel_pays_the_payload_and_nothing_more() {
+    // Every rank-1 kernel walks its buffers at the loop index, so neighbouring threads are on
+    // neighbouring elements and no sector is half wasted. If this ever drifts, the sector
+    // model has started charging kernels it should not.
+    for name in ["saxpy.lyth", "sum.lyth", "horner.lyth", "split.lyth", "max.lyth"] {
+        let src = example(name);
+        let unit = parse(&src).unwrap();
+        let ir = ir::lower(&unit, &unit.kernels[0]).unwrap();
+        assert_eq!(ir.cost.coalescence(), 1.0, "{name}");
+        assert_eq!(
+            ir.cost.sector_read_per_element + ir.cost.sector_write_per_element,
+            ir.cost.bytes_per_element(),
+            "{name}: sectors and payload must agree when every access is contiguous"
+        );
+        assert!(ir.streams.iter().all(|s| s.coalesced), "{name}");
+    }
+}
+
+#[test]
+fn a_transpose_is_charged_a_sector_for_its_strided_side() {
+    let src = example("transpose.lyth");
+    let unit = parse(&src).unwrap();
+    let ir = ir::lower(&unit, &unit.kernels[0]).unwrap();
+
+    // `a[i, j]` innermost index is `j`, the fast variable: contiguous. `b[j, i]` is not.
+    let by = |n: &str| ir.streams.iter().find(|s| s.buffer == n).unwrap().clone();
+    assert!(by("a").coalesced, "a is read along its rows");
+    assert!(!by("b").coalesced, "b is written down its columns");
+
+    assert_eq!(ir.cost.bytes_per_element(), 8.0, "the payload is unchanged");
+    assert_eq!(ir.cost.sector_read_per_element, 4.0);
+    assert_eq!(ir.cost.sector_write_per_element, 32.0);
+    assert!((ir.cost.coalescence() - 8.0 / 36.0).abs() < 1e-12);
+}
+
+#[test]
+fn the_coalescence_rule_is_about_the_fast_index_not_about_transposition() {
+    // The rule is `innermost index == innermost space variable`, which is why it generalises.
+    // Here both buffers are walked the same way, so nothing is strided even though the kernel
+    // is rank 2 and indexes explicitly.
+    let src = "machine sm_120\n\nkernel copy2d(rows: u32, cols: u32, a: [f32; rows, cols], b: [f32; rows, cols])\n    space i, j : rows, cols\n    stream a : dram -> reg\n    stream b : dram -> reg, drain\n    at reg:\n        b[i, j] = a[i, j]\n";
+    let unit = parse(src).unwrap();
+    let ir = ir::lower(&unit, &unit.kernels[0]).unwrap();
+    assert_eq!(ir.cost.coalescence(), 1.0, "a rank-2 copy is contiguous both sides");
+
+    // And swapping only the space's variable order makes the same source strided, because the
+    // fast index moved. Nothing about the buffers changed.
+    let swapped = src.replace("space i, j : rows, cols", "space j, i : cols, rows");
+    let unit = parse(&swapped).unwrap();
+    let ir = ir::lower(&unit, &unit.kernels[0]).unwrap();
+    assert!(ir.cost.coalescence() < 1.0, "the fast variable is now `i`");
 }

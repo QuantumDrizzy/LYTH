@@ -157,6 +157,40 @@ puts `+0.0` and `-0.0` through one and they did not: `f32::max` returns *either*
 both compare equal, giving `+0.0` folded and `-0.0` executed, so the evaluator stopped using it
 for that case. An oracle cannot be built on unspecified behaviour.
 
+## What the bus carries, beside what the source asks for
+
+The byte count above is the **payload**: the bytes the kernel wants. The memory system moves
+32-byte sectors, and whether those two agree depends on how the buffer is walked.
+
+A 32-byte sector is eight f32. A warp is 32 threads. When neighbouring threads are on
+neighbouring elements, a warp covers 128 contiguous bytes in four sectors and every byte fetched
+is a byte wanted. When they are not, each thread lands in its own sector and 32 bytes move for
+every 4 wanted.
+
+The rule, at rank 2, is about the **fast index** and not about transposition:
+
+> A buffer is coalesced when its **innermost** index is the space's **innermost** variable.
+
+Under `space i, j`, the flattening puts `j` in the ones place of the linear index, so `j` is what
+advances between neighbouring threads. `a[i, j]` is contiguous; `a[j, i]` is not. A rank-2 copy
+that indexes both buffers `[i, j]` is contiguous on both sides, and swapping only the *space's*
+variable order — changing no buffer — makes the same source strided.
+
+```
+  payload  4 read + 4 written, at dram
+  sectors  4 read + 32 written  (coalescence 0.222, upper bound)
+  exact    36 byte per element at this shape (coalescence 0.222), against the 36 byte bound
+```
+
+Three numbers because they answer three questions. The **payload** is what `intensity` is checked
+against and what the source asked for. The **sectors** figure is a static upper bound: a strided
+access is charged a whole sector, which assumes a row of eight elements or more. The **exact**
+line needs the launch extents, because the real cost is `min(32, 4 * row)` — a matrix four
+columns wide wastes four times, not eight.
+
+`lyth run` also says when the working set fits in L2, read from the driver rather than assumed,
+because a model of DRAM traffic cannot be compared against a device that never went to DRAM.
+
 ## Cost, derived not declared
 
 The compiler counts bytes from the streams and flops from the expression tree, and checks
