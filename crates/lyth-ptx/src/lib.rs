@@ -370,6 +370,13 @@ impl Emitter {
                 lyth_lang::ast::ReduceOp::Sum => {
                     line(out, &format!("add.rn.f32 {a}, {a}, {v};"));
                 }
+                // No rounding modifier: a selection has nothing to round.
+                lyth_lang::ast::ReduceOp::Max => {
+                    line(out, &format!("max.f32 {a}, {a}, {v};"));
+                }
+                lyth_lang::ast::ReduceOp::Min => {
+                    line(out, &format!("min.f32 {a}, {a}, {v};"));
+                }
             }
         }
 
@@ -432,7 +439,7 @@ impl Emitter {
         let active = self.pred();
         let a = self.f32();
         let b = self.f32();
-        let sum = self.f32();
+        let combined = self.f32();
         let mate_off = self.b64();
         let mate = self.b64();
         let partner = self.b32();
@@ -445,10 +452,16 @@ impl Emitter {
         line(out, &format!("ld.shared.f32 {b}, [{mate}];"));
         match r.op {
             lyth_lang::ast::ReduceOp::Sum => {
-                line(out, &format!("add.rn.f32 {sum}, {a}, {b};"));
+                line(out, &format!("add.rn.f32 {combined}, {a}, {b};"));
+            }
+            lyth_lang::ast::ReduceOp::Max => {
+                line(out, &format!("max.f32 {combined}, {a}, {b};"));
+            }
+            lyth_lang::ast::ReduceOp::Min => {
+                line(out, &format!("min.f32 {combined}, {a}, {b};"));
             }
         }
-        line(out, &format!("st.shared.f32 [{slot}], {sum};"));
+        line(out, &format!("st.shared.f32 [{slot}], {combined};"));
         let _ = writeln!(out, "$L_skip_{k}:");
         // Every thread reaches this barrier, including the ones that skipped the combine.
         line(out, "bar.sync 0;");

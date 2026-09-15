@@ -15,7 +15,7 @@ use clap::{Parser, Subcommand};
 use serde::Deserialize;
 
 use lyth_cuda::{grid_for, median_and_spread, time_launches, Arg, Context, Launch};
-use lyth_lang::ast::Ty;
+use lyth_lang::ast::{ReduceOp, Ty};
 use lyth_lang::eval::{eval_with_launch, Inputs};
 use lyth_lang::{check_intensity, ir, parse, KernelIr, Ridge};
 use lyth_ptx::emit;
@@ -595,17 +595,30 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
 
     if mismatches == 0 {
         println!("  verify   BIT-EXACT against the IR evaluated on the host, {n} elements");
-        if let Some(name) = &reduce_target {
-            // Finish the reduction the way the caller has to: sum the block partials. Printed
-            // because a bit-exact match between two buffers of zeros is not evidence of
-            // anything, and this is the number the kernel was written to produce.
+        if let Some(r) = &ir.reduction {
+            // Finish the reduction the way the caller has to, **with the kernel's own
+            // operator**. Printed because a bit-exact match between two buffers of zeros is
+            // not evidence of anything, and this is the number the kernel was written to
+            // produce.
+            let name = &r.into;
             let partials = &expected.buffers[name];
-            let total: f64 = partials[..grid as usize].iter().map(|v| *v as f64).sum();
-            println!(
-                "           {} block partials in `{name}`, summed in the same tree order",
-                grid
-            );
-            println!("  reduced  {total:.6e}  (the caller adds the partials; ADR-0011)");
+            let slice = &partials[..grid as usize];
+            let op = r.op.name();
+            let total: f64 = match r.op {
+                ReduceOp::Sum => slice.iter().map(|v| *v as f64).sum(),
+                ReduceOp::Max => slice.iter().fold(f64::NEG_INFINITY, |a, v| a.max(*v as f64)),
+                ReduceOp::Min => slice.iter().fold(f64::INFINITY, |a, v| a.min(*v as f64)),
+            };
+            // Whether the order of this last step can change the answer is a property of the
+            // operator, not a detail: `sum` in a different order is a different bit pattern,
+            // `max` in any order is the same one. ADR-0013.
+            let ordering = if r.op.is_reorderable() {
+                "in any order, because the operator is associative on the bits"
+            } else {
+                "in index order, which is one of several answers the caller could get"
+            };
+            println!("           {grid} block partials in `{name}`, combined with `{op}` {ordering}");
+            println!("  reduced  {total:.6e}  (the caller combines the partials; ADR-0011)");
         }
         println!("ok");
         ExitCode::SUCCESS

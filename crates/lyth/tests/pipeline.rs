@@ -77,6 +77,12 @@ fn every_working_example_compiles_with_the_cost_it_documents() {
         // Reductions: the store is the block partial, written by thread 0.
         ("dot.lyth", 2.0, 8.0, 2, 1),
         ("sum.lyth", 1.0, 4.0, 1, 1),
+        // `max` retires no flops: a compare-and-select is not arithmetic. ADR-0013.
+        ("max.lyth", 0.0, 4.0, 1, 1),
+        ("min.lyth", 0.0, 4.0, 1, 1),
+        // The two probes. Their arithmetic exists only to manufacture the awkward values.
+        ("signed-zero.lyth", 2.0, 4.0, 1, 1),
+        ("not-a-number.lyth", 2.0, 4.0, 1, 1),
     ];
     for (name, flops, bytes, loads, stores) in cases {
         let src = example(name);
@@ -185,4 +191,32 @@ fn grid_stride_deletes_the_idle_thread_branch_from_a_reduction() {
     // Still exactly two barriers, and still one store guarded on thread 0.
     assert_eq!(m.ptx.matches("bar.sync 0;").count(), 2, "{}", m.ptx);
     assert_eq!(m.ptx.matches("st.global.f32").count(), 1, "{}", m.ptx);
+}
+
+#[test]
+fn a_max_reduction_selects_and_never_adds() {
+    // The whole claim of ADR-0013 in one assertion: no arithmetic instruction appears in a
+    // max reduction, so `intensity 0.0` is not a rounding artefact.
+    let m = compile("max.lyth").expect("max should compile");
+    assert_eq!(m.ptx.matches("max.f32").count(), 2, "{}", m.ptx);
+
+    // The mirror, so the third operator is not covered by symmetry alone.
+    let n = compile("min.lyth").expect("min should compile");
+    assert_eq!(n.ptx.matches("min.f32").count(), 2, "{}", n.ptx);
+    assert!(n.ptx.contains("0f7F800000"), "identity must be +inf: {}", n.ptx);
+    assert_eq!(m.ptx.matches("add.rn.f32").count(), 0, "{}", m.ptx);
+    assert_eq!(m.ptx.matches("fma.rn.f32").count(), 0, "{}", m.ptx);
+    // Identity is -inf, so a thread with no element cannot win the maximum.
+    assert!(m.ptx.contains("0fFF800000"), "{}", m.ptx);
+}
+
+#[test]
+fn a_max_reduction_declares_zero_intensity_and_is_believed() {
+    // `check_intensity` has a zero branch, and this is the first example to use it.
+    let src = example("max.lyth");
+    let unit = parse(&src).unwrap();
+    let ir = ir::lower(&unit, &unit.kernels[0]).unwrap();
+    assert_eq!(ir.cost.intensity, 0.0);
+    lyth_lang::check_intensity(&ir, Some(0.0), None, 0.05)
+        .expect("a kernel with no arithmetic may declare none");
 }

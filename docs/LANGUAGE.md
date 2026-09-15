@@ -66,20 +66,41 @@ reduce sum p : reg -> smem -> dram into partial
 ```
 
 Combines the per-element value `p` across the block and writes **one value per block** into
-`partial`, which must therefore hold at least `gridDim.x` elements. Summing those partials is
-the caller's job — `lyth run` prints the total.
+`partial`, which must therefore hold at least `gridDim.x` elements. Combining those partials is
+the caller's job — `lyth run` does it with the kernel's own operator and prints the result.
 
 The path `reg -> smem -> dram` is written out rather than implied, for the same reason a stream
 writes its own: this language does not infer movement.
 
-`sum` only, one reduction per kernel. The target must **not** be streamed: it carries no
-per-element traffic, and declaring some would inflate the byte count.
+One reduction per kernel. The target must **not** be streamed: it carries no per-element
+traffic, and declaring some would inflate the byte count.
 
-Two details that are not decoration. Threads past the end of the buffer **contribute the
-identity** rather than leaving, or the shared slots they own hold whatever was there before.
-And the tree order is part of the contract: float addition is not associative, so the host
-reference walks the identical tree. `examples/dot.lyth` at four elements gives 2.0 by the tree
-and 1.0 by a left fold — the difference is not rounding noise.
+| operator | identity | flop/combine | reorderable |
+|---|---|---|---|
+| `sum` | `0.0` | 1 | no |
+| `max` | `-inf` | 0 | yes |
+| `min` | `+inf` | 0 | yes |
+
+**`max` and `min` retire no flops.** A compare-and-select is not arithmetic: no vendor counts it
+in a FLOP/s figure and no published flop count for a reduction counts its comparisons. So
+`examples/max.lyth` derives `intensity 0.0`, and that is a statement with content — a max
+reduction cannot be compute-bound at any size, on any machine. Zero flops is not zero time: the
+combine still issues. See ADR-0013.
+
+**Only `sum` cares about order.** Float addition is not associative, so the tree shape is part
+of the contract and the host reference walks the identical tree. `examples/dot.lyth` at four
+elements gives 2.0 by the tree and 1.0 by a left fold — the difference is not rounding noise.
+`max` and `min` select an operand and never round, so every tree shape gives the same bits.
+
+Threads past the end of the buffer **contribute the identity** rather than leaving, or the
+shared slots they own hold whatever was there before. For `max` that identity is `-inf`, so a
+block with no elements at all writes the max of an empty set, which is the right answer.
+
+The awkward values were measured rather than assumed. `examples/not-a-number.lyth` puts NaN and
+both infinities through a reduction and host and device agree bit for bit. `examples/signed-zero.lyth`
+puts `+0.0` and `-0.0` through one and they did not: `f32::max` returns *either* operand when
+both compare equal, giving `+0.0` folded and `-0.0` executed, so the evaluator stopped using it
+for that case. An oracle cannot be built on unspecified behaviour.
 
 ## Cost, derived not declared
 

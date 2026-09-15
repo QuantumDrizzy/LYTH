@@ -51,12 +51,16 @@ pub struct ReduceDecl {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReduceOp {
     Sum,
+    Max,
+    Min,
 }
 
 impl ReduceOp {
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "sum" => Some(ReduceOp::Sum),
+            "max" => Some(ReduceOp::Max),
+            "min" => Some(ReduceOp::Min),
             _ => None,
         }
     }
@@ -64,6 +68,8 @@ impl ReduceOp {
     pub fn name(self) -> &'static str {
         match self {
             ReduceOp::Sum => "sum",
+            ReduceOp::Max => "max",
+            ReduceOp::Min => "min",
         }
     }
 
@@ -72,13 +78,89 @@ impl ReduceOp {
     pub fn identity(self) -> f32 {
         match self {
             ReduceOp::Sum => 0.0,
+            // The max of an empty set. A block whose threads all fall past `n` writes this to
+            // its partial, and a caller combining partials with `max` is unaffected by it --
+            // the same property that makes 0.0 safe for `sum`.
+            ReduceOp::Max => f32::NEG_INFINITY,
+            ReduceOp::Min => f32::INFINITY,
         }
     }
 
     /// FLOPs one combine retires.
+    ///
+    /// **`max` and `min` retire none.** They are a compare-and-select, not arithmetic: no
+    /// vendor's FLOP/s figure counts them and no published flop count for a reduction counts
+    /// its comparisons. Charging them would place the kernel against a compute ceiling
+    /// measured with FMA, which is the one comparison ADR-0005 forbids.
+    ///
+    /// [KNOWN LIMIT] Zero flops is not zero time. Each combine still issues, and `bar.sync`
+    /// between rounds costs what it costs. This is an arithmetic count, not an instruction
+    /// count. See ADR-0013.
     pub fn flops(self) -> f64 {
         match self {
             ReduceOp::Sum => 1.0,
+            ReduceOp::Max | ReduceOp::Min => 0.0,
+        }
+    }
+
+    /// Combine two values exactly as the generated PTX does.
+    ///
+    /// This is the oracle's contract, and the signed-zero branch is why it cannot be
+    /// `a.max(b)`.
+    ///
+    /// **`f32::max` is not a deterministic function of its inputs when both are zero.** It
+    /// lowers to `llvm.maxnum`, which is specified to return *either* operand when they
+    /// compare equal, and `-0.0 == 0.0`. Measured on this machine: constant-folded at compile
+    /// time it yields `+0.0`, executed at run time it yields `-0.0`. The same source, two
+    /// answers, decided by the optimiser.
+    ///
+    /// PTX `max.f32` has no such freedom: it returns `+0.0`, which is what IEEE 754-2019
+    /// `maximumNumber` specifies. So the branch below is not the evaluator deferring to the
+    /// hardware over the host language -- it is the evaluator refusing to be built on
+    /// unspecified behaviour. Without it, 135 of 65536 block partials differed from the
+    /// device. See ADR-0013 and `examples/signed-zero.lyth`.
+    pub fn combine(self, a: f32, b: f32) -> f32 {
+        match self {
+            ReduceOp::Sum => a + b,
+            ReduceOp::Max => {
+                if a == 0.0 && b == 0.0 {
+                    // Both zero, differing only in sign: take the positive one.
+                    if a.is_sign_negative() {
+                        b
+                    } else {
+                        a
+                    }
+                } else {
+                    a.max(b)
+                }
+            }
+            ReduceOp::Min => {
+                if a == 0.0 && b == 0.0 {
+                    if a.is_sign_negative() {
+                        a
+                    } else {
+                        b
+                    }
+                } else {
+                    a.min(b)
+                }
+            }
+        }
+    }
+
+    /// Whether combining is associative on the bit patterns, not merely in mathematics.
+    ///
+    /// `max` and `min` select an operand and never round, so a tree's result is the same bit
+    /// pattern for every tree shape, block size and grid. Floating-point addition is not
+    /// associative, so `sum`'s result depends on the shape of the tree that produced it.
+    ///
+    /// Nothing in the compiler reorders a reduction yet. This records the property so that
+    /// the optimisation, when it arrives, has a document to point at rather than an
+    /// assumption to make. See ADR-0013.
+    pub fn is_reorderable(self) -> bool {
+        match self {
+            ReduceOp::Sum => false,
+            ReduceOp::Max | ReduceOp::Min => true,
         }
     }
 }
@@ -231,3 +313,63 @@ impl BinOp {
         1.0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The disagreement ADR-0013 found on sm_120, pinned so it cannot come back.
+    ///
+    /// These fail if anyone simplifies `combine` back to `a.max(b)`, whose result for a pair
+    /// of zeros is whatever the optimiser felt like that day.
+    ///
+    /// Note what is *not* asserted here: the value of `f32::max(-0.0, 0.0)`. It is
+    /// unspecified, so pinning it would make this test depend on the thing the code exists to
+    /// avoid depending on.
+    #[test]
+    fn combine_orders_signed_zeros_the_way_the_hardware_does() {
+        let max = ReduceOp::Max;
+        let min = ReduceOp::Min;
+
+        // Both arguments are equal under ==, so the sign bit is the only observable.
+        assert!(max.combine(-0.0, 0.0).is_sign_positive());
+        assert!(max.combine(0.0, -0.0).is_sign_positive());
+        assert!(min.combine(-0.0, 0.0).is_sign_negative());
+        assert!(min.combine(0.0, -0.0).is_sign_negative());
+
+        // A pair of the same zero keeps its sign rather than acquiring one.
+        assert!(max.combine(-0.0, -0.0).is_sign_negative());
+        assert!(min.combine(0.0, 0.0).is_sign_positive());
+
+    }
+
+    #[test]
+    fn combine_returns_the_non_nan_operand() {
+        // Measured against sm_120 by examples/not-a-number.lyth: neither side propagates.
+        let max = ReduceOp::Max;
+        assert_eq!(max.combine(f32::NAN, 3.0), 3.0);
+        assert_eq!(max.combine(3.0, f32::NAN), 3.0);
+        assert!(max.combine(f32::NAN, f32::NAN).is_nan());
+    }
+
+    #[test]
+    fn the_identity_cannot_win_its_own_reduction() {
+        // A block with no elements must not change the answer.
+        let max = ReduceOp::Max;
+        let min = ReduceOp::Min;
+        assert_eq!(max.combine(max.identity(), -1e30), -1e30);
+        assert_eq!(min.combine(min.identity(), 1e30), 1e30);
+        assert_eq!(ReduceOp::Sum.combine(ReduceOp::Sum.identity(), 7.0), 7.0);
+    }
+
+    #[test]
+    fn only_selection_is_reorderable_and_only_selection_is_free() {
+        for op in [ReduceOp::Max, ReduceOp::Min] {
+            assert!(op.is_reorderable(), "{} selects, so order cannot matter", op.name());
+            assert_eq!(op.flops(), 0.0, "{} is not arithmetic", op.name());
+        }
+        assert!(!ReduceOp::Sum.is_reorderable());
+        assert_eq!(ReduceOp::Sum.flops(), 1.0);
+    }
+}
+

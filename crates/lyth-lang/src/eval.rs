@@ -210,9 +210,7 @@ pub fn eval_with_launch(
                 let mut acc = r.op.identity();
                 let mut i = b * block + t;
                 while i < n {
-                    acc = match r.op {
-                        ReduceOp::Sum => acc + reduced[i],
-                    };
+                    acc = r.op.combine(acc, reduced[i]);
                     i += stride;
                 }
                 slots.push(acc);
@@ -224,14 +222,19 @@ pub fn eval_with_launch(
 }
 
 /// The same tree the generated PTX walks: halve the stride, combine `slots[t]` with
-/// `slots[t + stride]`, repeat. Order is the whole point, not an implementation detail.
+/// `slots[t + stride]`, repeat.
+///
+/// For `sum` the order is the whole point, not an implementation detail: floating-point
+/// addition is not associative, so a different tree gives a different bit pattern. For `max`
+/// and `min` the order cannot matter -- they select an operand and never round -- and this
+/// function reproduces the tree anyway. The evaluator is the oracle for what the GPU does,
+/// and an oracle that agrees for a reason the operator happens to supply is one operator away
+/// from disagreeing silently. See ADR-0013.
 fn tree_reduce(slots: &mut [f32], op: ReduceOp) -> f32 {
     let mut stride = slots.len() / 2;
     while stride > 0 {
         for t in 0..stride {
-            slots[t] = match op {
-                ReduceOp::Sum => slots[t] + slots[t + stride],
-            };
+            slots[t] = op.combine(slots[t], slots[t + stride]);
         }
         stride /= 2;
     }

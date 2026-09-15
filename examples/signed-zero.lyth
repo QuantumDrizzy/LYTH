@@ -1,0 +1,23 @@
+machine sm_120
+
+# Not a kernel anyone wants. A probe that found a real disagreement, kept as the regression
+# test for it.
+#
+# x * (x - x) is +0.0 where x is positive and -0.0 where x is negative, so both signed zeros
+# meet inside one reduction. 135 of 65536 block partials came back different from the device.
+#
+# The cause is not that the two languages order signed zeros differently. `f32::max` lowers to
+# `llvm.maxnum`, which returns *either* operand when they compare equal -- and -0.0 == 0.0. It
+# yields +0.0 when the optimiser folds it and -0.0 when it runs. PTX `max.f32` returns +0.0
+# either way, as IEEE 754-2019 `maximumNumber` specifies.
+#
+# So the evaluator stopped calling `f32::max` for that case. Not because the hardware outranks
+# the host language, but because an oracle cannot be built on unspecified behaviour. ADR-0013.
+kernel signed_zero(n: u32, x: [f32], partial: [f32])
+    intensity 0.5
+
+    stream x : dram -> reg
+    reduce max m : reg -> smem -> dram into partial
+
+    at reg:
+        m = x * (x - x)

@@ -87,6 +87,11 @@ pub fn lex(src: &str) -> Result<Vec<Token>, LexError> {
     Lexer::new(src).run()
 }
 
+/// Carriage return, named rather than written as a literal so that a script rewriting this
+/// file cannot turn the escape into the character it stands for. That is how the CRLF bug
+/// this constant exists for was found in the first place.
+const CR: char = '\r';
+
 struct Lexer {
     chars: Vec<char>,
     i: usize,
@@ -100,7 +105,16 @@ struct Lexer {
 impl Lexer {
     fn new(src: &str) -> Self {
         Self {
-            chars: src.chars().collect(),
+            // Carriage returns are dropped here rather than handled at every site that
+            // looks at a character. A CR is not part of any token, and layout is measured in
+            // columns, so removing it cannot move a span: it only ever appears immediately
+            // before the LF it belongs to, past the last token on the line.
+            //
+            // This is not a nicety. This project is developed on Windows, where editors
+            // write CRLF by default, and without it a .lyth file saved by Notepad fails with
+            // "expected `kernel`, found an indented block" -- an error about the wrong thing
+            // entirely. Found by accident when a script rewrote an example. ADR-0013.
+            chars: src.chars().filter(|c| *c != CR).collect(),
             i: 0,
             line: 1,
             col: 1,
@@ -383,5 +397,26 @@ mod tests {
     fn errors_carry_the_line_they_happened_on() {
         let e = lex("kernel k()\n  a = 1\n  b = $\n").unwrap_err();
         assert_eq!(e.span.line, 3, "{e}");
+    }
+}
+
+#[cfg(test)]
+mod crlf {
+    use super::*;
+
+    /// A .lyth file saved by a Windows editor must lex identically to one saved on Linux.
+    #[test]
+    fn a_file_saved_on_windows_lexes_the_same_as_one_saved_on_linux() {
+        let unix = "machine sm_120\n\nkernel k(n: u32, x: [f32])\n    stream x : dram -> reg\n";
+        let dos = unix.replace('\n', "\r\n");
+        let a = lex(unix).expect("LF must lex");
+        let b = lex(&dos).expect("CRLF must lex");
+        // Spans included: a dropped CR must not shift a line or a column.
+        assert_eq!(a, b, "line endings must not change the token stream");
+    }
+
+    #[test]
+    fn a_stray_carriage_return_is_not_a_token() {
+        assert_eq!(lex("machine sm_120\n").unwrap(), lex("machine\r sm_120\n").unwrap());
     }
 }

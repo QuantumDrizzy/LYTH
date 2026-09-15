@@ -1,0 +1,17 @@
+machine sm_120
+
+# The smallest element, and the same machinery as max.lyth with the identity flipped: -inf
+# becomes +inf, max.f32 becomes min.f32, and the flop count stays at zero. It exists so that
+# the third operator reaches the device rather than only the unit tests.
+#
+# The signed-zero disagreement in ADR-0013 is a mirror image here. Where max returned +0.0 on
+# the device and -0.0 on the host, min returned -0.0 on the device and +0.0 on the host: 121
+# of 65536 partials differed, against 135 for max.
+kernel min_of(n: u32, x: [f32], partial: [f32])
+    intensity 0.0
+
+    stream x : dram -> reg
+    reduce min m : reg -> smem -> dram into partial
+
+    at reg:
+        m = x

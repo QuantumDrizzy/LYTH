@@ -1,0 +1,16 @@
+machine sm_120
+
+# The largest element of a vector.
+#
+# Every other example in this directory declares an intensity above zero. This one declares
+# zero, and it is not a mistake: `max` is a compare-and-select, not arithmetic. No flop ever
+# enters this kernel, so it cannot be compute-bound at any n, on any machine. Bandwidth is the
+# only lever there is. See ADR-0013.
+kernel max_of(n: u32, x: [f32], partial: [f32])
+    intensity 0.0
+
+    stream x : dram -> reg
+    reduce max m : reg -> smem -> dram into partial
+
+    at reg:
+        m = x
