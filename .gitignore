@@ -5,3 +5,7 @@
 # Python bytecode from the tools in tools/
 __pycache__/
 *.pyc
+
+# Generated reports: the HTML that produced them is the artifact, not this.
+*.pdf
+bench/gen/
