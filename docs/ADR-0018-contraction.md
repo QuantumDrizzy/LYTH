@@ -421,11 +421,23 @@ Two mechanisms eliminated by measurement rather than by argument:
 * **Not the skew.** Skewed and unskewed agree to within the run-to-run noise (which is itself a
   few percent, so the counter is not deterministic) at every size.
 * **Not occupancy.** The zeros end where the grid passes 36 blocks on 36 SMs, which is the
-  obvious suspect. Holding the work fixed at `512^3` and launching `--grid 36` instead of 256 —
-  one block per SM against seven — gives **67,667 against 67,684**. It does not move.
+  obvious suspect. Holding the work fixed at `512^3` and varying only the grid:
 
-What is left is an excess that scales with shared traffic and appears only past a threshold:
-0.024% of shared accesses at 512, 0 at 128. It is the **same shape** as the unexplained finding
+  | `--grid` | blocks per SM | conflicts |
+  |---|---|---|
+  | 36 | 1 | 67,667 |
+  | 64 | ~2 | 54,976 |
+  | 256 (default) | ~7 | 67,684 / 68,319 |
+
+  One block per SM and seven give the same figure, so co-residency is not the mechanism. The
+  middle row is not explained and is **not** noise: the two 256 runs are a replicate pair 1%
+  apart, and 54,976 is 19% below them. So the run-to-run spread on a *fixed* launch is a few
+  percent, and the spread *across* launch shapes is not — a distinction worth keeping, because
+  the first is a reason to repeat a measurement and the second is a reason to look.
+
+What is left is an excess that appears only past a threshold — 0.024% of shared accesses at
+512, 0 at 128 — and that does not scale cleanly with anything measured: not the skew, not
+blocks per SM, and not monotonically with the grid. It is the **same shape** as the unexplained finding
 in ADR-0017 — a few thousand `op_st` conflicts at `1024^2` only, absent at smaller sizes,
 unaffected by the skew. Two kernels, one phenomenon, and it is recorded as one open question
 rather than explained twice.
