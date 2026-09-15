@@ -1,6 +1,6 @@
 # ADR-0018 — Contraction, where the cost model stops being a number
 
-**Status:** Proposed — steps 1 and 2 built
+**Status:** Proposed — steps 1, 2 and 3 built
 **Date:** 2026-09-16
 **Depends on:** ADR-0000 (why), ADR-0017 (the tile), ADR-0015 (shape)
 
@@ -331,6 +331,115 @@ speedup would be reporting the definition of a tile. The falsifiable claim is th
 
 (A reviewer put the naive figure at ~824 GB and the ratio at 48x. It is 549.8 GB and 31.88x, for
 the reason above — which is why the baseline had to be defined before it was quoted.)
+
+
+## Step 3, as built
+
+A matmul runs. `lyth run examples/matmul.lyth --set m=97 --set n=131 --set k=67`:
+
+```
+verify   BIT-EXACT against the IR evaluated on the host, 12707 elements
+```
+
+Bit-exact at every shape tried: `97x131x67`, `7x5x3`, `1x1x1`, `33x1x97`, `1x33x1`,
+`31x31x256`, `256x256x31`, `32x32x32`, `128x96x160`. The first is the one that matters — 32
+divides none of 97, 131 or 67, so the edge tile of `m`, of `n` and of `k` are all partial at
+once, which is the case a guard that is wrong in the generous direction passes on every
+multiple of 32.
+
+### Five decisions, each a correctness question the transpose never had to answer
+
+**The tile is square.** `A` stages a `T_i x T_p` tile and `B` a `T_p x T_j` one, both at one
+element per thread of a `T_i * T_j` block, and that closes only when the three are equal. The
+cost model derives a rectangular tile correctly (`tile 16, 64` gives `0.3125 * k + 4`); there is
+no schedule for it here, and the refusal says which of the two is missing.
+
+**The `k` tail is a loop bound, not a zero fill.** Zero-filling the last partial tile is correct
+for `sum`, where a zero term changes nothing, and **wrong for `max`**, where it clamps the
+result to be at least zero. The inner loop runs `min(T, k - p)` times instead: exact for every
+operator, and less work. This is the ADR-0017 lesson again — the schedule has to be modelled
+exactly where it changes the values.
+
+**Both barriers sit outside every branch**, and the step loop's bound is `ceil(k/T)`, which is
+block-uniform.
+
+**The accumulator is not fused.** `acc = acc + a * b` emits a multiply and an add, not
+`fma.rn.f32`. An fma rounds once where two instructions round twice, so fusing changes the
+answer — for the better, and only after the host oracle agrees to change with it. ADR-0010's
+decision to make again, not a free improvement to take here.
+
+**Out-of-range threads still take part.** A thread whose output is past `m` or `n` loads zeros,
+accumulates nonsense and is discarded by the store guard. Branching out would leave its
+neighbours waiting at a barrier.
+
+### The oracle is a separate walk
+
+`eval` assumes every buffer's index is a permutation of the space variables, so one linear
+element index addresses them all. `a[i, p]` names an axis the space does not iterate and no
+linear index reaches it. The contraction oracle walks `(i, j)` and then `p` ascending — the
+order the device walks, because float addition is not associative and the check is bit-exact
+rather than tolerant.
+
+### Three controls, because "it ran" is not "it is right"
+
+| control | result |
+|---|---|
+| `compute-sanitizer --tool racecheck` | **0 hazards** |
+| the same, with barrier 2 deleted | **2 hazards**, and 11182 of 12707 elements differ |
+| `compute-sanitizer --tool memcheck`, ragged shape | **0 errors** |
+| `--shared-bytes 0` (ADR-0017's bypass) | **ILLEGAL_ADDRESS** |
+
+The second row is the one that makes the first mean anything: the tool was shown to fire before
+it was believed. The last is what makes the derived `k/T` reuse a claim about this kernel — a
+contraction that is correct without the shared memory it asked for never staged, and its
+traffic expression would be fiction.
+
+### A pre-registration, falsified, and two eliminations
+
+Written before measuring: *no access in this schedule is a column read — `A` is a broadcast
+within a warp and `B` is row-contiguous — so the derived skew changes nothing and
+`l1tex__data_bank_conflicts_pipe_lsu.sum` is **0 with and without it**.*
+
+| `m = n = k` | skewed | unskewed |
+|---|---|---|
+| 64 | 0 | 0 |
+| 128 | 0 | 0 |
+| 256 | 5,218 | 4,786 |
+| 512 | 67,684 | 68,221 |
+
+**Half right, and the half that was wrong was the absolute.** The skew is not the mechanism —
+that part held at every size. But the conflicts are not zero past 128, and "0" was the tidier
+sentence rather than the one the derivation supported. ADR-0000's rule, broken a third time by
+the same move.
+
+The calibration matters here: the same metric on an unskewed transpose at 512x512 reports
+**253,952**, which is 8,192 warps times 31 — exactly the conflict a column read produces. So the
+counter works and the numbers above are small, not absent.
+
+Two mechanisms eliminated by measurement rather than by argument:
+
+* **Not the skew.** Skewed and unskewed agree to within the run-to-run noise (which is itself a
+  few percent, so the counter is not deterministic) at every size.
+* **Not occupancy.** The zeros end where the grid passes 36 blocks on 36 SMs, which is the
+  obvious suspect. Holding the work fixed at `512^3` and launching `--grid 36` instead of 256 —
+  one block per SM against seven — gives **67,667 against 67,684**. It does not move.
+
+What is left is an excess that scales with shared traffic and appears only past a threshold:
+0.024% of shared accesses at 512, 0 at 128. It is the **same shape** as the unexplained finding
+in ADR-0017 — a few thousand `op_st` conflicts at `1024^2` only, absent at smaller sizes,
+unaffected by the skew. Two kernels, one phenomenon, and it is recorded as one open question
+rather than explained twice.
+
+The consequence for the language is concrete and not deferred: **`predicted_bank_conflicts: 0`
+is falsified for this kernel.** It is derived from the skew being coprime with the bank count,
+which remains true and is not what decides the outcome here.
+
+### What step 3 does not claim
+
+It is not fast, and no timing appears above. Intensity 8 against a ridge of 42.9 makes it
+memory-bound by construction (claim 3), and thread coarsening is the way out and the next ADR.
+Step 5 is the `--ncu` traffic measurement: 1028 bytes per output at `k = 4096`, **as an L2
+claim**, with DRAM expected lower.
 
 ## Build sequence
 

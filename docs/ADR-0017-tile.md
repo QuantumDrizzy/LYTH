@@ -232,6 +232,15 @@ that is identical at all three sizes, with a figure that moves between runs — 
 **This is not explained here.** It is small, it is absent at smaller sizes, it does not scale
 with anything the kernel does, and it is not what the skew is about.
 
+> **[UPDATE, ADR-0018 step 3]** The same phenomenon appears in the tiled contraction, on a
+> different access pattern: 0 conflicts at 128 and below, ~5,200 at 256, ~67,700 at 512, with
+> the skew making no difference and the run-to-run figure moving by a few percent. Two
+> mechanisms are now eliminated by measurement rather than by argument — it is not the skew,
+> and it is **not occupancy**: holding the work fixed at 512³ and launching 36 blocks on 36 SMs
+> instead of 256 gives 67,667 against 67,684. Two kernels, one unexplained excess, recorded
+> once. It scales with shared traffic past a threshold and is 0.024% of shared accesses at its
+> largest.
+
 What the claim should have said, and what the measurement supports, is narrower:
 
 > The skew changes the **load** conflicts and leaves the store conflicts alone.
