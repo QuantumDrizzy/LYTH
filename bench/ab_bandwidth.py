@@ -37,12 +37,43 @@ import importlib
 import json
 import pathlib
 import statistics as st
+import subprocess
 import sys
 
 import torch
 
-GEN = pathlib.Path(__file__).resolve().parent / "gen"
+REPO = pathlib.Path(__file__).resolve().parents[1]
+GEN = REPO / "bench" / "gen"
 sys.path.insert(0, str(GEN))
+
+
+def ensure_bindings(names, binary: pathlib.Path, machine: pathlib.Path) -> None:
+    """Generate the Python bindings this file imports, if they are not already there.
+
+    `bench/gen/` is build output and is not committed, so a fresh clone has nothing to import.
+    Verified by cloning: `ModuleNotFoundError: No module named 'sum'`. A benchmark that only
+    runs on the machine that wrote it is a benchmark nobody can check, which is the same class
+    of defect as the CRLF one -- HEAD could not parse its own examples on a fresh clone either.
+    """
+    GEN.mkdir(parents=True, exist_ok=True)
+    missing = [n for n in names if not (GEN / f"{n}.py").exists()]
+    if not missing:
+        return
+    if not binary.exists():
+        sys.exit(
+            f"{binary} is not built. Run `cargo build --release` first, or pass --binary."
+        )
+    print(f"  generating {len(missing)} binding(s) into {GEN.relative_to(REPO)}", file=sys.stderr)
+    for name in missing:
+        src = REPO / "examples" / f"{name}.lyth"
+        done = subprocess.run(
+            [str(binary), "build", str(src), "--machine", str(machine),
+             "-o", "nul" if sys.platform == "win32" else "/dev/null",
+             "--bind-py", str(GEN / f"{name}.py")],
+            capture_output=True, text=True,
+        )
+        if done.returncode != 0:
+            sys.exit(f"{src.name} did not compile:" + done.stdout + done.stderr)
 
 # kernel module, its manifest name, bytes/element, reference key, and how to call it
 KERNELS = [
@@ -78,7 +109,11 @@ def main() -> int:
     ap.add_argument("--rounds", type=int, default=7)
     ap.add_argument("--reps", type=int, default=30)
     ap.add_argument("--out", type=pathlib.Path)
+    ap.add_argument("--binary", type=pathlib.Path, default=REPO / "target/release/lyth.exe")
+    ap.add_argument("--machine", type=pathlib.Path, default=REPO / "fixtures/machine/sm_120.json")
     args = ap.parse_args()
+
+    ensure_bindings([name for name, *_ in KERNELS], args.binary, args.machine)
 
     if not torch.cuda.is_available():
         print("skipped: no CUDA device")
@@ -95,6 +130,14 @@ def main() -> int:
     # `max_of`/`min_of`, which is the binding's business and not this file's.
     mods = {name: importlib.import_module(name) for name, *_ in KERNELS}
     kernels = {name: m.Kernel() for name, m in mods.items()}
+
+    # The bytes-per-element in KERNELS is what the labels and the ratios are built on. The
+    # binding carries the compiler's own figure, so it is checked rather than trusted: a table
+    # that drifted from the manifest would mislabel every bar without failing anything.
+    for name, bpe, *_ in KERNELS:
+        got = mods[name].BYTES_PER_ELEMENT
+        if got != bpe:
+            sys.exit(f"{name}: this file says {bpe} B/element, the binding says {got}")
     # Only a reduction has a target sized by the grid; the binding says so by having
     # `partial_len` at all, which is read rather than assumed.
     partials = {name: torch.empty(m.partial_len(n), device="cuda", dtype=torch.float32)
