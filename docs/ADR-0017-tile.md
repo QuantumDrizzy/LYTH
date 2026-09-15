@@ -127,6 +127,53 @@ the writes.
 `intensity` is not part of it and must not move: 0 flops over 8 payload bytes is 0 at both ends.
 If the intensity check complains about this kernel, the bug is in the check.
 
+#### What it measured
+
+4096 x 4096, `lts__t_bytes.sum` over `rows * cols`, one `ncu` invocation per kernel, same
+machine file, same extents. The direction split is `lts__t_sectors_op_{read,write}` at 32 bytes
+a sector — `lts__t_bytes` has no per-direction suffix on this device, checked with
+`--query-metrics` rather than recalled, which is the second time that lesson has paid.
+
+| kernel | total | read | write | derived |
+|---|---|---|---|---|
+| `transpose` | 38.97 | 4.03 | 34.94 | 36 |
+| `transpose-tiled` | **8.00** | **4.00** | **4.00** | **8** |
+| `copy2d` | 8.00 | 4.00 | 4.00 | 8 |
+
+**The tiled body measures 8.00, exactly, against a derived 8.00 and a pre-registered tolerance
+of ± 0.2.** It matches the coalesced control to two decimals, and the split is symmetric, which
+rules out the write-allocate contaminant: a store that provoked a line fill would show read
+above 4 with write at 4, and a schedule that never reached the bus would show write near 32.
+
+Same body. Same payload. Two declared lines.
+
+#### The pre-registration was wrong about the control, and the measurement caught it
+
+The control was pre-registered at **36.00 ± 0.2** and measured **38.97**, which is outside that
+tolerance. The error is in the pre-registration, not the measurement, and it is a careless one:
+**ADR-0015 had already measured 39.02 at this exact size and explained the excess** — partially
+written sectors evicted before the other seven writes arrive, and fetched back. At 1024² and
+2048², where the working set fits in L2, it measured 36.05 and 36.02.
+
+Writing "36.00" here took the *model's* number and recorded it as the *expected measurement*,
+against a published measurement of the same kernel at the same size in this repository. The
+tolerance was right and the centre was wrong. Recorded rather than adjusted after the fact.
+
+#### And the tiled kernel has no excess at all
+
+38.97 overshoots its model by 2.97. **8.00 overshoots its model by nothing.**
+
+That is not luck and it was not pre-registered. The read-for-ownership traffic in the untiled
+kernel exists because a strided store touches one 4-byte word of a 32-byte sector and the sector
+is evicted before the other seven arrive. In the tiled kernel every sector is filled completely
+by one warp in one instruction, so there is no partial sector to evict and nothing to fetch
+back. **Absorbing the permutation does not only reduce the sector count; it removes the mechanism
+that made the sector count an underestimate.**
+
+[NOTED, not fixed here] The manifest labels this level `dram` while the counter it names is
+`lts__t_bytes.sum`, which is L2. The level is right and the name is wrong. Changing it in the
+report that uses it would be editing the instrument during the experiment.
+
 ### Claim 2 — the skew, with its counterfactual
 
 > The nominal binary (stride 33) measures `l1tex__data_bank_conflicts_pipe_lsu.sum` = **0**.
@@ -165,7 +212,8 @@ appears.
 | 2 | derived shared layout and padding, in `Cost` and the manifest | `shared_bytes` is 32 x 33 x 4 and the three bindings pass it |
 | 3 | the four-phase PTX | **done**, below |
 | 4 | the bus model over a staged stream | **done**: derived 8 bytes per element, and the report shows both |
-| 5 | `--ncu` | pre-registered below, not yet run |
+| 5a | `--ncu`, traffic | **done**, below: 8.00 measured against 8.00 derived |
+| 5b | `--ncu`, the skew counterfactual | pre-registered below, not yet run |
 
 ## What bit-exactness does not prove here, and what does
 
