@@ -26,6 +26,9 @@ pub struct Kernel {
     pub streams: Vec<StreamDecl>,
     /// `None` is rank 1: buffers are walked at the loop index and the body names no indices.
     pub space: Option<SpaceDecl>,
+    /// `None` is one element per thread. A tile blocks the space and is what lets a stream be
+    /// staged in shared memory.
+    pub tile: Option<TileDecl>,
     /// At most one in v1. See ADR-0011.
     pub reductions: Vec<ReduceDecl>,
     /// `at <level>:` blocks, in source order.
@@ -226,10 +229,42 @@ impl Ty {
 pub struct StreamDecl {
     /// The buffer parameter this stream moves.
     pub buffer: String,
-    pub from: Level,
-    pub to: Level,
+    /// Levels the element travels through, as written: `dram -> reg`, or
+    /// `dram -> smem -> reg` for a staged one. A list rather than a pair because `reduce`
+    /// already declares a path and two spellings of one idea in one AST is how an AST rots.
+    pub path: Vec<Level>,
     /// Written back at the end of the element. A stream without `drain` is read-only.
     pub drain: bool,
+    pub span: Span,
+}
+
+impl StreamDecl {
+    pub fn from(&self) -> Level {
+        *self.path.first().expect("a stream has at least two levels")
+    }
+
+    pub fn to(&self) -> Level {
+        *self.path.last().expect("a stream has at least two levels")
+    }
+
+    /// Whether the element is staged in shared memory on the way.
+    pub fn staged(&self) -> bool {
+        self.path.contains(&Level::Smem)
+    }
+}
+
+/// `tile 32, 32`
+///
+/// Blocks the index space: each block of threads handles one patch of this shape. Extents need
+/// not divide it -- the emitter guards the edges.
+///
+/// The dimensions are powers of two so that a thread's position inside the tile is a shift and
+/// a mask rather than a division, which on this hardware is a multi-instruction sequence
+/// (ADR-0015 measured what that costs). It is a refusal rather than a rounding, for the same
+/// reason `--block` refuses a width the reduction tree cannot halve.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TileDecl {
+    pub dims: Vec<u32>,
     pub span: Span,
 }
 

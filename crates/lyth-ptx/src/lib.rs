@@ -98,6 +98,16 @@ pub fn emit(ir: &KernelIr, arch: &str) -> Result<Module, EmitError> {
     if ir.drains.is_empty() && ir.reduction.is_none() {
         return Err(EmitError::NoDrain(ir.name.clone()));
     }
+    // Refused, not ignored. Emitting the untiled kernel for a tiled source would produce
+    // working code whose cost is nothing like the one the front end derived for it: the model
+    // would say 8 bytes per element and the silicon would move 36. A back end that silently
+    // drops a declaration is worse than one that cannot honour it yet.
+    if ir.tile.is_some() {
+        return Err(EmitError::Message(format!(
+            "kernel `{}` declares a tile, which this back end does not emit yet (ADR-0017, step 3). It is refused rather than compiled without staging, because the cost the front end derived would not describe the kernel that came out.",
+            ir.name
+        )));
+    }
 
     // PTX declares its virtual register banks up front, so the body is emitted first and the
     // header is written once the counts are known.

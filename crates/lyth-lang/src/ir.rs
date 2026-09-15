@@ -29,6 +29,9 @@ pub struct KernelIr {
     /// `None` is rank 1. Rank 2 names its indices and the extents they run over, and every
     /// buffer access permutes them.
     pub space: Option<SpaceIr>,
+    /// `None` is one element per thread. A tile blocks the space into patches, one per block,
+    /// and is what makes a staged stream legal.
+    pub tile: Option<Vec<u32>>,
     /// Flattened straight-line body, in evaluation order.
     pub ops: Vec<Op>,
     /// Registers holding the final value of each drained buffer.
@@ -75,6 +78,12 @@ pub struct StreamIr {
     /// Register the loaded element lands in. `None` for a buffer that is only written.
     pub loaded: Option<RegId>,
     pub read: bool,
+    /// Whether this stream travels through shared memory: `dram -> smem -> reg`.
+    ///
+    /// A staged buffer is read from global once per tile, coalesced, and read from shared by
+    /// the body. That is how a transposition moves off the memory bus and into a place where
+    /// a one-element skew makes it free. ADR-0017.
+    pub staged: bool,
     /// Whether consecutive threads touch consecutive elements of this buffer.
     ///
     /// True at rank 1, where every access is the loop index. At rank 2 it holds exactly when
@@ -376,6 +385,22 @@ pub enum LowerError {
         "{span}: `{name}` is computed and then discarded. A local is only useful as the source of a reduction; either reduce it, or assign to a drained buffer."
     )]
     DeadLocal { span: Span, name: String },
+    #[error(
+        "{span}: `tile` blocks the index space, and this kernel declares no `space` to block. Add `space i, j : rows, cols`."
+    )]
+    TileWithoutSpace { span: Span },
+    #[error(
+        "{span}: `tile` gives {dims} dimensions but `space` names {vars} index variables. A tile has one dimension per index."
+    )]
+    TileRankMismatch {
+        span: Span,
+        dims: usize,
+        vars: usize,
+    },
+    #[error(
+        "{span}: `stream {name}` travels through smem, which stages a tile, and this kernel declares no `tile`. Add `tile 32, 32`, or move it straight: `dram -> reg`."
+    )]
+    StagedWithoutTile { span: Span, name: String },
     #[error("{span}: `reduce sum {name}` names nothing the body computes")]
     ReduceOfNothing { span: Span, name: String },
     #[error("{span}: `into {name}` names no buffer parameter of this kernel")]
@@ -500,6 +525,20 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
 
     check_shapes(kernel, &params)?;
 
+    // A tile blocks the space, so there has to be one, and one dimension per index.
+    if let Some(t) = &kernel.tile {
+        let Some(sp) = &kernel.space else {
+            return Err(LowerError::TileWithoutSpace { span: t.span });
+        };
+        if t.dims.len() != sp.vars.len() {
+            return Err(LowerError::TileRankMismatch {
+                span: t.span,
+                dims: t.dims.len(),
+                vars: sp.vars.len(),
+            });
+        }
+    }
+
     // --- streams -------------------------------------------------------------------
     let mut seen = BTreeSet::new();
     let mut streams = Vec::new();
@@ -522,19 +561,30 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
                 name: s.buffer.clone(),
             });
         }
-        if !(s.from == Level::Dram && s.to == Level::Reg) {
+        // Two paths in v1: straight, or staged through shared memory when a tile says how
+        // much to stage.
+        let straight = s.path == [Level::Dram, Level::Reg];
+        let staged = s.path == [Level::Dram, Level::Smem, Level::Reg];
+        if !(straight || staged) {
             return Err(LowerError::UnsupportedPath {
                 span: s.span,
-                from: s.from.name(),
-                to: s.to.name(),
+                from: s.from().name(),
+                to: s.to().name(),
+            });
+        }
+        if staged && kernel.tile.is_none() {
+            return Err(LowerError::StagedWithoutTile {
+                span: s.span,
+                name: s.buffer.clone(),
             });
         }
         streams.push(StreamIr {
             buffer: s.buffer.clone(),
-            from: s.from,
-            to: s.to,
+            from: s.from(),
+            to: s.to(),
             drain: s.drain,
             index: Vec::new(),
+            staged: s.staged(),
             loaded: None,
             read: false,
             coalesced: true,
@@ -744,6 +794,7 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
         params: kernel.params.clone(),
         streams,
         space,
+        tile: kernel.tile.as_ref().map(|t| t.dims.clone()),
         ops,
         drains,
         reduction,

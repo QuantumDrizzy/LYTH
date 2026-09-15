@@ -397,3 +397,74 @@ fn the_coalescence_rule_is_about_the_fast_index_not_about_transposition() {
     let ir = ir::lower(&unit, &unit.kernels[0]).unwrap();
     assert!(ir.cost.coalescence() < 1.0, "the fast variable is now `i`");
 }
+
+/// `tile` and the staged stream path: what parses, what is refused, and what the back end
+/// does with a declaration it cannot honour yet (ADR-0017, step 1).
+mod tile {
+    use super::*;
+
+    const TILED: &str = "machine sm_120\n\nkernel t(rows: u32, cols: u32, a: [f32; rows, cols], b: [f32; cols, rows])\n    space i, j : rows, cols\n    tile 32, 32\n    stream a : dram -> smem -> reg\n    stream b : dram -> reg, drain\n    at reg:\n        b[j, i] = a[i, j]\n";
+
+    fn lower(src: &str) -> Result<lyth_lang::KernelIr, String> {
+        let unit = parse(src).map_err(|e| e.to_string())?;
+        ir::lower(&unit, &unit.kernels[0]).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn a_tiled_kernel_lowers_and_carries_its_tile_and_its_staging() {
+        let ir = lower(TILED).expect("a tiled transpose should lower");
+        assert_eq!(ir.tile, Some(vec![32, 32]));
+        let by = |n: &str| ir.streams.iter().find(|s| s.buffer == n).unwrap().clone();
+        assert!(by("a").staged, "a travels through smem");
+        assert!(!by("b").staged, "b goes straight to dram");
+        // Step 1 changes no cost: the bus model still sees the untiled access pattern until
+        // the staged stream is modelled in step 4.
+        assert_eq!(ir.cost.bytes_per_element(), 8.0);
+    }
+
+    #[test]
+    fn the_back_end_refuses_a_tile_it_cannot_emit_rather_than_dropping_it() {
+        // The dangerous alternative is working code whose cost is nothing like the derived
+        // one: the model would say 8 bytes per element and the silicon would move 36.
+        let ir = lower(TILED).unwrap();
+        let e = lyth_ptx::emit(&ir, "sm_120").expect_err("a tile is not emitted yet");
+        assert!(e.to_string().contains("does not emit yet"), "{e}");
+        assert!(e.to_string().contains("refused rather than"), "{e}");
+    }
+
+    #[test]
+    fn a_tile_needs_a_space_to_block() {
+        let src = "machine sm_120\n\nkernel t(n: u32, x: [f32; n], y: [f32; n])\n    tile 32, 32\n    stream x : dram -> reg\n    stream y : dram -> reg, drain\n    at reg:\n        y = x\n";
+        let e = lower(src).expect_err("a tile with nothing to block");
+        assert!(e.contains("declares no `space`"), "{e}");
+    }
+
+    #[test]
+    fn a_tile_has_one_dimension_per_index() {
+        let e = lower(&TILED.replace("tile 32, 32", "tile 32")).expect_err("rank mismatch");
+        assert!(e.contains("one dimension per index"), "{e}");
+    }
+
+    #[test]
+    fn a_tile_dimension_that_is_not_a_power_of_two_is_refused() {
+        // Anything else needs a division per thread to find its place in the tile, which on
+        // this hardware is a sequence and not an instruction (ADR-0015 measured it).
+        let e = lower(&TILED.replace("tile 32, 32", "tile 30, 32")).expect_err("not a power");
+        assert!(e.contains("power of two"), "{e}");
+        assert!(e.contains("shift and a mask"), "{e}");
+    }
+
+    #[test]
+    fn staging_without_a_tile_is_refused_and_says_both_ways_out() {
+        let e = lower(&TILED.replace("    tile 32, 32\n", "")).expect_err("staged, no tile");
+        assert!(e.contains("declares no `tile`"), "{e}");
+        assert!(e.contains("dram -> reg"), "it names the other way out: {e}");
+    }
+
+    #[test]
+    fn a_stream_path_of_one_level_moves_nothing() {
+        let src = "machine sm_120\n\nkernel t(n: u32, x: [f32; n], y: [f32; n])\n    stream x : dram\n    stream y : dram -> reg, drain\n    at reg:\n        y = x\n";
+        let e = lower(src).expect_err("a path needs two levels");
+        assert!(e.contains("moves between levels"), "{e}");
+    }
+}

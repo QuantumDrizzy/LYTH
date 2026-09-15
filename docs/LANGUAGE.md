@@ -93,6 +93,7 @@ elements is 17.2 GB, more than any device this compiler has a machine file for.
 ```
 stream x : dram -> reg          # read only
 stream y : dram -> reg, drain   # read and written back
+stream a : dram -> smem -> reg  # staged in shared memory; needs a `tile`
 ```
 
 `drain` means the value in registers is stored at the end of the element. A stream without it
@@ -156,6 +157,31 @@ both infinities through a reduction and host and device agree bit for bit. `exam
 puts `+0.0` and `-0.0` through one and they did not: `f32::max` returns *either* operand when
 both compare equal, giving `+0.0` folded and `-0.0` executed, so the evaluator stopped using it
 for that case. An oracle cannot be built on unspecified behaviour.
+
+## The tile
+
+```
+    space i, j : rows, cols
+    tile 32, 32
+```
+
+A tile blocks the index space: each block of threads handles one patch of that shape. Extents
+need not divide it. **The body does not change** — a tile is a declared schedule, not a different
+algorithm, and the point of declaring it is that the derived cost changes while the semantics do
+not.
+
+Tile dimensions are **powers of two**. A thread's position inside the tile is then a shift and a
+mask; any other width needs a division per thread, and on this hardware an integer division is a
+multi-instruction sequence rather than an instruction. Refused rather than paid for silently.
+
+A tile is what makes `dram -> smem -> reg` legal: a staged stream loads a patch into shared
+memory once, coalesced, and the body reads it from there. That is how a transposition moves off
+the memory bus, where it costs 32 bytes per element, and into shared memory, where a one-element
+skew makes it cost nothing.
+
+[IN PROGRESS] ADR-0017. The front end parses, checks and carries a tile; the back end **refuses**
+to emit one rather than dropping it, because compiling the untiled kernel for a tiled source
+would produce working code whose cost is nothing like the derived one.
 
 ## What the bus carries, beside what the source asks for
 

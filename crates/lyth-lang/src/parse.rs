@@ -173,6 +173,7 @@ impl Parser {
         let mut intensity_span = None;
         let mut streams = Vec::new();
         let mut space = None;
+        let mut tile = None;
         let mut reductions = Vec::new();
         let mut blocks = Vec::new();
 
@@ -201,6 +202,11 @@ impl Parser {
                     return self.msg("`space` declared twice");
                 }
                 space = Some(self.space()?);
+            } else if self.at_word("tile") {
+                if tile.is_some() {
+                    return self.msg("`tile` declared twice");
+                }
+                tile = Some(self.tile()?);
             } else if self.at_word("stream") {
                 streams.push(self.stream()?);
             } else if self.at_word("reduce") {
@@ -208,7 +214,7 @@ impl Parser {
             } else if self.at_word("at") {
                 blocks.push(self.block()?);
             } else {
-                return self.expected("`intensity`, `space`, `stream`, `reduce` or `at`");
+                return self.expected("`intensity`, `space`, `tile`, `stream`, `reduce` or `at`");
             }
         }
 
@@ -220,6 +226,7 @@ impl Parser {
             intensity_span,
             streams,
             space,
+            tile,
             reductions,
             blocks,
         })
@@ -313,6 +320,39 @@ impl Parser {
         })
     }
 
+    /// `tile 32, 32`
+    fn tile(&mut self) -> Result<TileDecl, ParseError> {
+        let span = self.span();
+        self.expect(Tok::Word("tile".into()))?;
+        let mut dims = Vec::new();
+        loop {
+            let (v, s) = self.number()?;
+            let d = v as u32;
+            if d as f64 != v || d == 0 {
+                return Err(ParseError::Message {
+                    span: s,
+                    msg: format!("`{v}` is not a tile dimension; give a positive whole number"),
+                });
+            }
+            // A power of two, so a thread's place in the tile is a shift and a mask. Anything
+            // else needs a division per thread, which on this hardware is a sequence and not
+            // an instruction -- refused rather than paid for silently.
+            if !d.is_power_of_two() {
+                return Err(ParseError::Message {
+                    span: s,
+                    msg: format!(
+                        "a tile dimension must be a power of two, got {d}. A thread's position inside the tile is a shift and a mask; any other width needs a division per thread."
+                    ),
+                });
+            }
+            dims.push(d);
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        Ok(TileDecl { dims, span })
+    }
+
     /// `space i, j : rows, cols`
     fn space(&mut self) -> Result<SpaceDecl, ParseError> {
         let span = self.span();
@@ -353,21 +393,24 @@ impl Parser {
         self.expect(Tok::Word("stream".into()))?;
         let (buffer, _) = self.word()?;
         self.expect(Tok::Colon)?;
-        let (from_w, from_span) = self.word()?;
-        let Some(from) = Level::parse(&from_w) else {
-            return Err(ParseError::Message {
-                span: from_span,
-                msg: format!("`{from_w}` is not a level; dram, l2, smem, reg"),
-            });
-        };
-        self.expect(Tok::Arrow)?;
-        let (to_w, to_span) = self.word()?;
-        let Some(to) = Level::parse(&to_w) else {
-            return Err(ParseError::Message {
-                span: to_span,
-                msg: format!("`{to_w}` is not a level; dram, l2, smem, reg"),
-            });
-        };
+        // A path, not a pair: `dram -> reg`, or `dram -> smem -> reg` when the tile stages it.
+        let mut path = Vec::new();
+        loop {
+            let (w, w_span) = self.word()?;
+            let Some(level) = Level::parse(&w) else {
+                return Err(ParseError::Message {
+                    span: w_span,
+                    msg: format!("`{w}` is not a level; dram, l2, smem, reg"),
+                });
+            };
+            path.push(level);
+            if !self.eat(&Tok::Arrow) {
+                break;
+            }
+        }
+        if path.len() < 2 {
+            return self.msg("a stream moves between levels: write `dram -> reg`".to_string());
+        }
         let mut drain = false;
         while self.eat(&Tok::Comma) {
             let (w, s) = self.word()?;
@@ -383,8 +426,7 @@ impl Parser {
         }
         Ok(StreamDecl {
             buffer,
-            from,
-            to,
+            path,
             drain,
             span,
         })
