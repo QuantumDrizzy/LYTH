@@ -1,0 +1,18 @@
+machine sm_120
+
+# Refused. A reduction target sized by the element count.
+#
+# `reduce sum` writes one value per block, so `partial` needs one element per block and the
+# grid decides how many that is. Declaring it `[f32; n]` says the caller should allocate one
+# per element: far too big, which wastes memory and hides the mistake, until someone tightens
+# the allocation to what the declaration says and the kernel writes past the end.
+#
+# `[f32; blocks]` is the extent that means "one per block". It is written rather than inferred
+# from `into partial`, because the declaration is what a caller reads when deciding how much
+# memory to allocate.
+kernel wrong_partial(n: u32, x: [f32; n], partial: [f32; n])
+    stream x : dram -> reg
+    reduce sum v : reg -> smem -> dram into partial
+
+    at reg:
+        v = x

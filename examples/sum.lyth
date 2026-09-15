@@ -2,7 +2,7 @@ machine sm_120
 
 # The simplest reduction: sum a vector.
 # No arithmetic at all in the body -- the only flops are the tree.
-kernel sum(n: u32, x: [f32], partial: [f32])
+kernel sum(n: u32, x: [f32; n], partial: [f32; blocks])
     intensity 0.25
 
     stream x : dram -> reg

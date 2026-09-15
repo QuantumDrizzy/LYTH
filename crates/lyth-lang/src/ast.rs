@@ -169,8 +169,24 @@ impl ReduceOp {
 pub struct Param {
     pub name: String,
     pub ty: Ty,
+    /// A buffer's extents, named: `[f32; n]` is `["n"]`, `[f32; rows, cols]` is
+    /// `["rows", "cols"]`. Empty for a scalar.
+    ///
+    /// The names are `u32` parameters of the same kernel, or the reserved extent `blocks`.
+    /// Shape lives on the parameter rather than inside `Ty` so that `Ty` stays `Copy` and so
+    /// that "buffer of f32" and "how long it is" stay separable, which is what lets a
+    /// reduction target be sized by the launch instead of by the problem.
+    pub shape: Vec<String>,
     pub span: Span,
 }
+
+/// The extent of a reduction target: one element per block, so its length is a fact about the
+/// launch and not about the problem.
+///
+/// Spelled in the source rather than inferred from `reduce ... into partial`, because a caller
+/// who sizes that buffer by the element count writes past the end of it, and the place to say
+/// so is the declaration the caller reads.
+pub const BLOCKS: &str = "blocks";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ty {

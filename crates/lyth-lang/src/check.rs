@@ -146,7 +146,7 @@ mod tests {
     use crate::{ir::lower, parse::parse};
 
     fn saxpy_ir() -> KernelIr {
-        let src = "machine sm_120\n\nkernel saxpy(n: u32, a: f32, x: [f32], y: [f32])\n    stream x : dram -> reg\n    stream y : dram -> reg, drain\n    at reg:
+        let src = "machine sm_120\n\nkernel saxpy(n: u32, a: f32, x: [f32; n], y: [f32; n])\n    stream x : dram -> reg\n    stream y : dram -> reg, drain\n    at reg:
         y = a * x + y\n";
         let u = parse(src).unwrap();
         lower(&u, &u.kernels[0]).unwrap()

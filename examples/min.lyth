@@ -7,7 +7,7 @@ machine sm_120
 # The signed-zero disagreement in ADR-0013 is a mirror image here. Where max returned +0.0 on
 # the device and -0.0 on the host, min returned -0.0 on the device and +0.0 on the host: 121
 # of 65536 partials differed, against 135 for max.
-kernel min_of(n: u32, x: [f32], partial: [f32])
+kernel min_of(n: u32, x: [f32; n], partial: [f32; blocks])
     intensity 0.0
 
     stream x : dram -> reg

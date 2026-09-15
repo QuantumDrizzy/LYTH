@@ -1,7 +1,7 @@
 machine sm_120
 
 # Two outputs from one input. Several statements, several drains.
-kernel split(n: u32, a: f32, x: [f32], lo: [f32], hi: [f32])
+kernel split(n: u32, a: f32, x: [f32; n], lo: [f32; n], hi: [f32; n])
     intensity 0.25
 
     stream x  : dram -> reg

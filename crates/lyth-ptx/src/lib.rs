@@ -75,12 +75,20 @@ pub struct Module {
 /// rather than from a flag: ADR-0001 makes the machine a value, and `-arch` is exactly the
 /// kind of flag that rots.
 pub fn emit(ir: &KernelIr, arch: &str) -> Result<Module, EmitError> {
-    // The first u32 parameter bounds the index space. v1 is one-dimensional, so one bound.
+    // The index space is bounded by the extent the streamed buffers declare, which the front
+    // end has already checked they agree on. Taking "the first u32 parameter" instead was
+    // right only while a kernel could have exactly one; with shapes a kernel may take a count
+    // that is not a length, and picking by type would silently loop over the wrong number.
     let bound = ir
-        .params
+        .streams
         .iter()
-        .find(|p| p.ty == Ty::U32)
-        .map(|p| p.name.clone())
+        .find_map(|s| {
+            ir.params
+                .iter()
+                .find(|p| p.name == s.buffer)
+                .and_then(|p| p.shape.first())
+        })
+        .cloned()
         .ok_or_else(|| EmitError::NoBound(ir.name.clone()))?;
     if ir.drains.is_empty() && ir.reduction.is_none() {
         return Err(EmitError::NoDrain(ir.name.clone()));
@@ -504,7 +512,7 @@ mod tests {
     const SAXPY: &str = "\
 machine sm_120
 
-kernel saxpy(n: u32, a: f32, x: [f32], y: [f32])
+kernel saxpy(n: u32, a: f32, x: [f32; n], y: [f32; n])
     intensity 0.1667
 
     stream x : dram -> reg
@@ -594,13 +602,38 @@ kernel saxpy(n: u32, a: f32, x: [f32], y: [f32])
     }
 
     #[test]
-    fn a_kernel_with_no_bound_is_refused_rather_than_running_off_the_end() {
-        let src = "machine sm_120\n\nkernel k(x: [f32], y: [f32])\n    stream x : dram -> reg\n    stream y : dram -> reg, drain\n    at reg:
+    fn a_kernel_with_no_bound_is_refused_by_the_front_end_now() {
+        // This was a back-end refusal: the emitter looked for a u32 parameter and gave up.
+        // With shapes the front end gets there first, because the buffer names an extent that
+        // is not a parameter. A better place to be told, and a better thing to be told.
+        let src = "machine sm_120\n\nkernel k(x: [f32; n], y: [f32; n])\n    stream x : dram -> reg\n    stream y : dram -> reg, drain\n    at reg:
+        y = x\n";
+        let u = parse(src).unwrap();
+        let e = lower(&u, &u.kernels[0]).unwrap_err();
+        assert!(e.to_string().contains("is not a u32 parameter"), "{e}");
+    }
+
+    #[test]
+    fn the_loop_bound_comes_from_the_shape_and_not_from_the_first_u32() {
+        // `stride` is a count, not a length. Bounding the loop by whichever u32 came first
+        // would walk the wrong number of elements while compiling cleanly, which is the worst
+        // kind of wrong. The shape says which parameter is a length.
+        let src = "machine sm_120\n\nkernel k(stride: u32, n: u32, x: [f32; n], y: [f32; n])\n    stream x : dram -> reg\n    stream y : dram -> reg, drain\n    at reg:
         y = x\n";
         let u = parse(src).unwrap();
         let ir = lower(&u, &u.kernels[0]).unwrap();
-        let e = emit(&ir, "sm_120").unwrap_err();
-        assert!(e.to_string().contains("bounds the index space"), "{e}");
+        let m = emit(&ir, "sm_120").unwrap();
+        let bound = m
+            .ptx
+            .lines()
+            .find(|l| l.contains("ld.param.u32") && l.contains("_n]"))
+            .unwrap_or_else(|| panic!("the bound should load k_n:\n{}", m.ptx));
+        assert!(bound.contains("k_n"), "{bound}");
+        assert!(
+            !m.ptx.contains("[k_stride]"),
+            "stride is not a length and must not bound the loop:\n{}",
+            m.ptx
+        );
     }
 
     #[test]

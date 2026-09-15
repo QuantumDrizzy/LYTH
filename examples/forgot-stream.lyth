@@ -1,6 +1,6 @@
 machine sm_120
 
-kernel forgot(n: u32, x: [f32], y: [f32])
+kernel forgot(n: u32, x: [f32; n], y: [f32; n])
     stream y : dram -> reg, drain
 
     at reg:

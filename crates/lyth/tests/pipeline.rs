@@ -239,3 +239,33 @@ fn a_block_width_that_would_break_the_tree_is_refused() {
     assert!(err.contains("power of two"), "{err}");
     assert!(err.contains("got 100"), "the refusal must name the value: {err}");
 }
+
+#[test]
+fn two_streamed_buffers_of_different_lengths_do_not_compile() {
+    // Before shapes this compiled: a buffer had no length, the single u32 was the bound by
+    // default, and the kernel read past the end of whichever buffer the caller made shorter.
+    // A device pointer does not carry its size, so the declaration is the only place to catch
+    // it.
+    let e = compile("extent-mismatch.lyth").expect_err("two lengths, one index space");
+    assert!(e.contains("same length"), "{e}");
+    assert!(e.contains("`m`") && e.contains("`n`"), "it names both: {e}");
+}
+
+#[test]
+fn a_reduction_target_sized_by_the_element_count_does_not_compile() {
+    let e = compile("partial-by-n.lyth").expect_err("a partial is per block");
+    assert!(e.contains("[f32; blocks]"), "it says what to write instead: {e}");
+}
+
+#[test]
+fn the_extent_is_the_one_the_shape_names_not_the_first_u32() {
+    // `sum` takes n and declares x as [f32; n] and partial as [f32; blocks]. The manifest has
+    // to distinguish a length from a count, or a generated allocation is the wrong size.
+    let src = example("sum.lyth");
+    let unit = parse(&src).unwrap();
+    let ir = ir::lower(&unit, &unit.kernels[0]).unwrap();
+    let by = |n: &str| ir.params.iter().find(|p| p.name == n).unwrap().clone();
+    assert_eq!(by("x").shape, vec!["n".to_string()]);
+    assert_eq!(by("partial").shape, vec!["blocks".to_string()]);
+    assert!(by("n").shape.is_empty(), "a scalar has no shape of its own");
+}

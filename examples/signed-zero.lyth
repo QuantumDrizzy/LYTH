@@ -13,7 +13,7 @@ machine sm_120
 #
 # So the evaluator stopped calling `f32::max` for that case. Not because the hardware outranks
 # the host language, but because an oracle cannot be built on unspecified behaviour. ADR-0013.
-kernel signed_zero(n: u32, x: [f32], partial: [f32])
+kernel signed_zero(n: u32, x: [f32; n], partial: [f32; blocks])
     intensity 0.5
 
     stream x : dram -> reg

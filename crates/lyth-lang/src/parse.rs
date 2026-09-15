@@ -263,28 +263,47 @@ impl Parser {
     fn param(&mut self) -> Result<Param, ParseError> {
         let (name, span) = self.word()?;
         self.expect(Tok::Colon)?;
+        let mut shape = Vec::new();
         let ty = if self.eat(&Tok::LBracket) {
             let (t, _) = self.word()?;
-            self.expect(Tok::RBracket)?;
-            match t.as_str() {
-                "f32" => Ty::BufF32,
-                other => {
-                    return self.msg(format!(
-                        "`[{other}]` is not a buffer type in v1; only [f32]"
-                    ))
+            if t != "f32" {
+                return self.msg(format!("`[{t}; ..]` is not a buffer type in v1; only [f32]"));
+            }
+            // The shape is not optional. A buffer whose length is not written down is a
+            // buffer whose bounds the compiler has to guess, and guessing is the one thing
+            // this language does not do.
+            if !self.eat(&Tok::Semi) {
+                return self.msg(
+                    "a buffer needs its extent: write `[f32; n]`, naming a u32 parameter,                      or `[f32; blocks]` for a reduction target"
+                        .to_string(),
+                );
+            }
+            loop {
+                let (d, _) = self.word()?;
+                shape.push(d);
+                if !self.eat(&Tok::Comma) {
+                    break;
                 }
             }
+            self.expect(Tok::RBracket)?;
+            Ty::BufF32
         } else {
             let (t, _) = self.word()?;
             match t.as_str() {
                 "u32" => Ty::U32,
                 "f32" => Ty::F32,
                 other => {
-                    return self.msg(format!("`{other}` is not a type in v1; u32, f32, [f32]"))
+                    return self
+                        .msg(format!("`{other}` is not a type in v1; u32, f32, [f32; n]"))
                 }
             }
         };
-        Ok(Param { name, ty, span })
+        Ok(Param {
+            name,
+            ty,
+            shape,
+            span,
+        })
     }
 
     fn stream(&mut self) -> Result<StreamDecl, ParseError> {
@@ -437,7 +456,7 @@ mod tests {
     const SAXPY: &str = "\
 machine sm_120
 
-kernel saxpy(n: u32, a: f32, x: [f32], y: [f32])
+kernel saxpy(n: u32, a: f32, x: [f32; n], y: [f32; n])
     intensity 0.1667
 
     stream x : dram -> reg
@@ -481,7 +500,7 @@ kernel saxpy(n: u32, a: f32, x: [f32], y: [f32])
     #[test]
     fn a_file_without_a_machine_is_refused_with_the_reason() {
         let e = parse(
-            "kernel k(x: [f32])\n    at reg:
+            "kernel k(x: [f32; n])\n    at reg:
         x = 1\n",
         )
         .unwrap_err();
@@ -491,7 +510,7 @@ kernel saxpy(n: u32, a: f32, x: [f32], y: [f32])
     #[test]
     fn an_empty_at_block_is_refused() {
         let src =
-            "machine m\n\nkernel k(x: [f32])\n    stream x : dram -> reg\n    at reg:\n        \n";
+            "machine m\n\nkernel k(x: [f32; n])\n    stream x : dram -> reg\n    at reg:\n        \n";
         assert!(
             parse(src).is_err(),
             "a block that does no work must not compile"
@@ -500,7 +519,7 @@ kernel saxpy(n: u32, a: f32, x: [f32], y: [f32])
 
     #[test]
     fn errors_name_the_line_and_what_was_expected() {
-        let src = "machine m\n\nkernel k(x: [f32])\n    stream x : dram => reg\n";
+        let src = "machine m\n\nkernel k(x: [f32; n])\n    stream x : dram => reg\n";
         let e = parse(src).unwrap_err();
         let s = e.to_string();
         assert!(s.contains("4:"), "should point at line 4: {s}");
@@ -508,7 +527,7 @@ kernel saxpy(n: u32, a: f32, x: [f32], y: [f32])
 
     #[test]
     fn an_unknown_level_lists_the_ones_that_exist() {
-        let src = "machine m\n\nkernel k(x: [f32])\n    stream x : hbm -> reg\n    at reg:
+        let src = "machine m\n\nkernel k(x: [f32; n])\n    stream x : hbm -> reg\n    at reg:
         x = 1\n";
         let e = parse(src).unwrap_err();
         assert!(e.to_string().contains("dram, l2, smem, reg"), "{e}");
@@ -516,7 +535,7 @@ kernel saxpy(n: u32, a: f32, x: [f32], y: [f32])
 
     #[test]
     fn parentheses_override_precedence() {
-        let src = "machine m\n\nkernel k(a: f32, x: [f32])\n    stream x : dram -> reg, drain\n    at reg:
+        let src = "machine m\n\nkernel k(a: f32, x: [f32; n])\n    stream x : dram -> reg, drain\n    at reg:
         x = a * (x + x)\n";
         let u = parse(src).unwrap();
         match &u.kernels[0].blocks[0].stmts[0].value {

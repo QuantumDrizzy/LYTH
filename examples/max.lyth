@@ -6,7 +6,7 @@ machine sm_120
 # zero, and it is not a mistake: `max` is a compare-and-select, not arithmetic. No flop ever
 # enters this kernel, so it cannot be compute-bound at any n, on any machine. Bandwidth is the
 # only lever there is. See ADR-0013.
-kernel max_of(n: u32, x: [f32], partial: [f32])
+kernel max_of(n: u32, x: [f32; n], partial: [f32; blocks])
     intensity 0.0
 
     stream x : dram -> reg

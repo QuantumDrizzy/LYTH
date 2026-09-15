@@ -41,8 +41,11 @@ pub struct ParamSpec {
     pub name: String,
     /// `u32`, `f32` or `buf_f32`. Spelled rather than encoded so the file reads without a key.
     pub ty: String,
-    /// True for the `u32` that bounds the index space. Exactly one parameter has this in v1,
-    /// and a generator uses it to derive the grid without being told the element count twice.
+    /// A buffer's extents, named: `["n"]`, or `["blocks"]` for a reduction target. Empty for
+    /// a scalar. A generator sizes an allocation from this and from nothing else.
+    pub shape: Vec<String>,
+    /// True for a `u32` that some buffer names as an extent, so a generator can tell a length
+    /// from a count that merely happens to be a `u32`.
     pub is_extent: bool,
     /// A buffer the kernel writes. Drives `&mut` in Rust and non-const in C.
     pub written: bool,
@@ -98,6 +101,13 @@ impl Manifest {
     ) -> Self {
         let reduce_target = ir.reduction.as_ref().map(|r| r.into.as_str());
 
+        // A u32 is an extent when a buffer says so, not when it is the only one of its type.
+        let extents: std::collections::BTreeSet<&str> = ir
+            .params
+            .iter()
+            .flat_map(|p| p.shape.iter().map(String::as_str))
+            .collect();
+
         let params = ir
             .params
             .iter()
@@ -112,9 +122,8 @@ impl Manifest {
                         Ty::BufF32 => "buf_f32",
                     }
                     .to_string(),
-                    // v1 has exactly one u32 and it bounds the loop. ADR-0015 replaces this
-                    // with extents named by a shape, at which point more than one may be true.
-                    is_extent: p.ty == Ty::U32,
+                    shape: p.shape.clone(),
+                    is_extent: p.ty == Ty::U32 && extents.contains(p.name.as_str()),
                     written: is_partial
                         || stream.map(|s| s.drain).unwrap_or(false)
                         || ir.drains.iter().any(|(b, _)| *b == p.name),
@@ -153,6 +162,11 @@ impl Manifest {
     pub fn extent(&self) -> Option<&ParamSpec> {
         self.params.iter().find(|p| p.is_extent)
     }
+
+    /// Buffers a caller allocates by element count, and the one it allocates by block count.
+    pub fn sized_by_grid(&self) -> Option<&ParamSpec> {
+        self.params.iter().find(|p| p.sized_by_grid)
+    }
 }
 
 #[cfg(test)]
@@ -169,7 +183,7 @@ mod tests {
     #[test]
     fn a_drained_buffer_is_written_and_a_streamed_one_is_read() {
         let m = manifest(
-            "machine sm_120\n\nkernel saxpy(n: u32, a: f32, x: [f32], y: [f32])\n\
+            "machine sm_120\n\nkernel saxpy(n: u32, a: f32, x: [f32; n], y: [f32; n])\n\
              \x20   stream x : dram -> reg\n    stream y : dram -> reg, drain\n\
              \x20   at reg:\n        y = a * x + y\n",
         );
@@ -177,6 +191,8 @@ mod tests {
         assert!(by("x").read && !by("x").written, "x is read only");
         assert!(by("y").read && by("y").written, "y is read and drained");
         assert!(by("n").is_extent, "n bounds the index space");
+        assert_eq!(by("x").shape, vec!["n".to_string()]);
+        assert!(by("a").shape.is_empty(), "a scalar has no shape");
         assert_eq!(m.launch.shared_bytes, 0, "no reduction, no shared memory");
         assert!(!m.launch.block_must_be_power_of_two);
     }
@@ -186,12 +202,13 @@ mod tests {
         // Getting this wrong is an out-of-bounds write in generated code, so it is asserted
         // rather than left to a generator's reading of the name.
         let m = manifest(
-            "machine sm_120\n\nkernel total(n: u32, x: [f32], partial: [f32])\n\
+            "machine sm_120\n\nkernel total(n: u32, x: [f32; n], partial: [f32; blocks])\n\
              \x20   stream x : dram -> reg\n    reduce sum v : reg -> smem -> dram into partial\n\
              \x20   at reg:\n        v = x\n",
         );
         let p = m.params.iter().find(|p| p.name == "partial").unwrap();
         assert!(p.sized_by_grid, "one element per block, not per element");
+        assert_eq!(p.shape, vec!["blocks".to_string()], "and it says so in the source");
         assert!(p.written && !p.read);
         assert_eq!(m.launch.shared_bytes, 256 * 4);
         assert!(m.launch.block_must_be_power_of_two);
@@ -200,7 +217,7 @@ mod tests {
     #[test]
     fn the_contract_travels_with_the_signature() {
         let m = manifest(
-            "machine sm_120\n\nkernel saxpy(n: u32, a: f32, x: [f32], y: [f32])\n\
+            "machine sm_120\n\nkernel saxpy(n: u32, a: f32, x: [f32; n], y: [f32; n])\n\
              \x20   intensity 0.1667\n    stream x : dram -> reg\n\
              \x20   stream y : dram -> reg, drain\n    at reg:\n        y = a * x + y\n",
         );
@@ -215,7 +232,7 @@ mod tests {
     #[test]
     fn a_manifest_round_trips_through_json() {
         let m = manifest(
-            "machine sm_120\n\nkernel copy(n: u32, x: [f32], y: [f32])\n\
+            "machine sm_120\n\nkernel copy(n: u32, x: [f32; n], y: [f32; n])\n\
              \x20   stream x : dram -> reg\n    stream y : dram -> reg, drain\n\
              \x20   at reg:\n        y = x\n",
         );

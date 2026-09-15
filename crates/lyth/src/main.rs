@@ -287,11 +287,11 @@ fn front(file: &Path, machine_path: Option<&Path>, tol: f64) -> Result<Front, Ex
 fn print_cost(ir: &KernelIr, report: &lyth_lang::IntensityReport) {
     println!("kernel {} on machine {}", ir.name, ir.machine);
     println!(
-        "  derived  {:.4} flop/byte  ({} flop / {} byte per element)",
+        " derived {:.4} flop/byte ({} flop / {} byte per element)",
         report.derived, report.flops, report.bytes
     );
     println!(
-        "  traffic  {} read + {} written, at {}",
+        " traffic {} read + {} written, at {}",
         ir.cost.read_bytes_per_element(),
         ir.cost.write_bytes_per_element(),
         ir.cost.level().name()
@@ -458,7 +458,7 @@ fn evidence_json(ir: &KernelIr, elements: u32) -> String {
             "One element per thread, bounds-checked, no grid-stride loop. Every thread performs exactly the listed moves once."
         ],
         "known_limits": [
-            "[KNOWN LIMIT] The byte count is a lower bound: it counts the payload, not the              32-byte sector a scattered access pulls. v1 is elementwise and fully coalesced, so the two should agree here; that is the claim --ncu tests.",
+            "[KNOWN LIMIT] The byte count is a lower bound: it counts the payload, not the 32-byte sector a scattered access pulls. v1 is elementwise and fully coalesced, so the two should agree here; that is the claim --ncu tests.",
             "[KNOWN LIMIT] Writes may not reach DRAM within a single launch if the working set fits in L2. Compare the read half with --ncu-dir read."
         ]
     });
@@ -537,7 +537,7 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
     let grid = grid_arg.unwrap_or_else(|| want.clamp(1, MAX_GRID));
     let per_thread = (n as f64 / (grid as f64 * block as f64)).ceil() as u64;
     println!(
-        "  grid     {grid} blocks of {block} on {} SMs, {per_thread} element(s) per thread",
+        " grid {grid} blocks of {block} on {} SMs, {per_thread} element(s) per thread",
         ctx.sm_count
     );
     // A reduction writes one value per block, so its target is sized by the grid, not by the
@@ -719,7 +719,7 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
         eprintln!("  verify FAILED — {mismatches} of {n} elements differ");
         if let Some((name, i, want, got)) = first {
             eprintln!(
-                "    first at {name}[{i}]: host {want:e} (0x{:08x}), device {got:e} (0x{:08x})",
+                " first at {name}[{i}]: host {want:e} (0x{:08x}), device {got:e} (0x{:08x})",
                 want.to_bits(),
                 got.to_bits()
             );
@@ -766,7 +766,7 @@ fn report_timing(
 
     println!("  time     {median_ms:.4} ms median of n={reps} (warm-up {warmup} discarded), spread {:.1}%", spread * 100.0);
     println!(
-        "  moved    {:.3} MB by the compiler's derived byte model, NOT measured",
+        " moved {:.3} MB by the compiler's derived byte model, NOT measured",
         bytes / 1e6
     );
     println!("  achieved {gbs:.2} GB/s");
@@ -780,7 +780,7 @@ fn report_timing(
         Some((id, peak)) => {
             let pct = gbs / peak * 100.0;
             println!(
-                "  vs       {pct:.1}% of {peak:.2} GB/s, the measured DRAM bandwidth in the {id} machine file"
+                " vs {pct:.1}% of {peak:.2} GB/s, the measured DRAM bandwidth in the {id} machine file"
             );
             // A tool that prints "above peak" and says nothing is the tool that produced
             // exercise 01's 385.71 GB/s. Above the baseline means one of three things and the
@@ -794,7 +794,7 @@ fn report_timing(
                 println!("              figure wearing a DRAM label. Raise -n until it does not.");
                 println!("           2. the byte count is derived, not measured. Check it with");
                 println!(
-                    "              `lyth build --evidence` and `lyth-probe --ncu` (ADR-0009)."
+                    " `lyth build --evidence` and `lyth-probe --ncu` (ADR-0009)."
                 );
                 println!("           3. the baseline may not describe this access pattern. The");
                 println!("              {id} figure came from a torch.sum reduction, and the");

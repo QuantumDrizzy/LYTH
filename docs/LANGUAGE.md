@@ -27,11 +27,27 @@ declared. Indentation delimits blocks; tabs are refused rather than given a gues
 
 | in source | is | passed as |
 |---|---|---|
-| `u32` | the element count bounding the index space | launch parameter |
+| `u32` | a scalar count | launch parameter |
 | `f32` | a scalar, the same for every element | launch parameter |
-| `[f32]` | a buffer of f32 | device pointer |
+| `[f32; n]` | a buffer of f32, `n` elements long | device pointer |
+| `[f32; blocks]` | a reduction target: one element **per block** | device pointer |
 
-f32 only. One dimension. Exactly one `u32` parameter, which bounds the loop.
+f32 only, one dimension. **A buffer's extent is not optional.** `n` names a `u32` parameter of
+the same kernel, and that parameter is what bounds the loop — not whichever `u32` happens to
+come first, so a kernel may take a count that is not a length without the compiler mistaking
+one for the other.
+
+Two things the compiler refuses that it could not see before extents existed:
+
+**Two streamed buffers of different lengths.** `x: [f32; n]` beside `y: [f32; m]`, both
+streamed, asks one index space to walk two lengths. A device pointer does not carry its size,
+so there is nothing to check at run time; the declaration is the only place. See
+`examples/extent-mismatch.lyth`.
+
+**A reduction target sized by the element count.** `reduce` writes one value per block, so its
+target is `[f32; blocks]` and the grid decides how many that is. Declaring it `[f32; n]` tells
+a caller to allocate one per element, which is far too big until someone tightens it to what
+the declaration says and the kernel writes past the end. See `examples/partial-by-n.lyth`.
 
 ## Streams
 

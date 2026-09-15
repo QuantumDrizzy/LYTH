@@ -1,7 +1,7 @@
 machine sm_120
 
 # `p` is computed and then nothing consumes it. Refused: work whose result is discarded.
-kernel dead_local(n: u32, x: [f32], y: [f32], out: [f32])
+kernel dead_local(n: u32, x: [f32; n], y: [f32; n], out: [f32; n])
     stream x : dram -> reg
     stream y : dram -> reg
 

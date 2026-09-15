@@ -1,7 +1,7 @@
 machine sm_120
 
 # Three buffers: z = x + t*(y - x).
-kernel lerp(n: u32, t: f32, x: [f32], y: [f32], z: [f32])
+kernel lerp(n: u32, t: f32, x: [f32; n], y: [f32; n], z: [f32; n])
     intensity 0.25
 
     stream x : dram -> reg

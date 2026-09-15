@@ -9,7 +9,7 @@ machine sm_120
 # Host and device agreed bit for bit: both return the non-NaN operand rather than propagating
 # the NaN, and the reduction comes out +inf. Measured, not assumed -- ADR-0013 refused to
 # state it until this ran.
-kernel not_a_number(n: u32, x: [f32], partial: [f32])
+kernel not_a_number(n: u32, x: [f32; n], partial: [f32; blocks])
     intensity 0.5
 
     stream x : dram -> reg

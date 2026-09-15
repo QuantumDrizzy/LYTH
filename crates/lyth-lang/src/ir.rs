@@ -197,6 +197,44 @@ pub enum LowerError {
     NotStreamed { span: Span, name: String },
     #[error("{span}: `stream {name}` names no parameter of this kernel")]
     StreamOfNothing { span: Span, name: String },
+    #[error(
+        "{span}: `{buffer}` is declared `[f32; {dim}]` but `{dim}` is not a u32 parameter of this kernel. An extent names a length the caller passes, or `blocks` for a reduction target."
+    )]
+    UnknownExtent {
+        span: Span,
+        buffer: String,
+        dim: String,
+    },
+    #[error(
+        "{span}: `{buffer}` is streamed with extent `{dim}`, but `{other}` is streamed with `{other_dim}`. Streamed buffers are walked by one index space, so they must be the same length. Nothing here can check two lengths against each other at run time."
+    )]
+    ExtentMismatch {
+        span: Span,
+        buffer: String,
+        dim: String,
+        other: String,
+        other_dim: String,
+    },
+    #[error(
+        "{span}: `{buffer}` is streamed but declared `[f32; blocks]`. `blocks` is the number of blocks the launch chose, which is one value per block and not one per element; a stream walks elements. Only a reduction target is sized that way."
+    )]
+    StreamedPerBlock { span: Span, buffer: String },
+    #[error(
+        "{span}: `{buffer}` receives a reduction but is declared `[f32; {dim}]`. A reduction writes one value per block, so its target is sized by the launch: `[f32; blocks]`. Sizing it by the element count is how a caller allocates the wrong buffer."
+    )]
+    ReductionTargetNotPerBlock {
+        span: Span,
+        buffer: String,
+        dim: String,
+    },
+    #[error(
+        "{span}: `{buffer}` is declared with {rank} extents. v1 walks one index space, so a buffer has exactly one. ADR-0015 lifts this."
+    )]
+    UnsupportedRank {
+        span: Span,
+        buffer: String,
+        rank: usize,
+    },
     #[error("{span}: `stream {name}` is declared twice")]
     DuplicateStream { span: Span, name: String },
     #[error("{span}: `{name}` is a scalar parameter and cannot be streamed or assigned")]
@@ -244,12 +282,90 @@ pub enum LowerError {
 }
 
 /// Lower one kernel, resolving names and deriving its cost.
+/// Every extent names something, and everything walked by one index space is one length.
+///
+/// This is what shape buys at rank 1, before any of ADR-0015's traffic work: a kernel that
+/// streams `x: [f32; n]` beside `y: [f32; m]` is asking the compiler to walk two different
+/// lengths with one index, which it cannot check at run time and will not guess at.
+fn check_shapes(kernel: &Kernel, params: &BTreeMap<&str, Ty>) -> Result<(), LowerError> {
+    let reduce_target = kernel.reductions.first().map(|r| r.into.as_str());
+
+    for p in &kernel.params {
+        if !p.ty.is_buffer() {
+            continue;
+        }
+        if p.shape.len() != 1 {
+            return Err(LowerError::UnsupportedRank {
+                span: p.span,
+                buffer: p.name.clone(),
+                rank: p.shape.len(),
+            });
+        }
+        let dim = &p.shape[0];
+        if dim != crate::ast::BLOCKS && params.get(dim.as_str()) != Some(&Ty::U32) {
+            return Err(LowerError::UnknownExtent {
+                span: p.span,
+                buffer: p.name.clone(),
+                dim: dim.clone(),
+            });
+        }
+        // A reduction target is sized by the launch and nothing else is.
+        let is_target = Some(p.name.as_str()) == reduce_target;
+        if is_target && dim != crate::ast::BLOCKS {
+            return Err(LowerError::ReductionTargetNotPerBlock {
+                span: p.span,
+                buffer: p.name.clone(),
+                dim: dim.clone(),
+            });
+        }
+        if !is_target && dim == crate::ast::BLOCKS {
+            return Err(LowerError::StreamedPerBlock {
+                span: p.span,
+                buffer: p.name.clone(),
+            });
+        }
+    }
+
+    // Streamed buffers share the index space, so they share a length.
+    //
+    // The reduction target is skipped rather than compared. Streaming it is already an error
+    // with a diagnosis of its own -- `ReduceIntoStream`, which says the buffer carries no
+    // per-element traffic -- and that is the cause. A mismatched extent is only the symptom,
+    // and reporting a symptom first is how an error message sends someone to the wrong place.
+    let mut first: Option<(&str, &str)> = None;
+    for s in &kernel.streams {
+        if Some(s.buffer.as_str()) == reduce_target {
+            continue;
+        }
+        let Some(p) = kernel.params.iter().find(|p| p.name == s.buffer) else {
+            continue; // `StreamOfNothing` reports this, with the stream's span.
+        };
+        let Some(dim) = p.shape.first() else { continue };
+        match first {
+            None => first = Some((p.name.as_str(), dim.as_str())),
+            Some((other, other_dim)) if other_dim != dim => {
+                return Err(LowerError::ExtentMismatch {
+                    span: p.span,
+                    buffer: p.name.clone(),
+                    dim: dim.clone(),
+                    other: other.to_string(),
+                    other_dim: other_dim.to_string(),
+                })
+            }
+            Some(_) => {}
+        }
+    }
+    Ok(())
+}
+
 pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
     let params: BTreeMap<&str, Ty> = kernel
         .params
         .iter()
         .map(|p| (p.name.as_str(), p.ty))
         .collect();
+
+    check_shapes(kernel, &params)?;
 
     // --- streams -------------------------------------------------------------------
     let mut seen = BTreeSet::new();
@@ -654,7 +770,7 @@ mod tests {
     const SAXPY: &str = "\
 machine sm_120
 
-kernel saxpy(n: u32, a: f32, x: [f32], y: [f32])
+kernel saxpy(n: u32, a: f32, x: [f32; n], y: [f32; n])
     intensity 0.1667
 
     stream x : dram -> reg
@@ -698,7 +814,7 @@ kernel saxpy(n: u32, a: f32, x: [f32], y: [f32])
     #[test]
     fn a_buffer_read_without_a_stream_is_refused_and_says_what_to_add() {
         let src =
-            "machine m\n\nkernel k(x: [f32], y: [f32])\n stream y : dram -> reg, drain\n at reg:
+            "machine m\n\nkernel k(n: u32, x: [f32; n], y: [f32; n])\n stream y : dram -> reg, drain\n at reg:
         y = x\n";
         let e = ir(src).unwrap_err();
         let s = e.to_string();
@@ -708,7 +824,7 @@ kernel saxpy(n: u32, a: f32, x: [f32], y: [f32])
 
     #[test]
     fn writing_a_stream_that_does_not_drain_is_refused() {
-        let src = "machine m\n\nkernel k(x: [f32])\n stream x : dram -> reg\n at reg:
+        let src = "machine m\n\nkernel k(n: u32, x: [f32; n])\n stream x : dram -> reg\n at reg:
         x = x + 1\n";
         let e = ir(src).unwrap_err();
         assert!(e.to_string().contains("no `drain`"), "{e}");
@@ -716,10 +832,10 @@ kernel saxpy(n: u32, a: f32, x: [f32], y: [f32])
 
     #[test]
     fn draining_something_never_computed_is_refused() {
-        let src = "machine m\n\nkernel k(x: [f32], y: [f32])\n stream x : dram -> reg\n stream y : dram -> reg, drain\n at reg:
+        let src = "machine m\n\nkernel k(n: u32, x: [f32; n], y: [f32; n])\n stream x : dram -> reg\n stream y : dram -> reg, drain\n at reg:
         x = x\n";
         // x has no drain, so this trips WriteWithoutDrain first; swap to make y the issue.
-        let src2 = "machine m\n\nkernel k(x: [f32], y: [f32])\n stream x : dram -> reg\n stream y : dram -> reg, drain\n at reg:
+        let src2 = "machine m\n\nkernel k(n: u32, x: [f32; n], y: [f32; n])\n stream x : dram -> reg\n stream y : dram -> reg, drain\n at reg:
         y = x\n";
         assert!(ir(src).is_err());
         assert!(ir(src2).is_ok(), "y is drained and assigned");
@@ -727,7 +843,7 @@ kernel saxpy(n: u32, a: f32, x: [f32], y: [f32])
 
     #[test]
     fn a_stream_of_a_scalar_is_refused() {
-        let src = "machine m\n\nkernel k(a: f32, y: [f32])\n stream a : dram -> reg\n stream y : dram -> reg, drain\n at reg:
+        let src = "machine m\n\nkernel k(n: u32, a: f32, y: [f32; n])\n stream a : dram -> reg\n stream y : dram -> reg, drain\n at reg:
         y = a\n";
         let e = ir(src).unwrap_err();
         assert!(e.to_string().contains("scalar parameter"), "{e}");
@@ -735,7 +851,7 @@ kernel saxpy(n: u32, a: f32, x: [f32], y: [f32])
 
     #[test]
     fn an_unknown_name_names_itself() {
-        let src = "machine m\n\nkernel k(y: [f32])\n stream y : dram -> reg, drain\n at reg:
+        let src = "machine m\n\nkernel k(n: u32, y: [f32; n])\n stream y : dram -> reg, drain\n at reg:
         y = z\n";
         let e = ir(src).unwrap_err();
         assert!(e.to_string().contains("`z`"), "{e}");
@@ -743,7 +859,7 @@ kernel saxpy(n: u32, a: f32, x: [f32], y: [f32])
 
     #[test]
     fn a_buffer_is_loaded_once_however_often_it_is_named() {
-        let src = "machine m\n\nkernel k(x: [f32], y: [f32])\n stream x : dram -> reg\n stream y : dram -> reg, drain\n at reg:
+        let src = "machine m\n\nkernel k(n: u32, x: [f32; n], y: [f32; n])\n stream x : dram -> reg\n stream y : dram -> reg, drain\n at reg:
         y = x + x + x\n";
         let k = ir(src).unwrap();
         assert_eq!(
@@ -761,7 +877,7 @@ kernel saxpy(n: u32, a: f32, x: [f32], y: [f32])
     fn a_drained_buffer_that_is_never_read_costs_a_write_and_not_a_read() {
         // y is assigned and drained, but its old value is never used, so nothing loads it.
         // Charging a read here would inflate the denominator and understate the intensity.
-        let src = "machine m\n\nkernel k(x: [f32], y: [f32])\n stream x : dram -> reg\n stream y : dram -> reg, drain\n at reg:
+        let src = "machine m\n\nkernel k(n: u32, x: [f32; n], y: [f32; n])\n stream x : dram -> reg\n stream y : dram -> reg, drain\n at reg:
         y = x + x\n";
         let k = ir(src).unwrap();
         assert_eq!(k.cost.read_bytes_per_element(), 4.0, "x only");
@@ -775,7 +891,7 @@ kernel saxpy(n: u32, a: f32, x: [f32], y: [f32])
 
     #[test]
     fn v1_refuses_a_level_it_cannot_generate_instead_of_ignoring_it() {
-        let src = "machine m\n\nkernel k(x: [f32])\n stream x : dram -> reg, drain\n at smem:
+        let src = "machine m\n\nkernel k(n: u32, x: [f32; n])\n stream x : dram -> reg, drain\n at smem:
         x = x\n";
         let e = ir(src).unwrap_err();
         assert!(e.to_string().contains("not implemented"), "{e}");

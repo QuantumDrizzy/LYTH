@@ -1,0 +1,17 @@
+machine sm_120
+
+# Refused. Two streamed buffers, two different lengths, one index space.
+#
+# The compiler walks `x` and `y` with the same index, so `[f32; n]` beside `[f32; m]` is a
+# question it cannot answer: which one bounds the loop? Before shapes it did not have to ask,
+# because a buffer had no length and the single u32 parameter was the bound by default. The
+# kernel compiled and read past the end of whichever buffer the caller made shorter.
+#
+# Nothing here can check two lengths against each other at run time -- a device pointer does
+# not carry its size -- so the only place to catch it is the declaration.
+kernel mismatch(n: u32, m: u32, x: [f32; n], y: [f32; m])
+    stream x : dram -> reg
+    stream y : dram -> reg, drain
+
+    at reg:
+        y = x

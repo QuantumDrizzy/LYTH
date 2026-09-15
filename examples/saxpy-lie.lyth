@@ -2,7 +2,7 @@ machine sm_120
 
 # The same kernel, claiming an intensity it does not have.
 # 2.0 flop/byte would be near the ridge; the body computes 0.1667.
-kernel saxpy_lie(n: u32, a: f32, x: [f32], y: [f32])
+kernel saxpy_lie(n: u32, a: f32, x: [f32; n], y: [f32; n])
     intensity 2.0
 
     stream x : dram -> reg

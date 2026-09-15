@@ -1,7 +1,7 @@
 machine sm_120
 
 # Two scalars and two buffers: y = a*x + b*y.
-kernel axpby(n: u32, a: f32, b: f32, x: [f32], y: [f32])
+kernel axpby(n: u32, a: f32, b: f32, x: [f32; n], y: [f32; n])
     intensity 0.25
 
     stream x : dram -> reg
