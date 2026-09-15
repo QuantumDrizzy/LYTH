@@ -284,11 +284,6 @@ impl Manifest {
         }
     }
 
-    /// The parameter that bounds the index space, which a generator needs to size the grid.
-    pub fn extent(&self) -> Option<&ParamSpec> {
-        self.params.iter().find(|p| p.is_extent)
-    }
-
     /// Buffers a caller allocates by element count, and the one it allocates by block count.
     pub fn sized_by_grid(&self) -> Option<&ParamSpec> {
         self.params.iter().find(|p| p.sized_by_grid)

@@ -97,10 +97,7 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
             .collect::<Vec<_>>()
             .join(" * ")
     };
-    let extent = extents
-        .first()
-        .cloned()
-        .unwrap_or_else(|| "n".to_string());
+
 
     let declared = match m.contract.declared_intensity {
         Some(v) => format!("Some({v:?})"),

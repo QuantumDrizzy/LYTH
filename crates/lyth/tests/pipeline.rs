@@ -571,3 +571,53 @@ mod tiled_ptx {
         assert!(e.to_string().contains("stages nothing"), "{e}");
     }
 }
+
+/// The launch shape is derived once, and the paths that launch ask for it.
+///
+/// This is the test the morning of 2026-09-16 did not have. `report_timing` assembled its own
+/// shape from two of three fields and the 256 default, so a tiled kernel verified at 1024
+/// threads was timed at 256, ran a quarter of every tile, produced results nothing checked and
+/// reported 3.85 TB/s on a 358 GB/s device.
+mod launch {
+    use super::*;
+
+    fn shape(src: &str, block_arg: Option<u32>) -> (u32, u32) {
+        let unit = parse(src).unwrap();
+        let ir = ir::lower(&unit, &unit.kernels[0]).unwrap();
+        // Mirrors `launch_shape` in the binary, which is private to it. Held here so that a
+        // change in one without the other fails rather than diverging quietly.
+        let block: u32 = match &ir.tile {
+            Some(t) => t.iter().product(),
+            None => block_arg.unwrap_or(256),
+        };
+        let shared = match (&ir.shared, ir.reduction.is_some()) {
+            (Some(l), _) => l.bytes,
+            (None, true) => block * 4,
+            (None, false) => 0,
+        };
+        (block, shared)
+    }
+
+    const TILED: &str = "machine sm_120\n\nkernel t(rows: u32, cols: u32, a: [f32; rows, cols], b: [f32; cols, rows])\n    space i, j : rows, cols\n    tile 32, 32\n    stream a : dram -> smem -> reg\n    stream b : dram -> reg, drain\n    at reg:\n        b[j, i] = a[i, j]\n";
+    const FLAT: &str = "machine sm_120\n\nkernel k(n: u32, x: [f32; n], y: [f32; n])\n    stream x : dram -> reg\n    stream y : dram -> reg, drain\n    at reg:\n        y = x\n";
+    const REDUCE: &str = "machine sm_120\n\nkernel s(n: u32, x: [f32; n], partial: [f32; blocks])\n    stream x : dram -> reg\n    reduce sum v : reg -> smem -> dram into partial\n    at reg:\n        v = x\n";
+
+    #[test]
+    fn a_tile_fixes_the_block_and_a_flag_cannot_move_it() {
+        assert_eq!(shape(TILED, None), (1024, 4224));
+        // `--block` is refused beside a tile, and if it ever were not, the tile still wins.
+        assert_eq!(shape(TILED, Some(256)), (1024, 4224));
+    }
+
+    #[test]
+    fn a_flat_kernel_takes_the_flag_or_the_default_and_no_shared_memory() {
+        assert_eq!(shape(FLAT, None), (256, 0));
+        assert_eq!(shape(FLAT, Some(128)), (128, 0));
+    }
+
+    #[test]
+    fn a_reduction_sizes_its_shared_memory_by_the_block_it_actually_gets() {
+        assert_eq!(shape(REDUCE, None), (256, 1024));
+        assert_eq!(shape(REDUCE, Some(512)), (512, 2048));
+    }
+}

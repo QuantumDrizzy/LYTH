@@ -511,6 +511,38 @@ fn known_limits() -> [&'static str; 2] {
     ]
 }
 
+/// The launch shape the compiler derives, in one place.
+///
+/// This exists because of a bug, and the bug is the argument for it. `report_timing` took
+/// `grid` and `shared` and supplied the block itself, so a tiled kernel verified at 1024
+/// threads was timed at 256 — a quarter of every tile untouched, results nothing checked, and
+/// a reported bandwidth ten times what the device has.
+///
+/// Grouping them into `Launch` fixed that call. It did not fix the class: any later path that
+/// launches — a bench harness, an example, a second report — can invent a shape again. So the
+/// shape is derived once, here, from the IR, and a path that wants to launch asks rather than
+/// assembles.
+///
+/// What the IR determines is not negotiable: a tile fixes the block at one thread per element,
+/// and staging or a reduction fixes the shared bytes. `--block` may only choose what the IR
+/// leaves open.
+fn launch_shape(ir: &KernelIr, block_arg: Option<u32>, grid: u32) -> Launch {
+    let block = match &ir.tile {
+        Some(t) => t.iter().product(),
+        None => block_arg.unwrap_or(BLOCK),
+    };
+    let shared = match (&ir.shared, ir.reduction.is_some()) {
+        (Some(l), _) => l.bytes,
+        (None, true) => block * 4,
+        (None, false) => 0,
+    };
+    Launch {
+        grid,
+        block,
+        shared,
+    }
+}
+
 /// The accounting the compiler derived, in the schema `lyth-probe` checks against `ncu`.
 ///
 /// This is the loop closing. `lyth-probe intensity-check --ncu` previously compared a
@@ -626,10 +658,7 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
         );
         return ExitCode::from(EXIT_UNUSABLE);
     }
-    let block = match &ir.tile {
-        Some(t) => t.iter().product(),
-        None => block,
-    };
+    let block = launch_shape(ir, block_arg, 1).block;
 
     let mut scalars: BTreeMap<String, f32> = BTreeMap::new();
     for s in sets {
@@ -876,27 +905,19 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
 
     // One f32 slot per thread for the reduction tree; nothing without a reduction.
     // A tile's shared memory is sized by the TILE, not by the problem: the same block walks
-    // however many tiles the grid-stride gives it, reusing one staging buffer. Sizing this by
-    // the extents is the bug that appears when the front end knows about extents and the back
-    // end knows about tiles.
-    let derived_shared = match (&ir.shared, ir.reduction.is_some()) {
-        (Some(l), _) => l.bytes,
-        (None, true) => block * 4,
-        (None, false) => 0,
-    };
+    // however many tiles the grid-stride gives it, reusing one staging buffer.
+    let derived = launch_shape(ir, block_arg, grid);
+    let derived_shared = derived.shared;
     let shared = shared_override.unwrap_or(derived_shared);
     if shared != derived_shared {
         println!("  [BYPASS] launching with {shared} B instead of the derived {derived_shared} B.");
         println!("           A tiled kernel that is still correct here never staged anything.");
     }
     println!("  launch   grid {grid} x block {block} over {n} elements, {shared} B shared");
-    // One shape, built once, used by the verified launch and by the timed one. They diverged
-    // when they were two sets of loose integers.
-    let shape = Launch {
-        grid,
-        block,
-        shared,
-    };
+    // One shape, from the compiler, used by the verified launch and by the timed one. The
+    // only thing a caller may override is the shared bytes, and only for ADR-0017's bypass
+    // control, which announces itself above.
+    let shape = Launch { shared, ..derived };
     if let Err(e) = func.launch_shared(shape.grid, shape.block, shape.shared, &args) {
         eprintln!("error[cuda]: {e}");
         return ExitCode::from(EXIT_UNUSABLE);
