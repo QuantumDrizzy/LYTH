@@ -2,7 +2,7 @@
 
 **Status:** Proposed
 **Date:** 2026-09-16
-**Depends on:** ADR-0015 (shape), ADR-0016 (callable), ADR-0011 (reductions)
+**Depends on:** ADR-0000 (why), ADR-0015 (shape), ADR-0016 (callable), ADR-0011 (reductions)
 
 ## Why this one is the point of the project
 
@@ -196,6 +196,74 @@ bit-exactness also failed, on 137 of 65536 elements, which is exactly the coin-f
 described. The barrier was restored and the tree is clean again.
 
 An instrument that has only ever said "clean" has not been verified.
+
+## Two claims that needed a counterfactual, and one that needed normalising
+
+Three readings of the table above found the same hole twice, and it is worth fixing before the
+emitter exists rather than after.
+
+### `bank_conflicts = 0` does not show the skew did anything
+
+That number is also zero if the kernel never used shared memory, if the emitter ignored the skew
+and got lucky with the access pattern, or if the counter does not cover the instruction. It says
+the conflicts are absent; the claim is that **the skew removed them**, which is a claim about
+cause.
+
+So the fixture comes in two: the same body and the same tile, once with the derived skew and
+once with the skew forced to zero.
+
+| | predicted |
+|---|---|
+| skew derived (stride 33) | 0 conflicts |
+| skew forced to 0 (stride 32) | **greater than zero** |
+
+If both are zero the skew is a no-op and this ADR is wrong about why it works. That is the
+falsifiable form.
+
+### The bypass check needs a deterministic half
+
+Launching with `sharedMemBytes = 0` and getting a different answer catches an emitter that
+declares shared memory and does not use it. It cannot prove the converse: reading past a
+zero-length `.extern .shared` array is undefined, so "the answer matched" means the undefined
+behaviour was not observed, not that there is no staging.
+
+The deterministic half is structural and needs no device: the emitted PTX contains
+`.extern .shared`, and it contains exactly the number of `bar.sync` the IR says it should. The
+PTX cannot lie about what it contains; the launch check catches the case where what it contains
+is unused. Two layers, neither sufficient alone.
+
+### The traffic comparison has to be like for like
+
+`8 bytes per element against 36` compares two kernels. They must be the same `rows` and `cols`,
+the same counter divided by the same element count, and measured the same way — otherwise it is
+two different measurements with a ratio taken between them. Fixed here because it is the central
+claim of the stage: **4096 x 4096, `lts__t_bytes.sum` divided by `rows * cols`, tiled against the
+same body untiled.**
+
+## Where the emitter will get it wrong, listed before it does
+
+In order of how easy each is to write and not notice.
+
+**Edge tiles.** Until now an index was a permutation of the space variables with no offsets. A
+tile introduces offsets — `i = tile_row * 32 + ty` — and a guard, and a guard that is wrong in
+the generous direction produces correct results whenever the extents are multiples of 32. **The
+tests use 4095 and 4097**, not 4096, or a broken edge passes green. This is the one failure the
+counters cannot see and bit-exactness can: the only place in this ADR where the host oracle is
+the sharp instrument.
+
+**One barrier where two are needed.** The loop is grid-stride over *tiles*, so a block handles
+tile `T`, then `T + gridDim`. Phase 2 of the second iteration writes the shared tile that phase 4
+of the first is still reading. That needs a barrier after the reads as well as after the writes:
+**two `bar.sync` per tile iteration, not one.** The count is derivable from the IR and is
+asserted without a GPU, and `racecheck` — already calibrated at 130,816 hazards for exactly this
+shape of mistake — is what catches it if the derivation is also wrong.
+
+**The skew applied to one phase only.** If the store uses the padded stride and the transposed
+load does not, the kernel compiles, runs, and produces correct bits while conflicting on every
+read. Nothing but the counterfactual fixture above separates that from a correct emitter.
+
+**A second fma rule.** The contraction of `a * b + c` is tested and lives in one place. The tile
+does not get its own.
 
 ## What is deliberately not here
 

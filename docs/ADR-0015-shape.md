@@ -111,6 +111,9 @@ copy2d   (model: 8 bytes/element)      transpose (model: 36 bytes/element)
   8192       8.01      7.86 537MB        8192      53.77     60.69  537MB
 ```
 
+A ratio of 0.222 has a reading that is not a percentage: the kernel moves **4.5 bits for every
+bit it needs** (ADR-0000).
+
 **At the L2 the model is exact.** The control measures 8.00 to 8.02 against 8, at every size,
 and the transpose measures 36.05 and 36.02 against 36 while its working set fits in L2. That is
 0.1%, and it is not a fit: the number was derived from the index permutation before anything ran.
