@@ -46,6 +46,26 @@ fn the_lying_example_does_not_compile() {
     assert!(e.contains("did you mean to declare"), "{e}");
 }
 
+/// The matmul example, which is checked in and does **not** compile.
+///
+/// ADR-0018 step 1 is the grammar and the resolution, not the cost. A contraction moves
+/// `2K/T + 1` elements per output, an expression in a launch extent, and this compiler
+/// reports constants. The example exists so the syntax is written down and exercised, and the
+/// refusal exists so no constant is published in the expression's place.
+///
+/// When step 2 lands, this test is the one that has to change, and it should be changed to
+/// assert the derived intensity rather than deleted.
+#[test]
+fn the_matmul_example_parses_and_refuses_to_be_costed() {
+    let e = compile("matmul.lyth").expect_err("a contraction has no cost model yet");
+    assert!(e.contains("cost is not derived yet"), "{e}");
+    assert!(e.contains("2K/T + 1"), "{e}");
+    assert!(e.contains("ADR-0018 step 2"), "{e}");
+    // It got all the way past parsing, the space, the tile, the staged streams and the body.
+    // A refusal that fired earlier would make this file untested rather than pending.
+    assert!(!e.contains("expected"), "it should parse: {e}");
+}
+
 #[test]
 fn the_example_that_forgets_a_stream_does_not_compile() {
     let e = compile("forgot-stream.lyth").expect_err("an unstreamed read must not compile");

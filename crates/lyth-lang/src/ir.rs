@@ -41,7 +41,27 @@ pub struct KernelIr {
     pub drains: Vec<(String, RegId)>,
     /// At most one in v1.
     pub reduction: Option<ReductionIr>,
+    /// The contracted axis, resolved. `None` for every kernel that does not contract.
+    pub contract: Option<ContractIr>,
     pub cost: Cost,
+}
+
+/// `contract sum p : k`, resolved.
+///
+/// Sequential accumulation inside one thread, over an axis the space does not iterate. Unlike
+/// `ReductionIr` there is no path: nothing crosses a level boundary because of the
+/// contraction, and nothing is combined across threads. What it changes is how many times each
+/// streamed element is read per output, which is the whole of ADR-0018.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContractIr {
+    pub op: ReduceOp,
+    /// The index variable walked. Never a space variable.
+    pub var: String,
+    /// The `u32` parameter it runs over.
+    pub extent: String,
+    /// Buffers whose index mentions `var`, and the position it appears at. These are the ones
+    /// read `extent` times per output instead of once, and the ones a tile can reuse.
+    pub over: Vec<(String, usize)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -276,6 +296,62 @@ impl Cost {
 pub enum LowerError {
     #[error("{span}: `{name}` is used but is not a parameter of this kernel")]
     UnknownName { span: Span, name: String },
+    #[error(
+        "{span}: `contract` needs a `space`. The contracted axis is the one the space does not iterate, so without free indices there is nothing to contract against."
+    )]
+    ContractWithoutSpace { span: Span },
+    #[error(
+        "{span}: a kernel cannot both `reduce` and `contract` in v1. They are different machines: `reduce` combines across threads through shared memory, `contract` combines inside one thread in a register. Composing them is a design, not a default."
+    )]
+    ContractAndReduce { span: Span },
+    #[error(
+        "{span}: `contract ... {var}` names `{var}`, which the space already iterates ({vars}). A contracted axis is walked and combined; a free one is walked and kept."
+    )]
+    ContractVarIsFree {
+        span: Span,
+        var: String,
+        vars: String,
+    },
+    #[error(
+        "{span}: `contract ... {var}` names `{var}`, which is a parameter of this kernel. An index variable is not a value the caller passes."
+    )]
+    ContractVarIsParam { span: Span, var: String },
+    #[error(
+        "{span}: `contract ... {var} : {extent}` runs over `{extent}`, which is not a u32 parameter of this kernel. The contracted extent is a length the caller passes."
+    )]
+    ContractExtentUnknown {
+        span: Span,
+        var: String,
+        extent: String,
+    },
+    #[error(
+        "{span}: `contract` runs over `{extent}`, which the space already runs over. One extent cannot be both walked-and-kept and walked-and-combined."
+    )]
+    ContractExtentIsFree { span: Span, extent: String },
+    #[error(
+        "{span}: `contract ... {var}` is declared but no buffer is indexed at `{var}`, so nothing is contracted. The declaration would cost K times the traffic the body moves."
+    )]
+    ContractOverNothing { span: Span, var: String },
+    #[error(
+        "{span}: `contract ... {var}` walks only `{buffer}`. With one operand there is no reuse for a tile to exploit, so the traffic this compiler derives for a contraction does not describe it. Reducing a buffer along an axis is a different kernel and is not derived yet (ADR-0018)."
+    )]
+    ContractOverOne {
+        span: Span,
+        var: String,
+        buffer: String,
+    },
+    #[error(
+        "{span}: `{buffer}` is written at `{var}`, the contracted axis. The target has one value per output and the contraction is what collapses `{var}`; writing at it would store each term in turn and keep the last."
+    )]
+    ContractedTarget {
+        span: Span,
+        buffer: String,
+        var: String,
+    },
+    #[error(
+        "{span}: `{name}` parses and resolves, but its cost is not derived yet. A contraction moves `2K/T + 1` elements per output -- an expression in a launch extent, not a constant -- and this compiler will not publish a constant in its place. ADR-0018 step 2."
+    )]
+    ContractCostNotDerived { span: Span, name: String },
     #[error(
         "{span}: `{name}` is a buffer but no stream moves it. \
          Add `stream {name} : dram -> reg`. \
@@ -620,9 +696,54 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
         }
     };
 
+    // --- the contracted axis, as declared ------------------------------------------
+    //
+    // Split in two on purpose. Everything here is about the declaration alone and must run
+    // *before* the body, or a kernel writing `c[i, j]` under `contract sum i` is told its
+    // target is indexed at the contracted axis -- true, and not the mistake the author made.
+    // The checks that need the body are further down, after it.
+    if let Some(c) = &kernel.contract {
+        let Some(sp) = &space else {
+            return Err(LowerError::ContractWithoutSpace { span: c.span });
+        };
+        // Two different machines. `reduce` combines across threads through shared memory and
+        // its tree order is part of the contract; `contract` combines inside one thread, in a
+        // register, in loop order. A kernel doing both is a design, not a composition.
+        if !kernel.reductions.is_empty() {
+            return Err(LowerError::ContractAndReduce { span: c.span });
+        }
+        if sp.vars.contains(&c.var) {
+            return Err(LowerError::ContractVarIsFree {
+                span: c.span,
+                var: c.var.clone(),
+                vars: sp.vars.join(", "),
+            });
+        }
+        if params.contains_key(c.var.as_str()) {
+            return Err(LowerError::ContractVarIsParam {
+                span: c.span,
+                var: c.var.clone(),
+            });
+        }
+        if params.get(c.extent.as_str()) != Some(&Ty::U32) {
+            return Err(LowerError::ContractExtentUnknown {
+                span: c.span,
+                var: c.var.clone(),
+                extent: c.extent.clone(),
+            });
+        }
+        if sp.extents.contains(&c.extent) {
+            return Err(LowerError::ContractExtentIsFree {
+                span: c.span,
+                extent: c.extent.clone(),
+            });
+        }
+    }
+
     let mut ctx = Lowering {
         params: &params,
         space: space.clone(),
+        contract_var: kernel.contract.as_ref().map(|c| c.var.clone()),
         streams: &mut streams,
         ops: Vec::new(),
         next_reg: 0,
@@ -652,6 +773,19 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
             // A write is an address like a read, so the target's index is recorded the same
             // way -- and a local, which has no address, must not carry one.
             if params.get(stmt.target.as_str()).is_some_and(|t| t.is_buffer()) {
+                // The target is one value per output, and the contracted axis is the one the
+                // output does not have. `c[i, p] = ...` would write K times per output, from
+                // the same thread, each write overwriting the last -- so the answer would be
+                // the final term rather than the sum, and it would look like a working kernel.
+                if let Some(c) = &kernel.contract {
+                    if stmt.target_index.contains(&c.var) {
+                        return Err(LowerError::ContractedTarget {
+                            span: stmt.target_span,
+                            buffer: stmt.target.clone(),
+                            var: c.var.clone(),
+                        });
+                    }
+                }
                 ctx.note_index(&stmt.target, &stmt.target_index, stmt.target_span)?;
             } else if !stmt.target_index.is_empty() {
                 return Err(LowerError::IndexWithoutSpace {
@@ -824,7 +958,63 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
         })
     });
 
+    // --- the contracted axis -------------------------------------------------------
+    //
+    // What makes a `contract` real is a buffer read at it, so these refusals need the body.
+    // The declaration-level ones ran before it.
+    let mut contract = None;
+    if let Some(c) = &kernel.contract {
+        // The buffers the contraction actually walks, and where in their index it appears.
+        let over: Vec<(String, usize)> = streams
+            .iter()
+            .filter_map(|st| {
+                st.index
+                    .iter()
+                    .position(|v| *v == c.var)
+                    .map(|at| (st.buffer.clone(), at))
+            })
+            .collect();
+        if over.is_empty() {
+            return Err(LowerError::ContractOverNothing {
+                span: c.span,
+                var: c.var.clone(),
+            });
+        }
+        // A contraction that walks only one buffer is a reduction of that buffer along an
+        // axis, which is a real kernel and not this one: with a single operand there is no
+        // reuse for a tile to exploit, so the traffic expression ADR-0018 derives -- 2K/T per
+        // output -- degenerates and the declared intensity would be checked against an
+        // asymptote that does not describe it. Refused until it is derived on its own.
+        if over.len() < 2 {
+            return Err(LowerError::ContractOverOne {
+                span: c.span,
+                var: c.var.clone(),
+                buffer: over[0].0.clone(),
+            });
+        }
+        contract = Some(ContractIr {
+            op: c.op,
+            var: c.var.clone(),
+            extent: c.extent.clone(),
+            over,
+        });
+    }
+
     let cost = derive_cost(&streams, &ops, reduction.as_ref());
+
+    // A contraction's traffic per output is `2K/T + 1` elements, an expression in a launch
+    // extent rather than a constant, and `Cost` carries constants. Reporting the constant part
+    // would publish a number wrong by a factor of K -- and this compiler's whole claim is that
+    // the number it publishes is the one the silicon moves.
+    //
+    // So the front end accepts the syntax and refuses to cost it, rather than costing it
+    // wrongly. ADR-0018 step 2 replaces this with the symbolic form.
+    if contract.is_some() {
+        return Err(LowerError::ContractCostNotDerived {
+            span: kernel.contract.as_ref().expect("contract is some").span,
+            name: kernel.name.clone(),
+        });
+    }
 
     Ok(KernelIr {
         name: kernel.name.clone(),
@@ -837,6 +1027,7 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
         ops,
         drains,
         reduction,
+        contract,
         cost,
     })
 }
@@ -991,6 +1182,9 @@ fn derive_cost(streams: &[StreamIr], ops: &[Op], reduction: Option<&ReductionIr>
 struct Lowering<'a> {
     params: &'a BTreeMap<&'a str, Ty>,
     space: Option<SpaceIr>,
+    /// The contracted index variable, when there is one. An index may name it in addition to
+    /// the space's own variables.
+    contract_var: Option<String>,
     streams: &'a mut Vec<StreamIr>,
     ops: Vec<Op>,
     next_reg: RegId,
@@ -1099,17 +1293,27 @@ impl Lowering<'_> {
                 first: sp.vars.join(", "),
             });
         }
-        // A permutation: every index variable once, in any order, and nothing else.
-        let mut sorted = index.to_vec();
-        sorted.sort();
-        let mut want = sp.vars.clone();
-        want.sort();
-        if sorted != want {
+        // Without a contraction: a permutation, every index variable once and nothing else.
+        //
+        // With one, the contracted variable joins the alphabet and displaces a free index
+        // rather than lengthening the list -- `a[i, p]` under `space i, j` and `contract p`.
+        // The rank is still the space's, because that is the rank of every buffer here, and
+        // `p` may appear at most once for the same reason `i` may: one address per element.
+        let legal: Vec<String> = match &self.contract_var {
+            None => sp.vars.clone(),
+            Some(p) => sp.vars.iter().cloned().chain(std::iter::once(p.clone())).collect(),
+        };
+        let distinct: BTreeSet<&String> = index.iter().collect();
+        let drawn_from_alphabet = index.iter().all(|v| legal.contains(v));
+        let ok = index.len() == sp.vars.len()
+            && distinct.len() == index.len()
+            && drawn_from_alphabet;
+        if !ok {
             return Err(LowerError::NotAPermutation {
                 span,
                 buffer: buffer.into(),
                 index: index.join(", "),
-                vars: sp.vars.join(", "),
+                vars: legal.join(", "),
             });
         }
         if let Some(st) = self.streams.iter_mut().find(|s| s.buffer == buffer) {

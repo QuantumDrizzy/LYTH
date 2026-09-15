@@ -31,6 +31,9 @@ pub struct Kernel {
     pub tile: Option<TileDecl>,
     /// At most one in v1. See ADR-0011.
     pub reductions: Vec<ReduceDecl>,
+    /// `contract sum p : k` — an axis walked and combined inside one thread. `None` for every
+    /// kernel that does not contract. At most one in v1. See ADR-0018.
+    pub contract: Option<ContractDecl>,
     /// `at <level>:` blocks, in source order.
     pub blocks: Vec<Block>,
 }
@@ -50,6 +53,31 @@ pub struct ReduceDecl {
     pub path: Vec<Level>,
     /// Buffer receiving one value per block.
     pub into: String,
+    pub span: Span,
+}
+
+/// `contract sum p : k`
+///
+/// An axis that is **walked and summed**, not one of the free indices the space iterates. It
+/// reads like `reduce` deliberately: both say "this is combined", and the operator is written
+/// rather than implied.
+///
+/// The two are different machines and conflating them is the mistake this doc comment exists
+/// to prevent. `reduce` combines **across threads**, through shared memory, and its tree order
+/// is part of the contract because float addition is not associative. `contract` combines
+/// **within one thread**, sequentially, in a register: the order is the loop order and there
+/// is nothing to choose. So a contraction has no tree-shape question at all, which is why the
+/// same three operators are accepted here — `ReduceOp::combine` and `identity` already define
+/// each one exactly, and a sequential accumulation is the easier case, not the harder one.
+///
+/// See ADR-0018.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContractDecl {
+    pub op: ReduceOp,
+    /// The index variable walked. Not a space variable: the space iterates the free indices.
+    pub var: String,
+    /// The extent it runs over, naming a `u32` parameter.
+    pub extent: String,
     pub span: Span,
 }
 

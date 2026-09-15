@@ -6,6 +6,11 @@
 use crate::ast::*;
 use crate::lex::{lex, Span, Tok, Token};
 
+/// One message for both spellings of a rank-2 contraction, so the refusal is about the design
+/// rather than about whichever symbol the parser tripped over first.
+const RANK_2_CONTRACTION: &str =
+    "v1 contracts one axis; `contract sum p, q : k, l` is a rank-2 contraction and its traffic      is not the expression this compiler derives";
+
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
     #[error("{0}")]
@@ -175,6 +180,7 @@ impl Parser {
         let mut space = None;
         let mut tile = None;
         let mut reductions = Vec::new();
+        let mut contract = None;
         let mut blocks = Vec::new();
 
         loop {
@@ -211,10 +217,16 @@ impl Parser {
                 streams.push(self.stream()?);
             } else if self.at_word("reduce") {
                 reductions.push(self.reduce()?);
+            } else if self.at_word("contract") {
+                if contract.is_some() {
+                    return self.msg("`contract` declared twice; v1 contracts one axis");
+                }
+                contract = Some(self.contract()?);
             } else if self.at_word("at") {
                 blocks.push(self.block()?);
             } else {
-                return self.expected("`intensity`, `space`, `tile`, `stream`, `reduce` or `at`");
+                return self
+                    .expected("`intensity`, `space`, `tile`, `stream`, `reduce`, `contract` or `at`");
             }
         }
 
@@ -228,7 +240,39 @@ impl Parser {
             space,
             tile,
             reductions,
+            contract,
             blocks,
+        })
+    }
+
+    /// `contract sum p : k`
+    fn contract(&mut self) -> Result<ContractDecl, ParseError> {
+        let span = self.span();
+        self.expect(Tok::Word("contract".into()))?;
+        let (op_word, op_span) = self.word()?;
+        let Some(op) = ReduceOp::parse(&op_word) else {
+            return Err(ParseError::Message {
+                span: op_span,
+                msg: format!("`{op_word}` is not a combining operator; sum, max or min"),
+            });
+        };
+        let (var, _) = self.word()?;
+        // One axis, and the refusal is here rather than left to `expect(Colon)` so that both
+        // spellings of the mistake say the same thing. `contract sum p, q : k` would otherwise
+        // report "expected `:`, found `,`", which names the symbol and not the design.
+        if *self.peek() == Tok::Comma {
+            return self.msg(RANK_2_CONTRACTION);
+        }
+        self.expect(Tok::Colon)?;
+        let (extent, _) = self.word()?;
+        if *self.peek() == Tok::Comma {
+            return self.msg(RANK_2_CONTRACTION);
+        }
+        Ok(ContractDecl {
+            op,
+            var,
+            extent,
+            span,
         })
     }
 

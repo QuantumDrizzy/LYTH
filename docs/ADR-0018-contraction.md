@@ -1,6 +1,6 @@
 # ADR-0018 — Contraction, where the cost model stops being a number
 
-**Status:** Proposed
+**Status:** Proposed — step 1 built
 **Date:** 2026-09-16
 **Depends on:** ADR-0000 (why), ADR-0017 (the tile), ADR-0015 (shape)
 
@@ -147,6 +147,70 @@ not this one.
 No thread coarsening, no double buffering, no vectorised loads, no tensor cores, no rank above
 2, no contraction over more than one axis. This will not be fast. It is the first kernel in this
 language whose cost is a theorem rather than a count, and that is the whole of what it claims.
+
+
+## Step 1, as built
+
+`examples/matmul.lyth` is checked in, parses, resolves, and **does not compile**. The last
+thing `lower` does for a contraction is refuse:
+
+```
+examples/matmul.lyth:28:5: `matmul` parses and resolves, but its cost is not derived yet.
+A contraction moves `2K/T + 1` elements per output -- an expression in a launch extent, not a
+constant -- and this compiler will not publish a constant in its place. ADR-0018 step 2.
+```
+
+That refusal is the point of the step boundary. `Cost` carries constants, and the constant part
+of a matmul's traffic is 4 bytes per output — the write of `C`. Emitting it would be wrong by a
+factor of `K` and would look exactly like every other number this compiler publishes. So the
+front end accepts the syntax and declines to cost it, and a test pins the refusal so that the
+checks below are reachable rather than shadowed by it.
+
+### Nine refusals, and why each is a refusal rather than a warning
+
+Every one of these is a source that would otherwise produce a kernel that runs.
+
+| written | refused because |
+|---|---|
+| `contract` with no `space` | the contracted axis is the one the space does not iterate; with no free indices there is nothing to contract against |
+| `contract` and `reduce` in one kernel | different machines — across threads through shared memory, against inside one thread in a register |
+| `contract sum i : k` under `space i, j` | free and contracted are the two things an axis can be, and this asks for both |
+| `contract sum p : m` under `space i, j : m, n` | one extent cannot be both walked-and-kept and walked-and-combined |
+| `contract sum n : k` where `n` is a parameter | an index variable is not a value the caller passes |
+| `contract sum p : depth`, no such parameter | the contracted extent is a length the caller passes |
+| `contract sum p : k` with no buffer at `p` | the declaration multiplies derived traffic by `K` while the body reads each element once |
+| `c[i,j] = a[i,p] + b[i,j]` | one operand: no reuse, so `2K/T` is not its traffic. Reducing a buffer along an axis is a different kernel |
+| `c[i,p] = ...` | the target has one value per output; writing at `p` stores each term in turn and keeps the last |
+
+The last one is the one worth reading twice. It compiles under any language that lets you write
+`+=`, runs, returns numbers, and computes the final term of the sum.
+
+### Two things decided here that the proposal did not settle
+
+**All three operators are accepted, not only `sum`.** `ReduceOp::combine` and `identity` are
+already defined for `max` and `min`, and a contraction is sequential in a register: there is no
+tree, so not even the ordering question a `reduce` has — it is the *easier* case. Refusing them
+would have been a claim nobody derived. What they still lack is a measurement, which step 3
+owes them along with `sum`.
+
+**The order of the checks is part of the design.** The declaration-level refusals run *before*
+the body and the body-level ones after. Written the other way round, `contract sum i : k` under
+`space i, j` reported "`c` is written at `i`, the contracted axis" — true, and not the mistake
+the author made. Found by a test asserting the message, not the failure.
+
+### One thing the language grew, because the matmul needed it
+
+A kernel signature may now span lines. `matmul` takes three extents and three buffers and does
+not fit on one, and a layout-sensitive language has to say what a newline inside brackets means.
+It means nothing: no `Newline`, no `Indent`, no `Dedent` while a parenthesis is open, and the
+next line's leading spaces are ordinary whitespace. The alternative was a continuation
+character, which is a second way to write one thing.
+
+`crates/lyth-lang/tests/wrapped_signature.rs` asserts the two spellings lower to the **same**
+IR — not to two IRs that both work — with parameter spans flattened, because a parameter on
+line 4 should carry line 4 and an error about it should point there. An unclosed `(` is now
+reported as one; without that check the rest of the file is swallowed as a single logical line
+and the error surfaces somewhere unrelated, which is how the CRLF bug used to present.
 
 ## Build sequence
 

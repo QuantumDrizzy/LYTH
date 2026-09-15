@@ -102,6 +102,14 @@ struct Lexer {
     col: u32,
     /// Indentation column of each open block, outermost first. Never empty.
     levels: Vec<u32>,
+    /// Open parentheses. Layout is suppressed while this is above zero.
+    ///
+    /// A kernel signature is the one construct here that outgrows a line -- a matmul takes
+    /// three extents and three buffers -- so a language that indents its blocks has to say
+    /// what a newline inside brackets means. It means nothing: no `Newline`, no `Indent`, no
+    /// `Dedent`, and the next line's leading spaces are ordinary whitespace. The alternative
+    /// is a continuation character, which is a second way to write one thing.
+    paren_depth: u32,
     out: Vec<Token>,
 }
 
@@ -122,6 +130,7 @@ impl Lexer {
             line: 1,
             col: 1,
             levels: vec![0],
+            paren_depth: 0,
             out: Vec::new(),
         }
     }
@@ -177,6 +186,14 @@ impl Lexer {
             self.rest_of_line()?;
         }
         let span = self.span();
+        if self.paren_depth > 0 {
+            // Without this the rest of the file is swallowed as one logical line and the error
+            // surfaces somewhere with nothing to do with the missing bracket.
+            return Err(self.err(format!(
+                "{} unclosed `(` at end of file",
+                self.paren_depth
+            )));
+        }
         while self.levels.len() > 1 {
             self.levels.pop();
             self.push(Tok::Dedent, span);
@@ -248,6 +265,12 @@ impl Lexer {
             match c {
                 '\n' => {
                     self.bump();
+                    // Inside brackets a line break is whitespace, and so is the next line's
+                    // indentation -- consumed by the space arm below rather than by
+                    // `start_of_line`, which is not reached until the bracket closes.
+                    if self.paren_depth > 0 {
+                        continue;
+                    }
                     self.push(Tok::Newline, span);
                     return Ok(());
                 }
@@ -255,8 +278,16 @@ impl Lexer {
                     self.bump();
                 }
                 '#' => self.skip_comment(),
-                '(' => self.one(Tok::LParen, span),
-                ')' => self.one(Tok::RParen, span),
+                '(' => {
+                    self.paren_depth += 1;
+                    self.one(Tok::LParen, span)
+                }
+                ')' => {
+                    // Saturating: an unmatched `)` is the parser's to report, with the token
+                    // in hand, and the lexer must not turn it into a panic here.
+                    self.paren_depth = self.paren_depth.saturating_sub(1);
+                    self.one(Tok::RParen, span)
+                }
                 '[' => self.one(Tok::LBracket, span),
                 ']' => self.one(Tok::RBracket, span),
                 ',' => self.one(Tok::Comma, span),

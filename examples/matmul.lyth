@@ -1,0 +1,37 @@
+machine sm_120
+
+# A contraction: the first kernel in this language whose traffic per output is an expression
+# in a launch extent rather than a constant.
+#
+# `contract sum p : k` declares an axis that is walked and combined, not one the space
+# iterates. It is not a `reduce`: a reduction combines across threads through shared memory and
+# its tree order is part of the contract, while a contraction combines inside one thread, in a
+# register, in loop order. There is no tree and nothing to choose.
+#
+# `c[i, j] = ...` assigns once per output. The accumulation is what `contract` declares; the
+# body states the term being accumulated. An `+=` would put the schedule back in the body,
+# which is the thing this language exists not to do.
+#
+# THIS DOES NOT COMPILE YET, on purpose. Each block loads 2T^2 elements per step over K/T
+# steps, so 2K/T + 1 elements move per output, and `Cost` carries constants. The front end
+# accepts the syntax and refuses to cost it rather than publishing the constant part of an
+# expression -- which would be wrong by a factor of K. ADR-0018 step 2 replaces the refusal
+# with the symbolic form, and step 5 measures it.
+#
+# The asymptote is `T/4` flop/byte. At `tile 32, 32` that is 8, against a ridge of 42.9 on this
+# machine, and it cannot be raised: T^2 threads per block against MAX_THREADS_PER_BLOCK = 1024
+# caps T at 32. The thread count binds before the shared memory does, which is worth knowing
+# because the obvious guess is the memory.
+kernel matmul(m: u32, n: u32, k: u32,
+              a: [f32; m, k], b: [f32; k, n], c: [f32; m, n])
+    space i, j : m, n
+    contract sum p : k
+    tile 32, 32
+    intensity 8.0
+
+    stream a : dram -> smem -> reg
+    stream b : dram -> smem -> reg
+    stream c : dram -> reg, drain
+
+    at reg:
+        c[i, j] = a[i, p] * b[p, j]
