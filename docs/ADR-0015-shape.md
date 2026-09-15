@@ -154,6 +154,22 @@ The [KNOWN LIMIT] in `crates/lyth/src/main.rs` that this ADR set out to kill —
 — is retired. The language can now express the access that breaks it, the model predicts the
 break, and the prediction was checked at the level where it holds.
 
+## The interface has a cache in front of it
+
+> **[REFINEMENT, ADR-0018 step 5]** The sector model was measured exact against `lts__t_bytes`
+> on kernels whose L1 served nothing. It still is, and the reason it could be stated that
+> simply is now visible: every kernel in this language before a tiled contraction **streams**.
+> No block re-reads data another block read, so the L1 global-load hit rate is 0 and "what the
+> kernel asks for" and "what the L1 asks the L2 for" are the same number.
+>
+> A tiled matmul is the first kernel here whose blocks share operands. At `tile 16, 16` and
+> `k = 1024` the derived figure overshoots `lts__t_bytes` by 5.46% and the L1 hit rate is
+> 5.51%; at `k = 2048` the hit rate collapses to 0.54% and the overshoot to 0.27%. The gap is
+> the L1, measured at five points and following the hit rate in both directions.
+>
+> So the model's referent is **the kernel's requests**, and `lts__t_bytes` equals it only while
+> the L1 misses everything. That was always true and never had to be said.
+
 ## Why this is the right next slice and not `matmul`
 
 Matmul is the demonstration everyone wants and it needs three things this language does not
