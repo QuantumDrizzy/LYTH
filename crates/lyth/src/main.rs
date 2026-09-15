@@ -695,6 +695,20 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
     // it is obvious. `--grid` takes anything, and below `want` the loop starts doing real work.
     // One block per tile when tiled, one element per thread otherwise. The same rule the
     // manifest carries and the three generators emit.
+    // A reduction's default grid is not the elementwise one.
+    //
+    // ADR-0012 swept `saxpy` and found one element per thread faster than filling the machine,
+    // and that default was then applied to every kernel. For a reduction it is pathological:
+    // the block's shared-memory tree runs once per *thread*, so at one element per thread it
+    // runs once per element. ADR-0014 measured the instruction cost of exactly that -- 121 per
+    // element against 10 -- and concluded it bought no time, which was true of the kernel that
+    // had been swept and not of this one.
+    //
+    // Measured on sum.lyth at n = 2^26: 213.69 GB/s at one element per thread against 419.68
+    // at grid 36864. Every grid from 144 to 36864 lands between 387 and 420, so the plateau is
+    // wide and only the extreme collapses. Eight elements per thread is inside it with room on
+    // both sides, and is a floor rather than a tuned peak.
+    const REDUCTION_MIN_ELEMENTS_PER_THREAD: u32 = 8;
     let want = match (&ir.tile, &ir.space) {
         (Some(t), Some(sp)) => sp
             .extents
@@ -703,6 +717,11 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
             .map(|(e, d)| scalars.get(e).map(|v| *v as u32).unwrap_or(1).div_ceil(*d))
             .product::<u32>()
             .max(1),
+        _ if ir.reduction.is_some() => {
+            let one_per_thread = grid_for(n, block);
+            let amortised = grid_for(n, block.saturating_mul(REDUCTION_MIN_ELEMENTS_PER_THREAD));
+            one_per_thread.min(amortised).max(1)
+        }
         _ => grid_for(n, block),
     };
     let grid = grid_arg.unwrap_or_else(|| want.clamp(1, MAX_GRID));
