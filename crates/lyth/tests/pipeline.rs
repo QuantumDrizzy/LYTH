@@ -46,20 +46,23 @@ fn the_lying_example_does_not_compile() {
     assert!(e.contains("did you mean to declare"), "{e}");
 }
 
-/// The matmul example: costed and checked, and still not emitted.
+/// The matmul example, compiled.
 ///
-/// This test is the step-1 test, changed rather than deleted. It used to assert that lowering
-/// refused to cost a contraction at all. Step 2 lifted that **by deriving the expression**,
-/// not by special-casing anything, and what is left is the emitter -- costing is not emitting,
-/// and a `.ptx` that computed one term of a sum would be worse than no `.ptx`.
+/// This test has now changed three times and been deleted none, which is the record of what
+/// each step actually moved. Step 1 asserted that lowering refused to cost a contraction at
+/// all; step 2 asserted it costed one and the emitter refused; step 3 is this. Whether the
+/// PTX is *right* is `tests/contraction_emitter.rs`, against the host and the device.
 #[test]
-fn the_matmul_example_is_costed_and_checked_but_not_emitted() {
-    let e = compile("matmul.lyth").expect_err("there is no emitter for a contraction");
-    assert!(e.contains("no emitter for a contraction"), "{e}");
-    assert!(e.contains("ADR-0018 step 2"), "{e}");
-    // Not a parse error, not a lowering error, and above all not the step-1 refusal.
-    assert!(!e.contains("expected"), "it should parse: {e}");
-    assert!(!e.contains("cost is not derived"), "the cost is derived now: {e}");
+fn the_matmul_example_compiles() {
+    let m = compile("matmul.lyth").expect("a contraction emits now");
+    assert_eq!(m.entry, "matmul");
+    assert!(m.ptx.contains(".target sm_120"));
+    // The two staged tiles and the two barriers that keep them straight.
+    assert_eq!(m.ptx.matches("bar.sync 0;").count(), 2, "{}", m.ptx);
+    assert_eq!(m.ptx.matches("st.shared.f32").count(), 2, "{}", m.ptx);
+    // The contract in the header is an expression, because for a contraction it is one.
+    assert!(m.ptx.contains("flop/byte asymptotic"), "{}", m.ptx);
+    assert!(m.ptx.contains("0.25 * k + 4"), "{}", m.ptx);
 }
 
 #[test]

@@ -300,9 +300,10 @@ impl Emitter {
 }
 
 /// Emit one straight-line op, shared with the flat body's arithmetic so a tile does not get a
-/// second contraction rule.
+/// second contraction rule. `contracted.rs` runs the same function inside its term loop, for
+/// the same reason: the body is the body wherever the schedule puts it.
 impl Emitter {
-    fn op(
+    pub(crate) fn op(
         &mut self,
         op: &Op,
         regs: &mut Vec<(RegId, String)>,
@@ -317,12 +318,12 @@ impl Emitter {
                 .unwrap_or_else(|| panic!("register {id} used before it was defined"))
         };
         match op {
-            Op::Load { dst, .. } => {
-                // The staged buffer's value is already bound; nothing else is loaded here.
+            Op::Load { dst, buffer } => {
+                // Staged values are bound before the body runs; nothing else is loaded here.
                 if !regs.iter().any(|(i, _)| i == dst) {
-                    return Err(EmitError::Message(
-                        "a tiled kernel loads only the staged buffer".into(),
-                    ));
+                    return Err(EmitError::Message(format!(
+                        "`{buffer}` is read in a tiled body but was never staged into a register"
+                    )));
                 }
             }
             Op::Const { dst, value } => {

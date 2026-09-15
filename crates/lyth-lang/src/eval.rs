@@ -65,6 +65,13 @@ pub fn eval_with_launch(
     grid: usize,
     block: usize,
 ) -> Result<Inputs, EvalError> {
+    // Before the parameter check, not after: a contraction sizes each buffer by its own shape
+    // -- `a` is `m x k` where `c` is `m x n` -- and the check below asks every buffer for `n`
+    // elements, which is a rule from the time when one linear index addressed them all.
+    if ir.contract.is_some() {
+        return eval_contraction(ir, inputs);
+    }
+
     for p in &ir.params {
         match p.ty {
             Ty::BufF32 => {
@@ -286,6 +293,177 @@ pub fn eval_with_launch(
                 slots.push(acc);
             }
             *slot = tree_reduce(&mut slots, r.op);
+        }
+    }
+    Ok(out)
+}
+
+
+/// The host oracle for a contraction (ADR-0018 step 3).
+///
+/// A separate walk rather than a flag on the main one, because the main one is built around a
+/// rule the contraction breaks: every buffer's index is a permutation of the space variables,
+/// so one linear element index addresses them all. `a[i, p]` names an axis the space does not
+/// iterate, and there is no linear index that reaches it.
+///
+/// **The accumulation order is the contract, not an implementation detail.** The device walks
+/// `p` from 0 upwards -- an outer loop over tile steps and an inner loop over the terms within
+/// a step, which is ascending `p` overall -- and float addition is not associative, so this
+/// walks the same order. It is also why the emitter does not fuse the multiply and the add
+/// into an `fma`: one rounding against two is a different answer, and the two would have to
+/// change together.
+fn eval_contraction(ir: &KernelIr, inputs: &Inputs) -> Result<Inputs, EvalError> {
+    let c = ir.contract.as_ref().expect("dispatched on a contraction");
+    let sp = ir
+        .space
+        .as_ref()
+        .ok_or_else(|| EvalError::MissingExtent("space".into()))?;
+    let extent = |name: &str| -> Result<usize, EvalError> {
+        inputs
+            .extents
+            .get(name)
+            .copied()
+            .map(|v| v as usize)
+            .ok_or_else(|| EvalError::MissingExtent(name.to_string()))
+    };
+    let rows = extent(&sp.extents[0])?;
+    let cols = extent(&sp.extents[1])?;
+    let depth = extent(&c.extent)?;
+
+    let mut out = inputs.clone();
+    let n_regs = ir
+        .ops
+        .iter()
+        .map(|o| o.dst() as usize + 1)
+        .max()
+        .unwrap_or(0);
+    let mut regs: Vec<f32> = vec![0.0; n_regs];
+
+    // Each streamed buffer, resolved once: its two index variables and its own row length.
+    struct Addr {
+        buffer: String,
+        outer: String,
+        inner: String,
+        row: usize,
+    }
+    let mut addrs: Vec<Addr> = Vec::new();
+    for st in &ir.streams {
+        let shape = &ir
+            .params
+            .iter()
+            .find(|p| p.name == st.buffer)
+            .expect("a streamed buffer is a parameter")
+            .shape;
+        addrs.push(Addr {
+            buffer: st.buffer.clone(),
+            outer: st.index[0].clone(),
+            inner: st.index[1].clone(),
+            row: extent(&shape[1])?,
+        });
+    }
+
+    let (drain_name, drain_reg) = ir
+        .drains
+        .first()
+        .cloned()
+        .ok_or_else(|| EvalError::MissingBuffer("a contraction drains one buffer".into()))?;
+    for a in &addrs {
+        let b = inputs
+            .buffers
+            .get(&a.buffer)
+            .ok_or_else(|| EvalError::MissingBuffer(a.buffer.clone()))?;
+        let want = match (a.outer.as_str(), a.inner.as_str()) {
+            _ if a.buffer == drain_name => rows * cols,
+            _ => {
+                // Whichever two of {rows, cols, depth} this buffer is indexed by.
+                let size = |v: &str| -> usize {
+                    if v == sp.vars[0] {
+                        rows
+                    } else if v == sp.vars[1] {
+                        cols
+                    } else {
+                        depth
+                    }
+                };
+                size(&a.outer) * size(&a.inner)
+            }
+        };
+        if b.len() < want {
+            return Err(EvalError::ShortBuffer {
+                name: a.buffer.clone(),
+                got: b.len(),
+                want,
+            });
+        }
+    }
+
+    let mut result = vec![0.0f32; rows * cols];
+    for i in 0..rows {
+        for j in 0..cols {
+            let mut acc = c.op.identity();
+            for p in 0..depth {
+                let coord = |v: &str| -> usize {
+                    if v == sp.vars[0] {
+                        i
+                    } else if v == sp.vars[1] {
+                        j
+                    } else {
+                        p
+                    }
+                };
+                for op in &ir.ops {
+                    let v = match op {
+                        Op::Load { buffer, .. } => {
+                            let a = addrs
+                                .iter()
+                                .find(|a| a.buffer == *buffer)
+                                .ok_or_else(|| EvalError::MissingBuffer(buffer.clone()))?;
+                            let col = inputs
+                                .buffers
+                                .get(buffer)
+                                .ok_or_else(|| EvalError::MissingBuffer(buffer.clone()))?;
+                            col[coord(&a.outer) * a.row + coord(&a.inner)]
+                        }
+                        Op::Param { name, .. } => *inputs
+                            .scalars
+                            .get(name)
+                            .ok_or_else(|| EvalError::MissingScalar(name.clone()))?,
+                        Op::Const { value, .. } => *value as f32,
+                        Op::Bin { op, lhs, rhs, .. } => {
+                            let a = regs[*lhs as usize];
+                            let b = regs[*rhs as usize];
+                            match op {
+                                BinOp::Add => a + b,
+                                BinOp::Sub => a - b,
+                                BinOp::Mul => a * b,
+                                BinOp::Div => a / b,
+                            }
+                        }
+                        Op::Fma { a, b, c, .. } => {
+                            regs[*a as usize].mul_add(regs[*b as usize], regs[*c as usize])
+                        }
+                        Op::Neg { src, .. } => -regs[*src as usize],
+                    };
+                    regs[op.dst() as usize] = v;
+                }
+                acc = c.op.combine(acc, regs[drain_reg as usize]);
+            }
+            result[i * cols + j] = acc;
+        }
+    }
+
+    let drain_row = addrs
+        .iter()
+        .find(|a| a.buffer == drain_name)
+        .map(|a| a.row)
+        .unwrap_or(cols);
+    let target = out
+        .buffers
+        .get_mut(&drain_name)
+        .ok_or_else(|| EvalError::MissingBuffer(drain_name.clone()))?;
+    for i in 0..rows {
+        for j in 0..cols {
+            target[i * drain_row + j] = result[i * cols + j];
         }
     }
     Ok(out)

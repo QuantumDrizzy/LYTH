@@ -789,6 +789,26 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
     } else {
         n
     };
+    // The contracted extent is not one the space walks, so the loop above never sees it. It is
+    // still a length the caller has to supply: `k` decides how much work each output costs and
+    // there is nothing in the buffers to infer it from.
+    if let Some(c) = &ir.contract {
+        let Some(v) = scalars.get(&c.extent).map(|v| *v as u32) else {
+            eprintln!(
+                "error[launch]: `contract` runs over `{}`, but no value was given for it. Pass `--set {}=<u32>`.",
+                c.extent, c.extent
+            );
+            return ExitCode::from(EXIT_UNUSABLE);
+        };
+        if v == 0 {
+            eprintln!(
+                "error[launch]: contracted extent `{}` is 0, so every output is the operator's identity",
+                c.extent
+            );
+            return ExitCode::from(EXIT_UNUSABLE);
+        }
+        inputs.extents.insert(c.extent.clone(), v);
+    }
     for p in &ir.params {
         match p.ty {
             Ty::F32 => {
@@ -800,7 +820,21 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
                     .name
                     .bytes()
                     .fold(1u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
-                let data: Vec<f32> = (0..n)
+                // Sized by the buffer's **own** shape, not by the element count. They
+                // coincide for every kernel written before a contraction: `a` is `m x k` and
+                // `c` is `m x n`, and sizing both by `m * n` is over-allocation when `k < n`
+                // and a buffer overrun when it is not.
+                let len = if p.shape.is_empty() || p.shape.iter().any(|d| d == lyth_lang::ast::BLOCKS)
+                {
+                    n
+                } else {
+                    p.shape
+                        .iter()
+                        .map(|d| inputs.extents.get(d).copied().unwrap_or(n) as u64)
+                        .product::<u64>()
+                        .min(u32::MAX as u64) as u32
+                };
+                let data: Vec<f32> = (0..len)
                     .map(|i| {
                         let h = (i.wrapping_mul(2654435761).wrapping_add(seed)) >> 8;
                         (h % 2003) as f32 / 251.0 - 4.0
