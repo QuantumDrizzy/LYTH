@@ -177,7 +177,14 @@ pub struct Cost {
     pub flops_per_element: f64,
     /// FLOPs/byte at the deepest level with traffic. This is the roofline number.
     pub intensity: f64,
-    /// Traffic at the granularity the memory system actually moves, rather than the payload.
+    /// Traffic at the **L1-to-L2 interface**, at the 32-byte sector the memory system moves in.
+    ///
+    /// The level is not decoration. Measured on sm_120 against `lts__t_bytes.sum`, this figure
+    /// is exact -- 8.00 to 8.02 against 8 for a coalesced rank-2 copy at every size, 36.05 and
+    /// 36.02 against 36 for a transpose. Against **DRAM** it is not a bound in either
+    /// direction: a transpose at 1024 x 1024 moves half its own payload to DRAM because the L2
+    /// keeps every write, and at 8192 x 8192 it moves 7.6x the payload, past this figure,
+    /// because partially written sectors are evicted and fetched back. See ADR-0015.
     ///
     /// A 32-byte sector is eight f32. A coalesced access has consecutive threads on
     /// consecutive elements, so a warp's 32 threads cover 128 contiguous bytes in four

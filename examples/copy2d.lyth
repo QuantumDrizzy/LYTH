@@ -1,0 +1,17 @@
+machine sm_120
+
+# The control for the transpose measurement.
+#
+# Identical in every respect -- rank 2, a declared space, explicit indices, the same extents,
+# the same traffic -- except that both buffers are walked the same way. The sector model says
+# this one is coalesced on both sides, so it is what tells a measurement of `transpose` apart
+# from a measurement of "a rank-2 kernel at this size".
+kernel copy2d(rows: u32, cols: u32, a: [f32; rows, cols], b: [f32; rows, cols])
+    space i, j : rows, cols
+    intensity 0.0
+
+    stream a : dram -> reg
+    stream b : dram -> reg, drain
+
+    at reg:
+        b[i, j] = a[i, j]

@@ -178,9 +178,18 @@ variable order — changing no buffer — makes the same source strided.
 
 ```
   payload  4 read + 4 written, at dram
-  sectors  4 read + 32 written  (coalescence 0.222, upper bound)
+  sectors  4 read + 32 written at L1->L2  (coalescence 0.222)
   exact    36 byte per element at this shape (coalescence 0.222), against the 36 byte bound
 ```
+
+**The level matters and is now written down.** Measured on sm_120 against `lts__t_bytes.sum`,
+the sector figure is exact at the L1-to-L2 interface: 8.00 to 8.02 against a model of 8 for a
+coalesced rank-2 copy at every size, and 36.05 against 36 for a transpose. Against **DRAM** it is
+not a bound in either direction — a transpose at 1024 x 1024 moves *half* its own payload to DRAM
+because the L2 keeps every write, and at 8192 x 8192 it moves 7.6x, past the model, because
+partially written sectors are evicted and fetched back. `tools/sector_check.py` reproduces it,
+with a coalesced control beside it so a number about the transpose can be told apart from a
+number about rank-2 kernels at that size. ADR-0015.
 
 Three numbers because they answer three questions. The **payload** is what `intensity` is checked
 against and what the source asked for. The **sectors** figure is a static upper bound: a strided

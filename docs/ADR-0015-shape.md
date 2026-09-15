@@ -1,6 +1,6 @@
 # ADR-0015 — Shape in the type, and the limit it exists to kill
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-09-15
 **Depends on:** ADR-0005 (intensity), ADR-0006 (kernel IR), ADR-0008 (layout × machine, scaffold)
 
@@ -88,23 +88,68 @@ expressible and is not the target here: it needs staging, which needs a tile dec
 is its own ADR. **Transpose is the target** because it breaks the byte model with the smallest
 possible language change.
 
-## The falsification, pre-registered
+## The falsification, pre-registered — and what came back
 
-The sector model says a strided read costs 32 bytes per element against 4 for a coalesced one,
-so a transpose should measure **8x** the payload on its strided side and 1x on the other.
+The sector model said a strided read costs 32 bytes per element against 4 for a coalesced one,
+so a transpose should measure **8x** the payload on its strided side. `--ncu` was to decide it,
+on `dram__bytes_op_read.sum`, with three outcomes and all three to be published.
 
-`--ncu` decides it, on `dram__bytes_op_read.sum`, against the derived count. Three outcomes and
-all three get published:
+**Outcome 2 came back: the model overstates at DRAM.** And it came back with more structure than
+the outcome was written with.
 
-* **Measured ≈ derived.** The model holds and the limit above is retired with evidence.
-* **Measured below derived.** The sector model overstates, most likely because L2 absorbs
-  partial sectors across warps. Then 32 bytes per element is a *ceiling*, not a count, and the
-  cost model has to say which it is — a lower bound and an upper bound are different fields.
-* **Measured above derived.** Something is pulling more than a sector per element and the model
-  is missing a mechanism. That is the most interesting outcome and the least likely.
+`tools/sector_check.py`, RTX 5060 Ti, L2 read from the driver at 34 MB. `examples/copy2d.lyth`
+is the control: the same kernel with both buffers walked the same way, which the model says is
+coalesced. Without it a number from the transpose cannot be told apart from a number about
+rank-2 kernels at that size.
 
-The number to beat is that this compiler currently reports `4` for both sides of a transpose and
-is confident about it.
+```
+copy2d   (model: 8 bytes/element)      transpose (model: 36 bytes/element)
+  size    L2/elem  DRAM tot  ws          size    L2/elem  DRAM tot  ws
+  1024       8.02      4.06   8MB        1024      36.05      4.13    8MB
+  2048       8.01      5.04  34MB        2048      36.02      5.04   34MB
+  4096       8.00      7.30 134MB        4096      39.02     13.17  134MB
+  8192       8.01      7.86 537MB        8192      53.77     60.69  537MB
+```
+
+**At the L2 the model is exact.** The control measures 8.00 to 8.02 against 8, at every size,
+and the transpose measures 36.05 and 36.02 against 36 while its working set fits in L2. That is
+0.1%, and it is not a fit: the number was derived from the index permutation before anything ran.
+
+**At DRAM the model is wrong, and wrong in both directions depending on size.** At 1024 the
+transpose moves 4.13 bytes per element — *half* its own payload — because the L2 holds every
+write and they never reach the memory controller. At 8192 it moves 60.69, which is 7.6x the
+payload and past the model's 36.
+
+So `32 bytes per element` is neither a count nor a ceiling in general. **It is a count at the
+L1-to-L2 interface, and at DRAM it is a function of how far the working set exceeds the cache.**
+The cost model said "per element" and never said *where*, and that omission was the error.
+
+### The read traffic that is not in the model
+
+At 4096 the transpose's L2 traffic is 39.02 against a model of 36, an excess of 3.0 bytes per
+element; its DRAM **read** is 7.01 against 4.00 for the control, an excess of 3.0. The two match
+to two decimals, so the extra L2 traffic *is* extra DRAM reading: a sector written in part,
+evicted before the other seven writes arrive, and fetched back to be completed. At 8192 that
+excess is 17.8 bytes per element and rising.
+
+This is a real mechanism the model does not contain, and it is not a fixed policy that could be
+added as a constant — it is zero while the working set fits in L2 and grows with eviction
+pressure. Recorded, not modelled.
+
+### What changes
+
+`Cost` labels its sector figures as **bus traffic at the L1-to-L2 interface**, which is what was
+measured to be exact, and stops implying anything about DRAM. `lyth run` already refuses to let
+the two be confused: it says when the working set fits in L2, using the driver's figure, because
+a DRAM model cannot be compared against a launch that never reached DRAM.
+
+The [KNOWN LIMIT] in `crates/lyth/src/main.rs` that this ADR set out to kill —
+
+> the byte count is a lower bound: it counts the payload, not the 32-byte sector a scattered
+> access pulls. v1 is elementwise and fully coalesced, so the two should agree here
+
+— is retired. The language can now express the access that breaks it, the model predicts the
+break, and the prediction was checked at the level where it holds.
 
 ## Why this is the right next slice and not `matmul`
 

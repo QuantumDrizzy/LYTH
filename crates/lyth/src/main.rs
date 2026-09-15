@@ -301,7 +301,7 @@ fn print_cost(ir: &KernelIr, report: &lyth_lang::IntensityReport) {
     let coalescence = ir.cost.coalescence();
     if coalescence < 1.0 {
         println!(
-            "  sectors  {} read + {} written  (coalescence {:.3}, upper bound)",
+            "  sectors  {} read + {} written at L1->L2  (coalescence {:.3})",
             ir.cost.sector_read_per_element,
             ir.cost.sector_write_per_element,
             coalescence
@@ -429,7 +429,7 @@ fn cmd_build(
 /// case and the manifest cannot drift into saying different things.
 fn known_limits() -> [&'static str; 2] {
     [
-        "[KNOWN LIMIT] The byte count is a lower bound: it counts the payload, not the 32-byte sector a scattered access pulls. v1 is elementwise and fully coalesced, so the two should agree here; that is the claim --ncu tests.",
+        "[KNOWN LIMIT] `moves` is the payload. `bus` is what crosses the L1-to-L2 interface, where a strided access costs a whole 32-byte sector; measured exact on sm_120 (ADR-0015). Neither predicts DRAM: the L2 keeps writes when the working set fits, and re-reads partially written sectors when it does not.",
         "[KNOWN LIMIT] Writes may not reach DRAM within a single launch if the working set fits in L2. Compare the read half with --ncu-dir read.",
     ]
 }
@@ -488,7 +488,7 @@ fn evidence_json(ir: &KernelIr, elements: u32) -> String {
             "One element per thread, bounds-checked, no grid-stride loop. Every thread performs exactly the listed moves once."
         ],
         "known_limits": [
-            "[KNOWN LIMIT] The byte count is a lower bound: it counts the payload, not the 32-byte sector a scattered access pulls. v1 is elementwise and fully coalesced, so the two should agree here; that is the claim --ncu tests.",
+            "[KNOWN LIMIT] `moves` is the payload. `bus` is what crosses the L1-to-L2 interface, where a strided access costs a whole 32-byte sector; measured exact on sm_120 (ADR-0015). Neither predicts DRAM: the L2 keeps writes when the working set fits, and re-reads partially written sectors when it does not.",
             "[KNOWN LIMIT] Writes may not reach DRAM within a single launch if the working set fits in L2. Compare the read half with --ncu-dir read."
         ]
     });
