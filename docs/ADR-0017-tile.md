@@ -194,6 +194,53 @@ on loads and none on stores is the experiment working — written down here so t
 If the counterfactual also reads zero, the instrument is not measuring what it is being asked to
 measure, and that is a finding in itself.
 
+#### What it measured
+
+1024 x 1024. The nominal binary against `--no-skew`, which emits the same kernel with the
+padding removed. Before measuring contention, the counterfactual was checked for **semantics**:
+it comes out `BIT-EXACT` against the host, so it is the same computation and only the layout
+differs. Conflicts without that check would be a number about some other kernel.
+
+| variant | `mem_shared_op_ld` | `mem_shared_op_st` |
+|---|---|---|
+| nominal, stride 33 | **0** | 4172 |
+| counterfactual, stride 32 | **1,017,813** | 4566 |
+
+**The claim holds, and the magnitude is the mechanism.** At 1024² there are 1,048,576 / 32 =
+32,768 warp-level shared loads, and a 32-way conflict costs 31 extra accesses each:
+32,768 x 31 = **1,015,808**. Measured 1,017,813, which is 0.2% from full 32-way serialisation.
+The skew is not merely correlated with the absence of conflicts; the counterfactual reproduces
+the exact serialisation the derivation says it removes.
+
+The counter names were queried with `--query-metrics` before the run rather than taken from this
+document. Third time that has paid.
+
+#### The second pre-registration was also wrong, and in the same way as the first
+
+This ADR predicted `st = 0` in **both** variants, reasoning that the shared store is
+`ty * stride + tx` and neighbouring threads differ in `tx`, sweeping all 32 banks at either
+stride. The reasoning is right. The prediction was still too strong.
+
+| size | `op_st` nominal | `op_ld` nominal |
+|---|---|---|
+| 256² | 0 | 0 |
+| 512² | 0 | 0 |
+| 1024² | 4380 | 0 |
+
+Stores conflict zero times below 1024² and a few thousand times at 1024², on an access pattern
+that is identical at all three sizes, with a figure that moves between runs — 4172, 4380, 4566.
+**This is not explained here.** It is small, it is absent at smaller sizes, it does not scale
+with anything the kernel does, and it is not what the skew is about.
+
+What the claim should have said, and what the measurement supports, is narrower:
+
+> The skew changes the **load** conflicts and leaves the store conflicts alone.
+
+That holds at every size: 0 against 1,017,813 on loads, and a difference within its own
+run-to-run noise on stores. Predicting an absolute zero where "unchanged" was the real claim is
+the same error as writing 36.00 for the untiled control — reaching past what the reasoning
+supported. Two for two in one ADR, both caught by measuring.
+
 ### Two ways this can fail that are worth naming now
 
 The skew could be wrong for a tile width other than 32, in which case the conflict counter says
@@ -213,7 +260,7 @@ appears.
 | 3 | the four-phase PTX | **done**, below |
 | 4 | the bus model over a staged stream | **done**: derived 8 bytes per element, and the report shows both |
 | 5a | `--ncu`, traffic | **done**, below: 8.00 measured against 8.00 derived |
-| 5b | `--ncu`, the skew counterfactual | pre-registered below, not yet run |
+| 5b | `--ncu`, the skew counterfactual | **done**, below: 0 against 1,017,813 |
 
 ## What bit-exactness does not prove here, and what does
 

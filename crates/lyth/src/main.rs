@@ -131,6 +131,14 @@ enum Cmd {
         /// derived and passing anything else is asking for undefined behaviour on purpose.
         #[arg(long, value_name = "N")]
         shared_bytes: Option<u32>,
+        /// Emit the tile without its derived skew.
+        ///
+        /// ADR-0017's counterfactual, and its only use. `bank_conflicts = 0` on the padded
+        /// kernel shows the conflicts are absent, not that the skew removed them -- that
+        /// number is also zero if the kernel never staged, or if the emitter dropped the
+        /// padding. This builds the kernel that must conflict, and it computes the same bits.
+        #[arg(long)]
+        no_skew: bool,
         /// Time the kernel over this many runs after a warm-up, and report achieved
         /// bandwidth against the machine file's measured figure. 0 disables timing.
         #[arg(long, default_value_t = 0)]
@@ -206,6 +214,7 @@ fn main() -> ExitCode {
             grid,
             block,
             shared_bytes,
+            no_skew,
             time,
             json,
             sets,
@@ -218,6 +227,7 @@ fn main() -> ExitCode {
                 grid,
                 block,
                 shared_bytes,
+                no_skew,
                 reps: time,
                 json: json.as_deref(),
                 sets: &sets,
@@ -571,6 +581,7 @@ struct RunOpts<'a> {
     grid: Option<u32>,
     block: Option<u32>,
     shared_bytes: Option<u32>,
+    no_skew: bool,
     reps: u32,
     json: Option<&'a Path>,
     sets: &'a [String],
@@ -583,6 +594,7 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
         grid: grid_arg,
         block: block_arg,
         shared_bytes: shared_override,
+        no_skew,
         reps,
         json,
         sets,
@@ -744,7 +756,11 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
         }
     };
 
-    let module = match emit(ir, &arch_of(&f)) {
+    if no_skew {
+        println!("  [NO SKEW] the tile is emitted unpadded: ADR-0017's counterfactual.");
+        println!("            It computes the same bits and must conflict on every shared read.");
+    }
+    let module = match lyth_ptx::emit_with_skew(ir, &arch_of(&f), !no_skew) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("error[codegen]: {e}");

@@ -70,11 +70,31 @@ off the memory bus and into shared memory, where a derived one-element skew make
 
 Measured at 4096 x 4096 with `lts__t_bytes.sum`, against a pre-registered `8.00 ± 0.2`:
 
-| kernel | measured B/element | derived |
-|---|---|---|
-| `transpose` | 38.97 | 36 |
-| `transpose-tiled` | **8.00** | **8** |
-| `copy2d`, the coalesced control | 8.00 | 8 |
+| kernel | measured B/element | derived | why they differ |
+|---|---|---|---|
+| `transpose` | 38.97 | 36 | read-for-ownership |
+| `transpose-tiled` | **8.00** | **8** | nothing |
+| `copy2d`, the coalesced control | 8.00 | 8 | nothing |
+
+The untiled kernel exceeds its own model by 2.97 bytes per element and the tiled one does not,
+which is the best thing in this table. A strided store touches 4 bytes of a 32-byte sector; the
+sector is evicted before the other seven writes arrive and has to be fetched back. **The model
+counts sectors, so it cannot see traffic caused by a sector being counted twice.** Under the
+tile every sector is filled by one warp in one instruction, the mechanism has nothing to act on,
+and derived equals measured because there is nothing else left to count.
+
+And the skew, measured the same way with its counterfactual — the same kernel emitted without
+the padding, checked bit-exact first so that it is the same computation and only the layout
+differs:
+
+| shared loads | conflicts |
+|---|---|
+| stride 33, derived | **0** |
+| stride 32, unpadded | **1,017,813** |
+
+32,768 warp-level loads at 31 extra accesses each is 1,015,808. The counterfactual lands 0.2%
+from full 32-way serialisation, so the skew is not correlated with the absence of conflicts —
+it removes exactly the serialisation the derivation says it removes.
 
 This is the first claim in the project that a competent engineer would not get right by
 inspection, and the first cost that is a function of a schedule the author declared rather than
