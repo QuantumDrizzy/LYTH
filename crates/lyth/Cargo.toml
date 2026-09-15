@@ -13,6 +13,10 @@ path = "src/main.rs"
 [dev-dependencies]
 lyth-lang = { path = "../lyth-lang" }
 lyth-ptx = { path = "../lyth-ptx" }
+# The generated binding in tests/generated/ is compiled by the test suite, which is how a
+# binding that stops compiling fails the build instead of being found by whoever uses it.
+lyth-cuda = { path = "../lyth-cuda" }
+tempfile = "3"
 
 [dependencies]
 lyth-lang = { path = "../lyth-lang" }

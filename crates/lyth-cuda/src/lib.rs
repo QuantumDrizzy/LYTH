@@ -353,7 +353,26 @@ pub struct Module<'ctx> {
 }
 
 impl<'ctx> Module<'ctx> {
-    pub fn function(&self, name: &str) -> Result<Function<'ctx>, CudaError> {
+    /// Look up an entry point.
+    ///
+    /// The returned `Function` borrows **the module**, not the context. That is not a detail:
+    /// `Module::drop` calls `cuModuleUnload`, so a `Function` outliving its module holds a
+    /// pointer the driver has freed. With the lifetime tied to `&self` the borrow checker
+    /// refuses the one-liner that would do it:
+    ///
+    /// ```compile_fail
+    /// # use lyth_cuda::{Arg, Context};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let ctx = Context::new(0)?;
+    /// let f = ctx.load_ptx("...")?.function("k")?; // module dropped at the semicolon
+    /// f.launch(1, 1, &[Arg::U32(0)])?;             // ...so this cannot be allowed
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// The second line is what makes that a test. Without a use of `f` the borrow ends at the
+    /// semicolon and the compiler is right to accept it -- which is exactly how the first
+    /// version of this doctest passed while proving nothing.
+    pub fn function(&self, name: &str) -> Result<Function<'_>, CudaError> {
         let cname = CString::new(name)
             .map_err(|e| CudaError::Message(format!("kernel name has an interior NUL: {e}")))?;
         let mut f: *mut c_void = std::ptr::null_mut();
@@ -366,7 +385,7 @@ impl<'ctx> Module<'ctx> {
         };
         Ok(Function {
             f,
-            _ctx: PhantomData,
+            _module: PhantomData,
         })
     }
 }
@@ -382,9 +401,10 @@ impl Drop for Module<'_> {
     }
 }
 
-pub struct Function<'ctx> {
+pub struct Function<'m> {
     f: *mut c_void,
-    _ctx: PhantomData<&'ctx Context>,
+    /// Borrows the module the function was looked up in, so it cannot outlive the unload.
+    _module: PhantomData<&'m ()>,
 }
 
 /// One launch argument.

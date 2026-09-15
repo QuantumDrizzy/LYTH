@@ -12,6 +12,10 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+
+mod bind_rust;
+mod manifest;
+use manifest::Manifest;
 use serde::Deserialize;
 
 use lyth_cuda::{grid_for, median_and_spread, time_launches, Arg, Context, Launch};
@@ -74,6 +78,16 @@ enum Cmd {
         /// `lyth-probe intensity-check --ncu` can check it against measured traffic.
         #[arg(long, value_name = "JSON")]
         evidence: Option<PathBuf>,
+        /// Also write the signature, launch facts and cost contract as a
+        /// `lyth-manifest/0.1`, which is what a binding generator reads to make this kernel
+        /// callable from another language (ADR-0016).
+        #[arg(long, value_name = "JSON")]
+        manifest: Option<PathBuf>,
+        /// Also write a Rust module that loads the embedded PTX and launches the kernel with
+        /// a typed signature. Written buffers take `&mut`, so the borrow checker refuses a
+        /// call that aliases an input with an output (ADR-0016).
+        #[arg(long, value_name = "RS")]
+        bind_rust: Option<PathBuf>,
         /// Elements the profiled launch will process, recorded in the evidence.
         #[arg(long, default_value_t = 1 << 20)]
         elements: u32,
@@ -88,7 +102,8 @@ enum Cmd {
         /// Elements to run.
         #[arg(short, long, default_value_t = 1 << 20)]
         n: u32,
-        /// Blocks to launch. Default: SM count x WAVES, capped at what the problem needs.
+        /// Blocks to launch. Default: one element per thread, `ceil(n / block)`, capped at
+        /// `MAX_GRID`. That default is the sweep's, not an obvious choice -- see ADR-0012.
         /// Exposed so the choice can be swept and measured rather than assumed (ADR-0012).
         #[arg(long)]
         grid: Option<u32>,
@@ -148,6 +163,8 @@ fn main() -> ExitCode {
             machine,
             out,
             evidence,
+            manifest,
+            bind_rust,
             elements,
             tol,
         } => cmd_build(
@@ -155,6 +172,8 @@ fn main() -> ExitCode {
             machine.as_deref(),
             out.as_deref(),
             evidence.as_deref(),
+            manifest.as_deref(),
+            bind_rust.as_deref(),
             elements,
             tol,
         ),
@@ -188,6 +207,10 @@ fn main() -> ExitCode {
 struct Front {
     ir: KernelIr,
     machine: Option<Machine>,
+    /// What the source declared, if anything. The derived figure is in `ir.cost`; a manifest
+    /// carries both, because "the author claimed X and the compiler computed X" and "the
+    /// author claimed nothing" are different states and a caller may care which.
+    declared: Option<f64>,
 }
 
 fn front(file: &Path, machine_path: Option<&Path>, tol: f64) -> Result<Front, ExitCode> {
@@ -254,7 +277,11 @@ fn front(file: &Path, machine_path: Option<&Path>, tol: f64) -> Result<Front, Ex
         ExitCode::from(EXIT_REFUSED)
     })?;
     print_cost(&ir, &report);
-    Ok(Front { ir, machine })
+    Ok(Front {
+        ir,
+        machine,
+        declared: kernel.declared_intensity,
+    })
 }
 
 fn print_cost(ir: &KernelIr, report: &lyth_lang::IntensityReport) {
@@ -302,11 +329,14 @@ fn arch_of(f: &Front) -> String {
         .unwrap_or_else(|| f.ir.machine.clone())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_build(
     file: &Path,
     machine: Option<&Path>,
     out: Option<&Path>,
     evidence: Option<&Path>,
+    manifest: Option<&Path>,
+    bind_rust: Option<&Path>,
     elements: u32,
     tol: f64,
 ) -> ExitCode {
@@ -339,7 +369,50 @@ fn cmd_build(
         }
         println!("  wrote    {} (lyth-intensity/0.1, derived)", p.display());
     }
+    let m = Manifest::of(
+        &f.ir,
+        f.declared,
+        BLOCK,
+        MAX_GRID,
+        known_limits().into_iter().map(str::to_string).collect(),
+    );
+    if let Some(p) = bind_rust {
+        let name = file
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| file.display().to_string());
+        let code = bind_rust::generate(&m, &module.ptx, &name);
+        if let Err(e) = std::fs::write(p, code) {
+            eprintln!("error: write {}: {e}", p.display());
+            return ExitCode::from(EXIT_UNUSABLE);
+        }
+        println!("  wrote    {} (Rust binding over lyth-cuda)", p.display());
+    }
+    if let Some(p) = manifest {
+        let json = match serde_json::to_string_pretty(&m) {
+            Ok(j) => j,
+            Err(e) => {
+                eprintln!("error: the manifest did not serialise: {e}");
+                return ExitCode::from(EXIT_UNUSABLE);
+            }
+        };
+        if let Err(e) = std::fs::write(p, json + "
+") {
+            eprintln!("error: write {}: {e}", p.display());
+            return ExitCode::from(EXIT_UNUSABLE);
+        }
+        println!("  wrote    {} ({}, derived)", p.display(), manifest::SCHEMA);
+    }
     ExitCode::SUCCESS
+}
+
+/// The limits the compiler attaches to every kernel it emits, in one place so the evidence
+/// case and the manifest cannot drift into saying different things.
+fn known_limits() -> [&'static str; 2] {
+    [
+        "[KNOWN LIMIT] The byte count is a lower bound: it counts the payload, not the 32-byte sector a scattered access pulls. v1 is elementwise and fully coalesced, so the two should agree here; that is the claim --ncu tests.",
+        "[KNOWN LIMIT] Writes may not reach DRAM within a single launch if the working set fits in L2. Compare the read half with --ncu-dir read.",
+    ]
 }
 
 /// The accounting the compiler derived, in the schema `lyth-probe` checks against `ncu`.
@@ -713,16 +786,27 @@ fn report_timing(
             // exercise 01's 385.71 GB/s. Above the baseline means one of three things and the
             // reader is told which to check, in the order they are worth checking.
             if pct > 100.0 {
+                let working_set = ir.cost.bytes_per_element() * n as f64;
                 println!("  ABOVE    this is over the baseline, which is a claim about the");
-                println!("           baseline, not a result. Three things to check, in order:");
-                println!("           1. the byte count is derived, not measured. Check it with");
+                println!("           baseline, not a result. Four things to check, in order:");
+                println!("           1. the working set is {:.0} MB. If that fits in L2 the bytes", working_set / 1e6);
+                println!("              never crossed the memory controller and this is an L2");
+                println!("              figure wearing a DRAM label. Raise -n until it does not.");
+                println!("           2. the byte count is derived, not measured. Check it with");
                 println!(
                     "              `lyth build --evidence` and `lyth-probe --ncu` (ADR-0009)."
                 );
-                println!("           2. the baseline may not describe this access pattern. The");
+                println!("           3. the baseline may not describe this access pattern. The");
                 println!("              {id} figure came from a torch.sum reduction, and the");
                 println!("              machine file says a streaming probe would be better.");
-                println!("           3. only then, that the kernel is genuinely faster.");
+                println!("           4. only then, that the kernel is genuinely faster.");
+                // Past three times the baseline nothing else is a plausible explanation: a
+                // kernel is not three times its own memory system. Say so rather than leaving
+                // a reader to weigh four equal-looking possibilities.
+                if pct > 300.0 {
+                    println!("           At {pct:.0}% the first is not one possibility among four.");
+                    println!("           A kernel cannot outrun its own memory controller.");
+                }
             }
         }
         None => println!("  vs       no machine file given, so this number has no baseline"),
