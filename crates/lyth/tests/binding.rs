@@ -13,6 +13,11 @@ use std::path::PathBuf;
 use std::process::Command;
 
 mod saxpy {
+    // `grid` ends in `.max(1).min(MAX_GRID)` rather than `.clamp(1, MAX_GRID)` because
+    // `clamp` panics when the upper bound is below the lower one, and `MAX_GRID` comes from a
+    // machine file. Generated code should be total against a malformed input, not tidy. The
+    // lint fires only here, where the fixture is compiled as part of this crate.
+    #![allow(clippy::manual_clamp)]
     include!("generated/saxpy.rs");
 }
 

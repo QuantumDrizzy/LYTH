@@ -271,7 +271,7 @@ impl Emitter {
         };
 
         let r_bound = match &ir.space {
-            None => u32_of(&bound),
+            None => u32_of(bound),
             Some(sp) => {
                 // rows * cols, the flattened extent.
                 //

@@ -1340,7 +1340,7 @@ impl Lowering<'_> {
     /// nobody said how to walk, and guessing `[i, j]` would silently pick row-major.
     fn name(&mut self, name: &str, span: Span) -> Result<RegId, LowerError> {
         if let (Some(sp), Some(ty)) = (self.space.clone(), self.params.get(name)) {
-            if ty.is_buffer() && self.env.get(name).is_none() {
+            if ty.is_buffer() && !self.env.contains_key(name) {
                 return Err(LowerError::MissingIndex {
                     span,
                     buffer: name.into(),

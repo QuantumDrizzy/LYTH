@@ -294,9 +294,7 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
     }
     w("");
     w("class Kernel:");
-    w(&format!(
-        "    \"\"\"The loaded module and its entry point.\n"
-    ));
+    w("    \"\"\"The loaded module and its entry point.\n");
     w(&format!(
         "    Writes: {}. Every other buffer it only reads; Python cannot say so in the",
         if written.is_empty() {
