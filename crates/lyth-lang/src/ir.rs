@@ -87,12 +87,18 @@ pub struct StreamIr {
     /// the body. That is how a transposition moves off the memory bus and into a place where
     /// a one-element skew makes it free. ADR-0017.
     pub staged: bool,
-    /// Whether consecutive threads touch consecutive elements of this buffer.
+    /// Whether consecutive threads touch consecutive elements of this buffer **as emitted**.
     ///
-    /// True at rank 1, where every access is the loop index. At rank 2 it holds exactly when
-    /// the buffer's **innermost** index is the space's **fastest** variable, because that is
-    /// the one that advances between neighbouring threads. `a[i, j]` under `space i, j` is
-    /// coalesced; `b[j, i]` is not, and that is the whole of a transpose.
+    /// At rank 1 every access is the loop index, so always. At rank 2 it holds when the
+    /// buffer's innermost index is the space's fastest variable — `a[i, j]` under
+    /// `space i, j` is contiguous, `b[j, i]` is not, and that is the whole of a transpose.
+    ///
+    /// **A tile that stages overrides it to true for every buffer**, and not as a special
+    /// case: the four-phase body reads a row-contiguous patch into shared, permutes inside
+    /// shared, and writes a row-contiguous patch out. The permutation is absorbed, so no
+    /// global access is left strided — including the drained buffer, which is not itself
+    /// staged. That is a property of the emitted schedule rather than a theorem about tiles,
+    /// which is why `lyth-ptx` refuses the shapes it cannot emit that way.
     pub coalesced: bool,
 }
 
@@ -788,6 +794,14 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
             st.coalesced = st.index.last().map(|v| v == fast).unwrap_or(true);
         }
     }
+    // Absorption. Derived from `smem` appearing in a stream's path, not from the kernel's
+    // name: once anything is staged, the emitted body moves the permutation into shared
+    // memory and every global access becomes row-contiguous.
+    if kernel.tile.is_some() && streams.iter().any(|s| s.staged) {
+        for st in streams.iter_mut() {
+            st.coalesced = true;
+        }
+    }
 
     // Shared memory layout, once the tile and the staged streams are both known.
     let shared = kernel.tile.as_ref().and_then(|t| {
@@ -886,6 +900,9 @@ fn gcd(a: u32, b: u32) -> u32 {
 }
 
 fn derive_cost(streams: &[StreamIr], ops: &[Op], reduction: Option<&ReductionIr>) -> Cost {
+    // `levels` is built below; a staged stream adds one before the reduction's, and the sort
+    // at the end puts the deepest first so `roofline()` still finds DRAM.
+
     let elem = Ty::BufF32.bytes() as f64;
     let mut dram = LevelCost {
         level: Level::Dram,
@@ -916,6 +933,18 @@ fn derive_cost(streams: &[StreamIr], ops: &[Op], reduction: Option<&ReductionIr>
     let mut flops: f64 = ops.iter().map(Op::flops).sum();
     let mut levels = vec![dram];
     let mut dram_bytes_per_block = 0.0;
+
+    // A staged element crosses the shared interface twice: written once by the thread that
+    // loaded it, read once by the thread that needs it. Reported at its own level, because a
+    // byte in shared memory and a byte at DRAM are not the same byte and no single number
+    // should pretend otherwise.
+    if streams.iter().any(|s| s.staged) {
+        levels.push(LevelCost {
+            level: Level::Smem,
+            read: elem,
+            write: elem,
+        });
+    }
 
     if let Some(r) = reduction {
         // Shared-memory traffic of the tree, per block of B threads:
@@ -1355,5 +1384,74 @@ mod shared_layout {
         let unit = crate::parse::parse(src).unwrap();
         let ir = lower(&unit, &unit.kernels[0]).unwrap();
         assert!(ir.shared.is_none(), "a tile alone stages nothing");
+    }
+}
+
+#[cfg(test)]
+mod absorption {
+    use super::*;
+
+    fn cost(src: &str) -> Cost {
+        let unit = crate::parse::parse(src).unwrap();
+        lower(&unit, &unit.kernels[0]).unwrap().cost
+    }
+
+    const UNTILED: &str = "machine sm_120\n\nkernel t(rows: u32, cols: u32, a: [f32; rows, cols], b: [f32; cols, rows])\n    space i, j : rows, cols\n    stream a : dram -> reg\n    stream b : dram -> reg, drain\n    at reg:\n        b[j, i] = a[i, j]\n";
+
+    #[test]
+    fn staging_absorbs_the_permutation_and_the_bus_cost_falls_to_the_payload() {
+        // The claim ADR-0017 exists for, derived rather than measured: the same body, one
+        // declared tile and one stream path, 36 bytes per element becoming 8.
+        let flat = cost(UNTILED);
+        assert_eq!(flat.sector_read_per_element, 4.0);
+        assert_eq!(flat.sector_write_per_element, 32.0);
+        assert!((flat.coalescence() - 8.0 / 36.0).abs() < 1e-12);
+
+        let tiled = cost(&UNTILED
+            .replace("    stream a : dram -> reg\n", "    tile 32, 32\n    stream a : dram -> smem -> reg\n"));
+        assert_eq!(tiled.sector_read_per_element, 4.0);
+        assert_eq!(tiled.sector_write_per_element, 4.0);
+        assert_eq!(tiled.coalescence(), 1.0);
+        // The payload never moved. That is what makes the two comparable.
+        assert_eq!(tiled.bytes_per_element(), flat.bytes_per_element());
+        assert_eq!(tiled.flops_per_element, flat.flops_per_element);
+    }
+
+    #[test]
+    fn the_drained_buffer_is_absorbed_too_even_though_it_is_not_staged() {
+        // `b` travels `dram -> reg, drain`. It is the permuted one, and the tile makes its
+        // write contiguous because the transposition happens in shared memory before it. A
+        // rule keyed on "is this stream staged" would have left it strided.
+        let ir = {
+            let src = UNTILED.replace(
+                "    stream a : dram -> reg\n",
+                "    tile 32, 32\n    stream a : dram -> smem -> reg\n",
+            );
+            let unit = crate::parse::parse(&src).unwrap();
+            lower(&unit, &unit.kernels[0]).unwrap()
+        };
+        let b = ir.streams.iter().find(|s| s.buffer == "b").unwrap();
+        assert!(!b.staged, "b is not staged");
+        assert!(b.coalesced, "and is still contiguous, because a is");
+    }
+
+    #[test]
+    fn a_staged_element_crosses_the_shared_interface_twice() {
+        let tiled = cost(&UNTILED
+            .replace("    stream a : dram -> reg\n", "    tile 32, 32\n    stream a : dram -> smem -> reg\n"));
+        let smem = tiled.at(Level::Smem).expect("a staged stream has shared traffic");
+        assert_eq!((smem.read, smem.write), (4.0, 4.0));
+        // And DRAM is still the roofline level: shared traffic is reported beside it, never
+        // folded into it.
+        assert_eq!(tiled.bytes_per_element(), 8.0);
+    }
+
+    #[test]
+    fn a_tile_without_staging_absorbs_nothing() {
+        // The rule is keyed on `smem` in a path, not on the word `tile`. A tile that stages
+        // nothing changes no traffic -- and the back end refuses it for that reason.
+        let tiled_only = cost(&UNTILED.replace("    stream a", "    tile 32, 32\n    stream a"));
+        assert_eq!(tiled_only.sector_write_per_element, 32.0);
+        assert!(tiled_only.coalescence() < 1.0);
     }
 }

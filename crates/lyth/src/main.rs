@@ -320,16 +320,33 @@ fn print_cost(ir: &KernelIr, report: &lyth_lang::IntensityReport) {
         ir.cost.write_bytes_per_element(),
         ir.cost.level().name()
     );
-    // What the bus carries, beside what the source asked for. Printed only when they differ,
-    // because a line saying "these are the same" on every coalesced kernel is noise.
+    // What the bus carries, beside what the source asked for. Printed for every rank-2 kernel
+    // rather than only when they differ: at rank 2 the two numbers are a function of the
+    // declared schedule, and a kernel that achieves 1.000 is saying something. At rank 1 it is
+    // always 1.000 and the line would be noise.
     let coalescence = ir.cost.coalescence();
-    if coalescence < 1.0 {
+    if ir.space.is_some() {
         println!(
             "  sectors  {} read + {} written at L1->L2  (coalescence {:.3})",
-            ir.cost.sector_read_per_element,
-            ir.cost.sector_write_per_element,
-            coalescence
+            ir.cost.sector_read_per_element, ir.cost.sector_write_per_element, coalescence
         );
+    }
+    if let Some(l) = &ir.shared {
+        let (_, rows, stride) = &l.tiles[0];
+        println!(
+            "  shared   {} read + {} written per element, {} B per block",
+            ir.cost.at(lyth_lang::ast::Level::Smem).map(|c| c.read).unwrap_or(0.0),
+            ir.cost.at(lyth_lang::ast::Level::Smem).map(|c| c.write).unwrap_or(0.0),
+            l.bytes
+        );
+        println!(
+            "           tile {rows} x {} with a derived stride of {stride}, predicting {} bank conflicts",
+            l.tiles[0].2 - (stride - ir.tile.as_ref().map(|t| t[1]).unwrap_or(*stride)),
+            l.predicted_bank_conflicts
+        );
+        println!("           the permutation is absorbed here, so no global access is strided");
+    }
+    if coalescence < 1.0 {
         for st in ir.streams.iter().filter(|s| !s.coalesced) {
             println!(
                 "           `{}` is indexed [{}] and its innermost index is not the fast one,",

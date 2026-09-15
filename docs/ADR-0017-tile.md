@@ -105,20 +105,57 @@ The transposition moves from DRAM, where it costs 32 bytes per element, into sha
 where the skew makes it cost nothing. That sentence is the whole optimisation and the cost model
 should be able to say it.
 
-## The falsification, pre-registered
+## The falsification, pre-registered in full
 
-On a 4096 by 4096 transpose, against the untiled kernel measured in ADR-0015:
+Two claims, two runs, deliberately **not** in the same report. Reading them together means
+negotiating one number against the other.
 
-| | untiled, measured | tiled, predicted |
-|---|---|---|
-| `lts__t_bytes.sum` per element | 39.02 | **8.00 to 8.02**, the same as `copy2d` |
-| `l1tex__data_bank_conflicts_pipe_lsu.sum` | n/a | **0** |
+### Claim 1 — the traffic
 
-Both get published whichever way they come back. Two ways this can fail that are worth naming in
-advance: the skew could be wrong for a tile width other than 32, in which case the conflict
-counter says so and the derivation is wrong rather than the idea; and the L2 figure could stop
-short of 8 because the edge guards break coalescing on the last tile of a ragged matrix, which
-would show as a size-dependent excess and is testable by picking extents that divide.
+> At 4096 x 4096, `lts__t_bytes.sum` divided by `rows * cols`: the untiled body measures
+> **36.00 ± 0.2** and the tiled body measures **8.00 ± 0.2**. Same `ncu`, same machine file,
+> same extents, same counter.
+
+The tolerance admits the 36.05 already measured and refuses a 12, or a 36 wearing a tile. **At
+L2 and not at DRAM**: that counter counts what crosses the interface whatever the cache does
+with it, which is what makes the two kernels comparable. DRAM is a statement about capacity —
+ADR-0015 measured 4.13 bytes per element at 1024² there, *half the payload*, because the L2 kept
+the writes.
+
+1024² is a smoke test and 8192² is a cache-capacity experiment. Neither is this claim.
+
+`intensity` is not part of it and must not move: 0 flops over 8 payload bytes is 0 at both ends.
+If the intensity check complains about this kernel, the bug is in the check.
+
+### Claim 2 — the skew, with its counterfactual
+
+> The nominal binary (stride 33) measures `l1tex__data_bank_conflicts_pipe_lsu.sum` = **0**.
+> The counterfactual (stride 32, `emit_with_skew(.., false)`) measures **conflicts far above
+> zero** — a 32-way conflict on every transposed shared load, so orders of magnitude and not
+> slightly positive.
+
+Zero on its own shows the conflicts are absent, not that the skew removed them: that number is
+also zero if the kernel never staged, if the emitter dropped the padding, or if the counter does
+not cover the instruction. The counterfactual is what turns an absence into a cause.
+
+**And the expectation is per instruction.** The shared *store* is `ty*33 + tx`: neighbouring
+threads differ in `tx`, so it is conflict-free at stride 32 as well. Only the transposed *load*,
+`tx*33 + ty`, collapses onto one bank without the skew. A counterfactual that reports conflicts
+on loads and none on stores is the experiment working — written down here so that nobody
+"fixes" a correct result.
+
+If the counterfactual also reads zero, the instrument is not measuring what it is being asked to
+measure, and that is a finding in itself.
+
+### Two ways this can fail that are worth naming now
+
+The skew could be wrong for a tile width other than 32, in which case the conflict counter says
+so and the derivation is wrong rather than the idea.
+
+The L2 figure could stop short of 8 because the boundary guards break coalescing on the last
+tile of a ragged matrix. That would show as a size-dependent excess, and the extents chosen
+divide exactly so that it cannot hide in this measurement — with 4095 measured separately if it
+appears.
 
 ## Build sequence
 
@@ -127,8 +164,8 @@ would show as a size-dependent excess and is testable by picking extents that di
 | 1 | `tile` syntax, the staged stream path, and both in the IR | every existing example is unchanged; a tiled source parses and refuses what it must |
 | 2 | derived shared layout and padding, in `Cost` and the manifest | `shared_bytes` is 32 x 33 x 4 and the three bindings pass it |
 | 3 | the four-phase PTX | **done**, below |
-| 4 | the bus model over a staged stream | derived bus cost falls to 8 bytes per element |
-| 5 | `--ncu` | the table above, either way |
+| 4 | the bus model over a staged stream | **done**: derived 8 bytes per element, and the report shows both |
+| 5 | `--ncu` | pre-registered below, not yet run |
 
 ## What bit-exactness does not prove here, and what does
 

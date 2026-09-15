@@ -115,6 +115,22 @@ pub struct ContractSpec {
     pub sector_read_per_element: f64,
     pub sector_write_per_element: f64,
     pub strided_buffers: Vec<String>,
+    /// Per-level traffic, each with the counter that measures it.
+    ///
+    /// One number per interface, because a byte in shared memory and a byte at DRAM are not
+    /// the same byte. A single figure would have to pick one and would be wrong about the
+    /// others — which is the mistake ADR-0015 made and had to correct after measuring.
+    pub bus: Vec<LevelTraffic>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LevelTraffic {
+    pub level: String,
+    pub read_per_element: f64,
+    pub write_per_element: f64,
+    /// The Nsight Compute counter this figure is a claim about. Naming it here is what stops
+    /// a number being compared against whatever counter came to hand.
+    pub counter: String,
 }
 
 impl Manifest {
@@ -209,6 +225,34 @@ impl Manifest {
                 coalescence: ir.cost.coalescence(),
                 sector_read_per_element: ir.cost.sector_read_per_element,
                 sector_write_per_element: ir.cost.sector_write_per_element,
+                bus: ir
+                    .cost
+                    .levels
+                    .iter()
+                    .filter(|l| l.total() > 0.0)
+                    .map(|l| LevelTraffic {
+                        level: l.level.name().to_string(),
+                        read_per_element: if l.level == lyth_lang::ast::Level::Dram {
+                            ir.cost.sector_read_per_element
+                        } else {
+                            l.read
+                        },
+                        write_per_element: if l.level == lyth_lang::ast::Level::Dram {
+                            ir.cost.sector_write_per_element
+                        } else {
+                            l.write
+                        },
+                        counter: match l.level {
+                            lyth_lang::ast::Level::Dram => "lts__t_bytes.sum",
+                            lyth_lang::ast::Level::L2 => "lts__t_bytes.sum",
+                            lyth_lang::ast::Level::Smem => {
+                                "l1tex__data_pipe_lsu_wavefronts_mem_shared.sum"
+                            }
+                            lyth_lang::ast::Level::Reg => "",
+                        }
+                        .to_string(),
+                    })
+                    .collect(),
                 strided_buffers: ir
                     .streams
                     .iter()
