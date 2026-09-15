@@ -90,3 +90,27 @@ fn the_matmul_example_on_disk_is_the_wrapped_form() {
     assert_eq!(u.kernels[0].params.len(), 6);
     assert!(u.kernels[0].contract.is_some());
 }
+
+#[test]
+fn a_tile_cannot_name_the_contracted_axis() {
+    // A reviewer asked for a refusal here: tiling only the contracted axis is not the schedule
+    // ADR-0018 derives, so it would need its own expression. It turns out to be unwritable --
+    // `tile` takes one dimension per *space* variable and the contracted axis is not one -- so
+    // this asserts that rather than leaving it to construction, which is what stops being true
+    // when someone adds a dimension.
+    let src = "machine sm_120\n\n\
+               kernel mm(m: u32, n: u32, k: u32, a: [f32; m, k], b: [f32; k, n], c: [f32; m, n])\n    \
+               space i, j : m, n\n    \
+               contract sum p : k\n    \
+               tile 32, 32, 8\n    \
+               stream a : dram -> reg\n    \
+               stream b : dram -> reg\n    \
+               stream c : dram -> reg, drain\n    \
+               at reg:\n        \
+               c[i, j] = a[i, p] * b[p, j]\n";
+    let u = parse(src).expect("it parses; the rank is a lowering question");
+    let e = lower(&u, &u.kernels[0]).expect_err("three tile dimensions, two space variables");
+    let e = e.to_string();
+    assert!(e.contains("3 dimensions"), "{e}");
+    assert!(e.contains("2 index variables"), "{e}");
+}

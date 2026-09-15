@@ -189,17 +189,51 @@ impl Op {
     }
 }
 
-/// Traffic per element at one level of the hierarchy.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// Traffic per element at one level of the hierarchy, as an affine function of the contracted
+/// extent.
+///
+/// `read` and `write` are the part that does not depend on it, and for every kernel without a
+/// `contract` they are the whole of it -- both `_per_extent` fields are zero and `total_at`
+/// agrees with `total` at every extent.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct LevelCost {
     pub level: Level,
     pub read: f64,
     pub write: f64,
+    /// Bytes read per element for each unit of the contracted extent.
+    pub read_per_extent: f64,
+    pub write_per_extent: f64,
 }
 
 impl LevelCost {
+    fn at(level: Level) -> Self {
+        LevelCost {
+            level,
+            ..Default::default()
+        }
+    }
+
+    /// The part that does not depend on a contracted extent.
     pub fn total(&self) -> f64 {
         self.read + self.write
+    }
+
+    pub fn per_extent(&self) -> f64 {
+        self.read_per_extent + self.write_per_extent
+    }
+
+    /// Traffic per element at a known contracted extent.
+    pub fn total_at(&self, k: u32) -> f64 {
+        self.total() + self.per_extent() * k as f64
+    }
+
+    /// Whether this level carries traffic at all, at any extent.
+    ///
+    /// Not `total() > 0.0`: a matmul reads nothing per element that is not inside its
+    /// contraction, so its DRAM read is 0.0 fixed and 0.25 per unit of k. A roofline that
+    /// asked only about the fixed part would walk past DRAM and report shared memory.
+    pub fn carries_traffic(&self) -> bool {
+        self.total() > 0.0 || self.per_extent() > 0.0
     }
 }
 
@@ -212,9 +246,24 @@ impl LevelCost {
 pub struct Cost {
     /// One entry per level the kernel touches, deepest (farthest from registers) first.
     pub levels: Vec<LevelCost>,
-    pub flops_per_element: f64,
+    /// FLOPs per output element that do **not** depend on a contracted extent.
+    ///
+    /// Private, and read through `flops_per_element()`, which returns `None` for a kernel
+    /// whose flop count is a function of a launch extent. The field is 0.0 for a matmul --
+    /// every one of its flops is inside the contraction -- and 0.0 is a number that would
+    /// print without complaint. The accessor is what makes that unreachable.
+    flops_fixed: f64,
     /// FLOPs/byte at the deepest level with traffic. This is the roofline number.
+    ///
+    /// For a contracted kernel this is the **limit** as the contracted extent grows, and
+    /// `asymptotic` says so. It is the right roofline number either way -- what changes is
+    /// whether it is reached or approached.
     pub intensity: f64,
+    /// Whether `intensity` is a limit rather than an exact figure.
+    pub asymptotic: bool,
+    /// How a `contract` makes the cost a function of a launch extent. `None` for every kernel
+    /// whose traffic is a constant.
+    pub contracted: Option<ContractedCost>,
     /// Traffic at the **L1-to-L2 interface**, at the 32-byte sector the memory system moves in.
     ///
     /// The level is not decoration. Measured on sm_120 against `lts__t_bytes.sum`, this figure
@@ -241,6 +290,9 @@ pub struct Cost {
     /// most one warp per row.
     pub sector_read_per_element: f64,
     pub sector_write_per_element: f64,
+    /// The same, per unit of a contracted extent. Zero without a `contract`.
+    pub sector_read_per_extent: f64,
+    pub sector_write_per_extent: f64,
     /// DRAM bytes written once per block rather than once per element: a reduction's partial.
     ///
     /// Deliberately **not** folded into `intensity`. Per element it is this over the block
@@ -250,6 +302,88 @@ pub struct Cost {
     pub dram_bytes_per_block: f64,
 }
 
+/// `8` rather than `8.0`, `0.25` as itself.
+///
+/// `{:?}` on an f64 is unambiguous and ugly; `{}` drops the distinction between 8 and 8.0,
+/// which for a byte count nobody needs. These figures are read by people.
+pub fn num(v: f64) -> String {
+    if v.fract() == 0.0 && v.abs() < 1e15 {
+        format!("{}", v as i64)
+    } else {
+        format!("{v}")
+    }
+}
+
+/// One stream's contribution to traffic per output element, and where it comes from.
+///
+/// Kept per stream rather than summed into two coefficients, because a compiler whose claim is
+/// that the number is derived has to be able to say *from what*. `bytes(K) = 0.25K + 4` is not
+/// checkable by a reader; `a` contributes `4/32` per unit of `k` because a tile of 32 threads
+/// shares each element it stages, and `c` contributes 4 once, is.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CostTerm {
+    pub buffer: String,
+    /// A write, rather than a read.
+    pub write: bool,
+    /// Bytes per output element, independent of the contracted extent.
+    pub fixed: f64,
+    /// Bytes per output element for **each unit** of the contracted extent.
+    pub per_extent: f64,
+    /// Threads that share one element of this buffer, which is what divides `per_extent`.
+    ///
+    /// **Earned by staging, not by tiling.** A stream that names the contracted axis and is
+    /// not staged is read once per thread per step: the tile says the threads exist, and
+    /// shared memory is what makes them share. A buffer left in `dram -> reg` inside a tiled
+    /// matmul has a reuse of 1 and moves K elements per output, not K/T -- which is the
+    /// difference between a derived expression and a recognised kernel name.
+    pub reuse: u32,
+}
+
+/// What a `contract` does to the cost: makes it a function of one launch extent.
+///
+/// The form is affine in that extent -- `a*K + b` -- and that is closed for what this language
+/// can express, not a simplification. Tiling the contracted axis as well would add another
+/// term in `K` and stay affine; only a second contracted axis would give a product, and v1
+/// refuses one. See ADR-0018.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContractedCost {
+    /// The `u32` parameter the contraction runs over: `k`.
+    pub extent: String,
+    /// FLOPs per output element for each unit of the extent. `2.0` for a `sum` matmul: one
+    /// multiply and one add. `1.0` for a `max` one, because a compare-and-select retires no
+    /// flops (ADR-0013) -- so the combinator changes the flops and not the traffic.
+    pub flops_per_extent: f64,
+    /// Per stream, in declaration order.
+    pub terms: Vec<CostTerm>,
+    /// Bytes per output element for each unit of the extent: the sum of the terms.
+    pub bytes_per_extent: f64,
+}
+
+impl ContractedCost {
+    /// The traffic, as an expression a reader can check: `0.25 * k + 4`.
+    ///
+    /// Rendered rather than stored, so there is exactly one place the coefficients live and no
+    /// way for the sentence and the number to drift apart.
+    pub fn bytes_expr(&self, fixed: f64) -> String {
+        let k = &self.extent;
+        if fixed == 0.0 {
+            format!("{} * {k}", num(self.bytes_per_extent))
+        } else {
+            format!("{} * {k} + {}", num(self.bytes_per_extent), num(fixed))
+        }
+    }
+
+    /// `2 * k`, the flops per output element.
+    pub fn flops_expr(&self, fixed: f64) -> String {
+        let k = &self.extent;
+        if fixed == 0.0 {
+            format!("{} * {k}", num(self.flops_per_extent))
+        } else {
+            format!("{} * {k} + {}", num(self.flops_per_extent), num(fixed))
+        }
+    }
+}
+
 impl Cost {
     pub fn at(&self, level: Level) -> Option<&LevelCost> {
         self.levels.iter().find(|l| l.level == level)
@@ -257,11 +391,111 @@ impl Cost {
 
     /// The deepest level carrying traffic — the one the roofline is about.
     pub fn roofline(&self) -> Option<&LevelCost> {
-        self.levels.iter().find(|l| l.total() > 0.0)
+        self.levels.iter().find(|l| l.carries_traffic())
     }
 
-    pub fn bytes_per_element(&self) -> f64 {
+    /// Bytes per output element, when that is a constant.
+    ///
+    /// `None` for a contracted kernel, where it is a function of a launch extent. The
+    /// alternative -- returning the constant part -- is 4.0 for a matmul, a number that looks
+    /// exactly like every other number this compiler reports and is wrong by a factor of K.
+    /// Use `bytes_at`.
+    pub fn bytes_per_element(&self) -> Option<f64> {
+        if self.contracted.is_some() {
+            return None;
+        }
+        Some(self.bytes_fixed())
+    }
+
+    /// The flop count as an expression, when it is one. `None` for a constant kernel.
+    pub fn flops_expr(&self) -> Option<String> {
+        self.contracted
+            .as_ref()
+            .map(|c| c.flops_expr(self.flops_fixed))
+    }
+
+    /// The traffic as an expression, when it is one. `None` for a constant kernel.
+    pub fn bytes_expr(&self) -> Option<String> {
+        self.contracted
+            .as_ref()
+            .map(|c| c.bytes_expr(self.bytes_fixed()))
+    }
+
+    /// FLOPs per output element, when that is a constant. `None` for a contracted kernel.
+    pub fn flops_per_element(&self) -> Option<f64> {
+        if self.contracted.is_some() {
+            return None;
+        }
+        Some(self.flops_fixed)
+    }
+
+    /// One level's read and write, as expressions when they are expressions.
+    ///
+    /// `("0.25 * k", "4")` for a matmul at DRAM. The alternative is what this printed before
+    /// the contraction existed -- `0 read + 4 written` -- where the zero is the fixed part of
+    /// something that is not fixed.
+    pub fn traffic_words(&self, level: Level) -> (String, String) {
+        let Some(l) = self.at(level) else {
+            return ("0".into(), "0".into());
+        };
+        let word = |fixed: f64, per: f64| -> String {
+            match (&self.contracted, per) {
+                (Some(c), p) if p > 0.0 && fixed > 0.0 => {
+                    format!("{} * {} + {}", num(p), c.extent, num(fixed))
+                }
+                (Some(c), p) if p > 0.0 => format!("{} * {}", num(p), c.extent),
+                _ => num(fixed),
+            }
+        };
+        (
+            word(l.read, l.read_per_extent),
+            word(l.write, l.write_per_extent),
+        )
+    }
+
+    /// The part of the flop count that does not depend on a contracted extent. For a kernel
+    /// without a contraction this is the whole of it.
+    pub fn flops_fixed_part(&self) -> f64 {
+        self.flops_fixed
+    }
+
+    /// The part of the traffic that does not depend on a contracted extent. For a kernel
+    /// without a contraction this is the whole of it.
+    pub fn bytes_fixed(&self) -> f64 {
         self.roofline().map(LevelCost::total).unwrap_or(0.0)
+    }
+
+    /// Bytes per output element at a known contracted extent.
+    ///
+    /// Equal to `bytes_per_element()` for every kernel without a contraction, at every `k`.
+    pub fn bytes_at(&self, k: u32) -> f64 {
+        self.bytes_fixed()
+            + self
+                .contracted
+                .as_ref()
+                .map(|c| c.bytes_per_extent * k as f64)
+                .unwrap_or(0.0)
+    }
+
+    /// FLOPs per output element at a known contracted extent.
+    pub fn flops_at(&self, k: u32) -> f64 {
+        self.flops_fixed
+            + self
+                .contracted
+                .as_ref()
+                .map(|c| c.flops_per_extent * k as f64)
+                .unwrap_or(0.0)
+    }
+
+    /// Arithmetic intensity at a known contracted extent: the exact figure `intensity`
+    /// approaches.
+    pub fn intensity_at(&self, k: u32) -> f64 {
+        let bytes = self.bytes_at(k);
+        if bytes > 0.0 {
+            self.flops_at(k) / bytes
+        } else {
+            0.0
+        }
     }
 
     /// Payload over sectors: 1.0 when every byte fetched is a byte wanted.
@@ -271,9 +505,21 @@ impl Cost {
     /// numbers, because they answer different questions and a single one would hide whichever
     /// question the reader had.
     pub fn coalescence(&self) -> f64 {
-        let sectors = self.sector_read_per_element + self.sector_write_per_element;
+        // Both halves of each side, or the ratio compares a per-output numerator against a
+        // per-step denominator. For a kernel without a contraction the per-extent parts are
+        // zero and this is the figure it always was.
+        let sectors = self.sector_read_per_element
+            + self.sector_write_per_element
+            + self.sector_read_per_extent
+            + self.sector_write_per_extent;
+        let payload = self.bytes_fixed()
+            + self
+                .contracted
+                .as_ref()
+                .map(|c| c.bytes_per_extent)
+                .unwrap_or(0.0);
         if sectors > 0.0 {
-            self.bytes_per_element() / sectors
+            payload / sectors
         } else {
             1.0
         }
@@ -347,6 +593,23 @@ pub enum LowerError {
         span: Span,
         buffer: String,
         var: String,
+    },
+    #[error(
+        "{span}: `{name}` contracts over `{extent}`, so its intensity is a function of a launch extent and a source constant cannot be one. Write `intensity asymptotic {derived:.4}`, which claims the limit the body approaches -- a weaker claim than an elementwise kernel makes, and the only one that is true here."
+    )]
+    ContractedIntensityNotAsymptotic {
+        span: Span,
+        name: String,
+        extent: String,
+        derived: f64,
+    },
+    #[error(
+        "{span}: `{name}` declares `intensity asymptotic` but does not contract. Its traffic is a constant, so the exact figure is available and the limit is the same number wearing a weaker claim. Write `intensity {declared}`."
+    )]
+    AsymptoticWithoutContraction {
+        span: Span,
+        name: String,
+        declared: f64,
     },
     #[error(
         "{span}: `{name}` parses and resolves, but its cost is not derived yet. A contraction moves `2K/T + 1` elements per output -- an expression in a launch extent, not a constant -- and this compiler will not publish a constant in its place. ADR-0018 step 2."
@@ -1000,20 +1263,41 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
         });
     }
 
-    let cost = derive_cost(&streams, &ops, reduction.as_ref());
 
-    // A contraction's traffic per output is `2K/T + 1` elements, an expression in a launch
-    // extent rather than a constant, and `Cost` carries constants. Reporting the constant part
-    // would publish a number wrong by a factor of K -- and this compiler's whole claim is that
-    // the number it publishes is the one the silicon moves.
+    let cost = derive_cost(
+        &streams,
+        &ops,
+        reduction.as_ref(),
+        contract.as_ref(),
+        space.as_ref(),
+        kernel.tile.as_ref().map(|t| t.dims.as_slice()),
+    );
+
+    // The word `asymptotic`, required exactly where the claim is a limit and refused
+    // everywhere else.
     //
-    // So the front end accepts the syntax and refuses to cost it, rather than costing it
-    // wrongly. ADR-0018 step 2 replaces this with the symbolic form.
-    if contract.is_some() {
-        return Err(LowerError::ContractCostNotDerived {
-            span: kernel.contract.as_ref().expect("contract is some").span,
-            name: kernel.name.clone(),
-        });
+    // Step 1 refused to cost a contraction at all, because `Cost` carried constants and the
+    // constant part of a matmul is 4 bytes -- wrong by a factor of K and indistinguishable
+    // from every other number this compiler reports. `Cost` now carries the expression, so the
+    // refusal is lifted. What replaces it is smaller and permanent: a contracted kernel may
+    // declare the limit and not the figure, and it has to say which it is declaring.
+    match (&kernel.contract, kernel.declared_intensity) {
+        (Some(c), Some(_)) if !kernel.intensity_is_asymptotic => {
+            return Err(LowerError::ContractedIntensityNotAsymptotic {
+                span: kernel.intensity_span.unwrap_or(c.span),
+                name: kernel.name.clone(),
+                extent: c.extent.clone(),
+                derived: cost.intensity,
+            });
+        }
+        (None, Some(declared)) if kernel.intensity_is_asymptotic => {
+            return Err(LowerError::AsymptoticWithoutContraction {
+                span: kernel.intensity_span.unwrap_or(kernel.span),
+                name: kernel.name.clone(),
+                declared,
+            });
+        }
+        _ => {}
     }
 
     Ok(KernelIr {
@@ -1090,38 +1374,98 @@ fn gcd(a: u32, b: u32) -> u32 {
     }
 }
 
-fn derive_cost(streams: &[StreamIr], ops: &[Op], reduction: Option<&ReductionIr>) -> Cost {
+/// Bytes and flops per output element, per stream.
+///
+/// **Per stream is the point, not an implementation detail.** A contraction over a square tile
+/// with both operands staged moves `2K/T + 1` elements per output, and it would be a short
+/// function to emit that expression whenever a `contract` and a `tile` appear together. It
+/// would also be wrong for every other schedule this language can already express -- one
+/// operand staged and one not, a rectangular tile, no tile at all -- and wrong in the same
+/// confident shape as the constant step 1 refused to publish. So each stream is asked what it
+/// costs and the expression is the sum. `2K/T + 1` is a result here, never an input.
+fn derive_cost(
+    streams: &[StreamIr],
+    ops: &[Op],
+    reduction: Option<&ReductionIr>,
+    contract: Option<&ContractIr>,
+    space: Option<&SpaceIr>,
+    tile: Option<&[u32]>,
+) -> Cost {
     // `levels` is built below; a staged stream adds one before the reduction's, and the sort
     // at the end puts the deepest first so `roofline()` still finds DRAM.
 
     let elem = Ty::BufF32.bytes() as f64;
-    let mut dram = LevelCost {
-        level: Level::Dram,
-        read: 0.0,
-        write: 0.0,
+    let mut dram = LevelCost::at(Level::Dram);
+
+    // How many threads share one element of this buffer, once it is loaded.
+    //
+    // A stream is reused along the free axes its index does not mention: `a[i, p]` is the same
+    // element for every `j`, so the `tile[j]` threads of a tile column want it once between
+    // them. **Staging is what makes that true.** Left in `dram -> reg`, each of those threads
+    // issues its own load and the reuse is 1: the tile says the threads exist, shared memory
+    // is what makes them share. ADR-0017 drew the same line for coalescence.
+    let reuse_of = |st: &StreamIr| -> u32 {
+        let (Some(sp), Some(t)) = (space, tile) else {
+            return 1;
+        };
+        if !st.staged {
+            return 1;
+        }
+        sp.vars
+            .iter()
+            .zip(t)
+            .filter(|(v, _)| !st.index.contains(v))
+            .map(|(_, dim)| *dim)
+            .product::<u32>()
+            .max(1)
     };
     // The same accounting at sector granularity. A coalesced access costs the payload; a
     // strided one costs a whole sector per element, which is the bound documented on `Cost`.
+    // Each stream is charged once per output, or once per output per unit of the contracted
+    // extent when it is the contraction that walks it.
+    let mut terms: Vec<CostTerm> = Vec::new();
+    // The same accounting at sector granularity, and it has to follow the same split or the
+    // ratio between them stops being a ratio. A strided access costs a whole sector per
+    // element; a staged one is loaded coalesced and amortised by the same reuse as its
+    // payload, so a contracted kernel whose operands are staged achieves 1.000 -- which is
+    // what the absorption rule in ADR-0017 claims and what this number is for.
     let (mut sector_read, mut sector_write) = (0.0, 0.0);
+    let (mut sector_read_per_extent, mut sector_write_per_extent) = (0.0, 0.0);
     for s in streams {
-        let per = if s.coalesced { elem } else { SECTOR };
+        let walked = contract.map(|c| s.index.contains(&c.var)).unwrap_or(false);
+        let per = if walked { elem / reuse_of(s) as f64 } else { 0.0 };
+        let fixed = if walked { 0.0 } else { elem };
+        let bus = if s.coalesced { elem } else { SECTOR };
+        let bus_per = if walked { bus / reuse_of(s) as f64 } else { 0.0 };
+        let bus_fixed = if walked { 0.0 } else { bus };
         if s.read {
-            sector_read += per;
+            dram.read += fixed;
+            dram.read_per_extent += per;
+            sector_read += bus_fixed;
+            sector_read_per_extent += bus_per;
         }
         if s.drain {
-            sector_write += per;
+            dram.write += fixed;
+            dram.write_per_extent += per;
+            sector_write += bus_fixed;
+            sector_write_per_extent += bus_per;
         }
-    }
-    for s in streams {
-        if s.read {
-            dram.read += elem;
-        }
-        if s.drain {
-            dram.write += elem;
+        if contract.is_some() && (s.read || s.drain) {
+            terms.push(CostTerm {
+                buffer: s.buffer.clone(),
+                write: s.drain,
+                fixed,
+                per_extent: per,
+                reuse: if walked { reuse_of(s) } else { 1 },
+            });
         }
     }
 
-    let mut flops: f64 = ops.iter().map(Op::flops).sum();
+    // The body runs once per step of the contraction rather than once per output, so every
+    // flop it retires is a flop per unit of the extent. A kernel without a contraction takes
+    // one step per output and the two are the same number.
+    let body_flops: f64 = ops.iter().map(Op::flops).sum();
+    let mut flops = if contract.is_some() { 0.0 } else { body_flops };
     let mut levels = vec![dram];
     let mut dram_bytes_per_block = 0.0;
 
@@ -1130,11 +1474,20 @@ fn derive_cost(streams: &[StreamIr], ops: &[Op], reduction: Option<&ReductionIr>
     // byte in shared memory and a byte at DRAM are not the same byte and no single number
     // should pretend otherwise.
     if streams.iter().any(|s| s.staged) {
-        levels.push(LevelCost {
-            level: Level::Smem,
-            read: elem,
-            write: elem,
-        });
+        let mut smem = LevelCost::at(Level::Smem);
+        for st in streams.iter().filter(|s| s.staged) {
+            let walked = contract.map(|c| st.index.contains(&c.var)).unwrap_or(false);
+            if walked {
+                // Once per step the thread reads its element out of shared. The write into
+                // shared happened once for the whole set of threads that wanted it.
+                smem.read_per_extent += elem;
+                smem.write_per_extent += elem / reuse_of(st) as f64;
+            } else {
+                smem.read += elem;
+                smem.write += elem;
+            }
+        }
+        levels.push(smem);
     }
 
     if let Some(r) = reduction {
@@ -1148,6 +1501,7 @@ fn derive_cost(streams: &[StreamIr], ops: &[Op], reduction: Option<&ReductionIr>
             level: Level::Smem,
             read: 8.0,
             write: 8.0,
+            ..Default::default()
         });
         // The tree retires B-1 combines over B elements, so (B-1)/B per element. Counted as
         // one, for the same reason: the block size is not in the source.
@@ -1159,22 +1513,46 @@ fn derive_cost(streams: &[StreamIr], ops: &[Op], reduction: Option<&ReductionIr>
 
     // Deepest first, so `roofline()` finds DRAM before shared memory.
     levels.sort_by_key(|l| l.level as u8);
-    let roofline = levels
+    let roof = levels
         .iter()
-        .find(|l| l.total() > 0.0)
-        .map(LevelCost::total)
-        .unwrap_or(0.0);
+        .find(|l| l.carries_traffic())
+        .copied()
+        .unwrap_or_default();
+
+    let contracted = contract.map(|c| {
+        // The combinator changes this and not the traffic: `sum` retires one flop per step on
+        // top of the body, `max` and `min` retire none (ADR-0013). Derived once, here, rather
+        // than three times by operator.
+        let flops_per_extent = body_flops + c.op.flops();
+        ContractedCost {
+            extent: c.extent.clone(),
+            flops_per_extent,
+            terms,
+            bytes_per_extent: roof.per_extent(),
+        }
+    });
+
+    // The roofline number. For a contracted kernel it is the limit as the extent grows --
+    // `flops_per_extent / bytes_per_extent`, the fixed parts vanishing -- because the exact
+    // figure is a function of a launch value and this is a compile-time constant. The flag
+    // beside it is what stops that being read as an exact claim.
+    let intensity = match &contracted {
+        Some(c) if c.bytes_per_extent > 0.0 => c.flops_per_extent / c.bytes_per_extent,
+        Some(_) => 0.0,
+        None if roof.total() > 0.0 => flops / roof.total(),
+        None => 0.0,
+    };
 
     Cost {
         levels,
         sector_read_per_element: sector_read,
         sector_write_per_element: sector_write,
-        flops_per_element: flops,
-        intensity: if roofline > 0.0 {
-            flops / roofline
-        } else {
-            0.0
-        },
+        sector_read_per_extent,
+        sector_write_per_extent,
+        flops_fixed: flops,
+        intensity,
+        asymptotic: contracted.is_some(),
+        contracted,
         dram_bytes_per_block,
     }
 }
@@ -1420,9 +1798,9 @@ kernel saxpy(n: u32, a: f32, x: [f32; n], y: [f32; n])
         // x read 4, y read 4, y written 4.
         assert_eq!(k.cost.read_bytes_per_element(), 8.0);
         assert_eq!(k.cost.write_bytes_per_element(), 4.0);
-        assert_eq!(k.cost.bytes_per_element(), 12.0);
+        assert_eq!(k.cost.bytes_per_element().unwrap(), 12.0);
         // One fma = 2 flops.
-        assert_eq!(k.cost.flops_per_element, 2.0);
+        assert_eq!(k.cost.flops_per_element().unwrap(), 2.0);
         assert!(
             (k.cost.intensity - 2.0 / 12.0).abs() < 1e-12,
             "{}",
@@ -1516,7 +1894,7 @@ kernel saxpy(n: u32, a: f32, x: [f32; n], y: [f32; n])
         let k = ir(src).unwrap();
         assert_eq!(k.cost.read_bytes_per_element(), 4.0, "x only");
         assert_eq!(k.cost.write_bytes_per_element(), 4.0, "y only");
-        assert_eq!(k.cost.bytes_per_element(), 8.0);
+        assert_eq!(k.cost.bytes_per_element().unwrap(), 8.0);
 
         // saxpy does read y, because `a * x + y` names it.
         let saxpy = ir(SAXPY).unwrap();
@@ -1618,7 +1996,7 @@ mod absorption {
         assert_eq!(tiled.coalescence(), 1.0);
         // The payload never moved. That is what makes the two comparable.
         assert_eq!(tiled.bytes_per_element(), flat.bytes_per_element());
-        assert_eq!(tiled.flops_per_element, flat.flops_per_element);
+        assert_eq!(tiled.flops_per_element(), flat.flops_per_element());
     }
 
     #[test]
@@ -1647,7 +2025,7 @@ mod absorption {
         assert_eq!((smem.read, smem.write), (4.0, 4.0));
         // And DRAM is still the roofline level: shared traffic is reported beside it, never
         // folded into it.
-        assert_eq!(tiled.bytes_per_element(), 8.0);
+        assert_eq!(tiled.bytes_per_element(), Some(8.0));
     }
 
     #[test]

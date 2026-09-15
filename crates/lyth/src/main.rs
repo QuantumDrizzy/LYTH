@@ -23,6 +23,7 @@ use serde::Deserialize;
 use lyth_cuda::{median_and_spread, time_launches, Arg, Context, Launch};
 use lyth_lang::ast::{ReduceOp, Ty};
 use lyth_lang::eval::{eval_with_launch, Inputs};
+use lyth_lang::ir::num;
 use lyth_lang::{check_intensity, ir, parse, KernelIr, Ridge};
 use lyth_ptx::emit;
 
@@ -320,14 +321,26 @@ fn front(file: &Path, machine_path: Option<&Path>, tol: f64) -> Result<Front, Ex
 
 fn print_cost(ir: &KernelIr, report: &lyth_lang::IntensityReport) {
     println!("kernel {} on machine {}", ir.name, ir.machine);
+    match (&report.flops_expr, &report.bytes_expr) {
+        // A contracted kernel is never told its cost as a constant, here least of all: this
+        // line is what a reader quotes. The limit is labelled as one and the exact figure is
+        // the expression beside it.
+        (Some(f), Some(b)) => {
+            println!(
+                "  derived  {:.4} flop/byte asymptotic  ({f} flop / {b} byte per element)",
+                report.derived
+            );
+        }
+        _ => println!(
+            "  derived  {:.4} flop/byte  ({} flop / {} byte per element)",
+            report.derived,
+            report.flops.unwrap_or(0.0),
+            report.bytes.unwrap_or(0.0)
+        ),
+    }
+    let (dram_r, dram_w) = ir.cost.traffic_words(ir.cost.level());
     println!(
-        "  derived  {:.4} flop/byte  ({} flop / {} byte per element)",
-        report.derived, report.flops, report.bytes
-    );
-    println!(
-        "  payload  {} read + {} written, at {}",
-        ir.cost.read_bytes_per_element(),
-        ir.cost.write_bytes_per_element(),
+        "  payload  {dram_r} read + {dram_w} written, at {}",
         ir.cost.level().name()
     );
     // What the bus carries, beside what the source asked for. Printed for every rank-2 kernel
@@ -336,19 +349,28 @@ fn print_cost(ir: &KernelIr, report: &lyth_lang::IntensityReport) {
     // always 1.000 and the line would be noise.
     let coalescence = ir.cost.coalescence();
     if ir.space.is_some() {
+        let word = |fixed: f64, per: f64| match &ir.cost.contracted {
+            Some(c) if per > 0.0 && fixed > 0.0 => format!("{} * {} + {}", num(per), c.extent, num(fixed)),
+            Some(c) if per > 0.0 => format!("{} * {}", num(per), c.extent),
+            _ => num(fixed),
+        };
         println!(
             "  sectors  {} read + {} written at L1->L2  (coalescence {:.3})",
-            ir.cost.sector_read_per_element, ir.cost.sector_write_per_element, coalescence
+            word(
+                ir.cost.sector_read_per_element,
+                ir.cost.sector_read_per_extent
+            ),
+            word(
+                ir.cost.sector_write_per_element,
+                ir.cost.sector_write_per_extent
+            ),
+            coalescence
         );
     }
     if let Some(l) = &ir.shared {
         let (_, rows, stride) = &l.tiles[0];
-        println!(
-            "  shared   {} read + {} written per element, {} B per block",
-            ir.cost.at(lyth_lang::ast::Level::Smem).map(|c| c.read).unwrap_or(0.0),
-            ir.cost.at(lyth_lang::ast::Level::Smem).map(|c| c.write).unwrap_or(0.0),
-            l.bytes
-        );
+        let (smem_r, smem_w) = ir.cost.traffic_words(lyth_lang::ast::Level::Smem);
+        println!("  shared   {smem_r} read + {smem_w} written per element, {} B per block", l.bytes);
         println!(
             "           tile {rows} x {} with a derived stride of {stride}, predicting {} bank conflicts",
             l.tiles[0].2 - (stride - ir.tile.as_ref().map(|t| t[1]).unwrap_or(*stride)),
@@ -578,7 +600,7 @@ fn evidence_json(ir: &KernelIr, elements: u32) -> String {
         "elements": elements,
         "body": {
             "moves": moves,
-            "flops": ir.cost.flops_per_element,
+            "flops": ir.cost.flops_per_element().expect("evidence is emitted for a compiled kernel"),
             "flop_note": "Derived from the LYTH IR, not written by hand. An fma is two flops."
         },
         // Beside the payload, never instead of it. `moves` is what the source asks for and is
@@ -1057,7 +1079,7 @@ fn report_timing(
         median_and_spread(&samples).ok_or("a timing with no runs has no median")?;
 
     let bytes =
-        ir.cost.bytes_per_element() * n as f64 + ir.cost.dram_bytes_per_block * shape.grid as f64;
+        ir.cost.bytes_fixed() * n as f64 + ir.cost.dram_bytes_per_block * shape.grid as f64;
     let gbs = bytes / (median_ms * 1e-3) / 1e9;
 
     println!("  time     {median_ms:.4} ms median of n={reps} (warm-up {warmup} discarded), spread {:.1}%", spread * 100.0);
@@ -1082,7 +1104,7 @@ fn report_timing(
             // exercise 01's 385.71 GB/s. Above the baseline means one of three things and the
             // reader is told which to check, in the order they are worth checking.
             if pct > 100.0 {
-                let working_set = ir.cost.bytes_per_element() * n as f64;
+                let working_set = ir.cost.bytes_fixed() * n as f64;
                 println!("  ABOVE    this is over the baseline, which is a claim about the");
                 println!("           baseline, not a result. Four things to check, in order:");
                 println!("           1. the working set is {:.0} MB. If that fits in L2 the bytes", working_set / 1e6);

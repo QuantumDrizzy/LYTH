@@ -55,6 +55,10 @@ pub enum EmitError {
         "no PTX ISA version is recorded for target `{0}`. Known: {1}. Add it to TARGET_ISA rather than guessing: `.version` too low is rejected by ptxas, too high by an older driver."
     )]
     UnknownTarget(String, String),
+    #[error(
+        "kernel `{0}` contracts over `{1}` and there is no emitter for a contraction yet. Its cost is derived and checked (ADR-0018 step 2); the four-phase body with two staged tiles and an accumulator carried across the `{1}` loop is step 3."
+    )]
+    NoContractionEmitter(String, String),
     #[error("{0}")]
     Message(String),
 }
@@ -125,6 +129,17 @@ pub fn emit_with_skew(ir: &KernelIr, arch: &str, skewed: bool) -> Result<Module,
         n_b32: 0,
         n_b64: 0,
     };
+    // Costing is not emitting. The front end now derives a contraction's traffic as an
+    // expression and checks a declared limit against it, and none of that puts an accumulator
+    // in a register or a `p` loop around two staged tiles. The refusal moves here rather than
+    // disappearing, because the alternative is a `.ptx` file that computes one term of a sum.
+    if let Some(c) = &ir.contract {
+        return Err(EmitError::NoContractionEmitter(
+            ir.name.clone(),
+            c.extent.clone(),
+        ));
+    }
+
     let mut body = String::new();
     match ir.tile {
         Some(_) => e.tiled_body(ir, skewed, &mut body)?,
@@ -140,8 +155,8 @@ pub fn emit_with_skew(ir: &KernelIr, arch: &str, skewed: bool) -> Result<Module,
         ptx,
         "//   derived   {:.6} flop/byte = {} flop / {} byte per element",
         ir.cost.intensity,
-        ir.cost.flops_per_element,
-        ir.cost.bytes_per_element()
+        ir.cost.flops_per_element().expect("a contraction is refused above"),
+        ir.cost.bytes_per_element().expect("a contraction is refused above")
     );
     let _ = writeln!(
         ptx,

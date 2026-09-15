@@ -27,7 +27,7 @@ kernel matmul(m: u32, n: u32, k: u32,
     space i, j : m, n
     contract sum p : k
     tile 32, 32
-    intensity 8.0
+    intensity asymptotic 8.0
 
     stream a : dram -> smem -> reg
     stream b : dram -> smem -> reg

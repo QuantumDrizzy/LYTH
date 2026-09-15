@@ -46,24 +46,20 @@ fn the_lying_example_does_not_compile() {
     assert!(e.contains("did you mean to declare"), "{e}");
 }
 
-/// The matmul example, which is checked in and does **not** compile.
+/// The matmul example: costed and checked, and still not emitted.
 ///
-/// ADR-0018 step 1 is the grammar and the resolution, not the cost. A contraction moves
-/// `2K/T + 1` elements per output, an expression in a launch extent, and this compiler
-/// reports constants. The example exists so the syntax is written down and exercised, and the
-/// refusal exists so no constant is published in the expression's place.
-///
-/// When step 2 lands, this test is the one that has to change, and it should be changed to
-/// assert the derived intensity rather than deleted.
+/// This test is the step-1 test, changed rather than deleted. It used to assert that lowering
+/// refused to cost a contraction at all. Step 2 lifted that **by deriving the expression**,
+/// not by special-casing anything, and what is left is the emitter -- costing is not emitting,
+/// and a `.ptx` that computed one term of a sum would be worse than no `.ptx`.
 #[test]
-fn the_matmul_example_parses_and_refuses_to_be_costed() {
-    let e = compile("matmul.lyth").expect_err("a contraction has no cost model yet");
-    assert!(e.contains("cost is not derived yet"), "{e}");
-    assert!(e.contains("2K/T + 1"), "{e}");
+fn the_matmul_example_is_costed_and_checked_but_not_emitted() {
+    let e = compile("matmul.lyth").expect_err("there is no emitter for a contraction");
+    assert!(e.contains("no emitter for a contraction"), "{e}");
     assert!(e.contains("ADR-0018 step 2"), "{e}");
-    // It got all the way past parsing, the space, the tile, the staged streams and the body.
-    // A refusal that fired earlier would make this file untested rather than pending.
+    // Not a parse error, not a lowering error, and above all not the step-1 refusal.
     assert!(!e.contains("expected"), "it should parse: {e}");
+    assert!(!e.contains("cost is not derived"), "the cost is derived now: {e}");
 }
 
 #[test]
@@ -113,8 +109,8 @@ fn every_working_example_compiles_with_the_cost_it_documents() {
         let src = example(name);
         let unit = parse(&src).unwrap_or_else(|e| panic!("{name}: {e}"));
         let ir = ir::lower(&unit, &unit.kernels[0]).unwrap_or_else(|e| panic!("{name}: {e}"));
-        assert_eq!(ir.cost.flops_per_element, *flops, "{name} flops");
-        assert_eq!(ir.cost.bytes_per_element(), *bytes, "{name} bytes");
+        assert_eq!(ir.cost.flops_per_element().unwrap(), *flops, "{name} flops");
+        assert_eq!(ir.cost.bytes_per_element().unwrap(), *bytes, "{name} bytes");
         let m = emit(&ir, "sm_120").unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(
             m.ptx.matches("ld.global.f32").count(),
@@ -179,7 +175,7 @@ fn the_cost_model_reports_shared_traffic_beside_dram_not_mixed_into_it() {
     assert_eq!(dram.total(), 8.0, "x and y, per element");
     assert_eq!(smem.total(), 16.0, "the tree");
     // The roofline is about DRAM. Folding the shared traffic in would move it.
-    assert_eq!(ir.cost.bytes_per_element(), 8.0);
+    assert_eq!(ir.cost.bytes_per_element().unwrap(), 8.0);
     assert_eq!(ir.cost.intensity, 0.25);
     // The partial is one write per block, reported separately rather than divided by a
     // block size the compiler would have to invent.
@@ -379,7 +375,7 @@ fn a_coalesced_kernel_pays_the_payload_and_nothing_more() {
         assert_eq!(ir.cost.coalescence(), 1.0, "{name}");
         assert_eq!(
             ir.cost.sector_read_per_element + ir.cost.sector_write_per_element,
-            ir.cost.bytes_per_element(),
+            ir.cost.bytes_per_element().unwrap(),
             "{name}: sectors and payload must agree when every access is contiguous"
         );
         assert!(ir.streams.iter().all(|s| s.coalesced), "{name}");
@@ -397,7 +393,7 @@ fn a_transpose_is_charged_a_sector_for_its_strided_side() {
     assert!(by("a").coalesced, "a is read along its rows");
     assert!(!by("b").coalesced, "b is written down its columns");
 
-    assert_eq!(ir.cost.bytes_per_element(), 8.0, "the payload is unchanged");
+    assert_eq!(ir.cost.bytes_per_element().unwrap(), 8.0, "the payload is unchanged");
     assert_eq!(ir.cost.sector_read_per_element, 4.0);
     assert_eq!(ir.cost.sector_write_per_element, 32.0);
     assert!((ir.cost.coalescence() - 8.0 / 36.0).abs() < 1e-12);
@@ -442,7 +438,7 @@ mod tile {
         assert!(!by("b").staged, "b goes straight to dram");
         // Step 1 changes no cost: the bus model still sees the untiled access pattern until
         // the staged stream is modelled in step 4.
-        assert_eq!(ir.cost.bytes_per_element(), 8.0);
+        assert_eq!(ir.cost.bytes_per_element().unwrap(), 8.0);
     }
 
     #[test]

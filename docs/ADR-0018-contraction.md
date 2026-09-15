@@ -1,6 +1,6 @@
 # ADR-0018 — Contraction, where the cost model stops being a number
 
-**Status:** Proposed — step 1 built
+**Status:** Proposed — steps 1 and 2 built
 **Date:** 2026-09-16
 **Depends on:** ADR-0000 (why), ADR-0017 (the tile), ADR-0015 (shape)
 
@@ -211,6 +211,126 @@ IR — not to two IRs that both work — with parameter spans flattened, because
 line 4 should carry line 4 and an error about it should point there. An unclosed `(` is now
 reported as one; without that check the rest of the file is swallowed as a single logical line
 and the error surfaces somewhere unrelated, which is how the CRLF bug used to present.
+
+
+## Step 2, as built
+
+`Cost` is no longer a number. `lyth build examples/matmul.lyth`:
+
+```
+kernel matmul on machine sm_120
+  derived  8.0000 flop/byte asymptotic  (2 * k flop / 0.25 * k + 4 byte per element)
+  payload  0.25 * k read + 4 written, at dram
+  sectors  0.25 * k read + 4 written at L1->L2  (coalescence 1.000)
+  shared   8 * k read + 0.25 * k written per element, 8448 B per block
+  declared 8 — matches
+  ridge    42.9 flop/byte — memory-bound
+error[codegen]: kernel `matmul` contracts over `k` and there is no emitter for a contraction yet.
+```
+
+At `k = 4096`: 1028 bytes per output, intensity 7.9689, against a limit of `T/4 = 8`.
+
+### The expression is a result, never an input
+
+The one line worth defending. It would be short to emit `2K/T + 1` on seeing a `contract` and a
+`tile` together, and it would be right for the schedule this ADR describes and wrong for every
+other schedule the language can already express — in the same confident shape as the constant
+step 1 refused to publish.
+
+So each stream is asked what it costs and the expression is the sum. A stream whose index names
+the contracted axis is read `K / reuse` times per output; everything else is read once.
+
+**Reuse is earned by staging, not by tiling.** `a[i, p]` is the same element for every `j`, so
+the `tile[j]` threads of a tile column want it once between them — but only if it is staged.
+Left in `dram -> reg`, each of those threads issues its own load and the reuse is 1: the tile
+says the threads exist, shared memory is what makes them share. ADR-0017 drew the same line for
+coalescence.
+
+Four schedules, one rule, no special cases:
+
+| schedule | derived | |
+|---|---|---|
+| both staged, `tile 32, 32` | `0.25 * k + 4` | the intended one |
+| `a` staged, `b` not | `4.125 * k + 4` | `b` has no reuse; wrong by 16x if pattern-matched |
+| neither staged, same tile | `8 * k + 4` | the tile alone earns nothing |
+| no tile at all | `8 * k + 4` | **the untiled control, which falls out rather than being written** |
+| `tile 16, 64` | `0.3125 * k + 4` | `a` reuses 64, `b` reuses 16 |
+
+The rectangular tile is there because a square one makes the two reuse factors the same number,
+which is exactly how a wrong rule survives its first test.
+
+### `intensity asymptotic`, and a tenth and eleventh refusal
+
+A contracted kernel's exact intensity is a function of a launch extent and a source constant is
+not one, so a contracted kernel may declare **the limit** and has to say that is what it is
+declaring:
+
+```
+intensity asymptotic 8.0
+```
+
+A bare `intensity 8.0` on a contraction is refused, and `intensity asymptotic` on a kernel whose
+cost is constant is refused too — the same number wearing a weaker claim is a claim nobody
+derived. This is ADR-0000's pre-registration rule moved out of the ADRs and into the source
+language.
+
+### The constant form is unavailable, not merely discouraged
+
+`flops_per_element()` and `bytes_per_element()` return `Option`, and both are `None` for a
+contracted kernel. The constant part of a matmul is **0 flops and 4 bytes** — two numbers that
+would print without complaint and are wrong by a factor of `k`. The type is what makes that
+unreachable; the compiler named all fourteen call sites, which is a better review than reading
+for them.
+
+The same accounting mistake was sitting in the sector model and printed as
+`coalescence 0.333` — a per-output numerator over a per-step denominator, for a kernel whose
+every access is absorbed into shared memory. It reads like a finding. It was arithmetic. Now
+1.000, which is what ADR-0017's absorption rule claims.
+
+### Three deviations from what the reviewers proposed, and why
+
+**Affine, not a general expression tree.** One reviewer asked for a small AST
+(`Const | Extent | Tile | + * /`). The value is affine in one extent, and that is closed for
+what this language expresses: tiling the contracted axis as well would add another term in `k`
+and stay affine, and only a *second* contracted axis gives a product — which v1 refuses. The
+danger that reviewer named is real and it does not live in the datatype; it lives in the
+deriver, and the four-schedule table above is what holds it.
+
+**No canonicalisation.** Another asked for a normal form so two spellings of one expression do
+not mismatch. Nothing ever compares two expressions: a source constant is compared against the
+asymptote, and both are `f64`. Building a normal form nobody needs is the general algebra system
+the first reviewer correctly warned against. If a source is ever allowed to declare an
+expression, that is an ADR and not a detail of this one.
+
+**The manifest carries the form; the bindings do not project it yet.** A generated binding with
+a `derived_intensity(k)` function and no kernel behind it is a contract with nothing to check
+it against. `Manifest` carries `symbolic` — the expression, its coefficients, the asymptote, and
+**per-stream provenance** so a reader can check `0.25` against `4/32` rather than take it — and
+the three generators emit the contracted contract line. The evaluator functions land in step 3,
+with the PTX.
+
+### One thing measured rather than assumed
+
+A reviewer proposed the gap "`tile` only over the contracted axis — that is not `2K/T+1`, so
+refuse it". It is unwritable: `tile` takes one dimension per **space** variable and the
+contracted axis is not one, so `tile 32, 32, 8` is refused for rank. Asserted with a test rather
+than left to construction, because "impossible by construction" is what stops being true when
+someone adds a dimension.
+
+### Pre-registered for step 5, corrected before measuring
+
+**The 1028 bytes per output is a claim about L2**, against `lts__t_bytes`. **DRAM will be lower,
+not equal** — a block's `A` panel is shared by every block in its row of `C` and the L2 serves
+it. Writing "17.25 GB of DRAM" would have been the tidy sentence and false in the direction
+ADR-0015 already measured.
+
+And the ratio against a naive schedule is **not a result**. Naive is `2K` elements per output;
+tiled is `2K/T`; the ratio is `T`, by construction, minus the `+1`. At 4096 that is 549.8 GB
+against 17.25 GB — 31.88x, which is 32 with the write of `C` in it. Reporting that as a measured
+speedup would be reporting the definition of a tile. The falsifiable claim is the 1028.
+
+(A reviewer put the naive figure at ~824 GB and the ratio at 48x. It is 549.8 GB and 31.88x, for
+the reason above — which is why the baseline had to be defined before it was quoted.)
 
 ## Build sequence
 

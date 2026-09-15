@@ -23,6 +23,12 @@ pub struct Kernel {
     /// The declared arithmetic intensity, checked against the one derived from the body.
     pub declared_intensity: Option<f64>,
     pub intensity_span: Option<Span>,
+    /// Written `intensity asymptotic 8.0` rather than `intensity 8.0`.
+    ///
+    /// A contracted kernel can only declare a limit: its exact intensity is a function of a
+    /// launch extent, and a source constant is not. The word is required there and refused
+    /// everywhere else, so that the weaker claim never travels under the stronger one.
+    pub intensity_is_asymptotic: bool,
     pub streams: Vec<StreamDecl>,
     /// `None` is rank 1: buffers are walked at the loop index and the body names no indices.
     pub space: Option<SpaceDecl>,
@@ -296,8 +302,9 @@ pub struct TileDecl {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Level {
+    #[default]
     Dram,
     L2,
     Smem,

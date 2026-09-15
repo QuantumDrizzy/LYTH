@@ -52,10 +52,18 @@ impl Regime {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct IntensityReport {
+    /// For a contracted kernel this is the **limit** the intensity approaches, and
+    /// `asymptotic` says so. See ADR-0018.
     pub derived: f64,
     pub declared: Option<f64>,
-    pub bytes: f64,
-    pub flops: f64,
+    /// `None` when the traffic is a function of a launch extent rather than a constant.
+    pub bytes: Option<f64>,
+    pub flops: Option<f64>,
+    /// `Some("0.25 * k + 4")` when the traffic is an expression.
+    pub bytes_expr: Option<String>,
+    pub flops_expr: Option<String>,
+    /// Whether `derived` is a limit rather than an exact figure.
+    pub asymptotic: bool,
     pub ridge: Option<f64>,
     pub regime: Option<Regime>,
     /// Fraction of the machine's peak FLOPS and peak bandwidth this kernel asks for, when a
@@ -84,7 +92,10 @@ pub fn check_intensity(
         derived,
         declared,
         bytes: ir.cost.bytes_per_element(),
-        flops: ir.cost.flops_per_element,
+        flops: ir.cost.flops_per_element(),
+        bytes_expr: ir.cost.bytes_expr(),
+        flops_expr: ir.cost.flops_expr(),
+        asymptotic: ir.cost.asymptotic,
         ridge: ridge_fpb,
         regime: ridge_fpb.map(|r| Regime::of(derived, r)),
         peak_flops_fraction: ridge.map(|r| {
@@ -113,15 +124,25 @@ pub fn check_intensity(
         return Ok(report);
     }
 
-    let mut msg = format!(
-        "declares {declared} flop/byte, body computes {derived:.4}\n  \
-         bytes moved: {bytes} per element ({read} read + {write} written)\n  \
-         flops:       {flops} per element",
-        bytes = ir.cost.bytes_per_element(),
-        read = ir.cost.read_bytes_per_element(),
-        write = ir.cost.write_bytes_per_element(),
-        flops = ir.cost.flops_per_element,
-    );
+    // A contracted kernel is told its traffic as the expression it is. Printing the constant
+    // part -- 4 bytes for a matmul -- beside a mismatch would be advice that is wrong by a
+    // factor of the contracted extent, in the one message the author is reading closely.
+    let mut msg = match (ir.cost.bytes_expr(), ir.cost.flops_expr()) {
+        (Some(b), Some(f)) => format!(
+            "declares {declared} flop/byte asymptotic, body approaches {derived:.4}\n  \
+             bytes moved: {b} per element\n  \
+             flops:       {f} per element",
+        ),
+        _ => format!(
+            "declares {declared} flop/byte, body computes {derived:.4}\n  \
+             bytes moved: {bytes} per element ({read} read + {write} written)\n  \
+             flops:       {flops} per element",
+            bytes = ir.cost.bytes_fixed(),
+            read = ir.cost.read_bytes_per_element(),
+            write = ir.cost.write_bytes_per_element(),
+            flops = ir.cost.flops_per_element().unwrap_or(0.0),
+        ),
+    };
     if let (Some(r), Some(regime)) = (ridge_fpb, report.regime) {
         msg.push_str(&format!(
             "\n  machine {machine} ridge is {r:.1} flop/byte, so {derived:.4} is {name}",

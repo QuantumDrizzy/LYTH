@@ -185,15 +185,80 @@ pub enum GridRule {
     Tiled { tile: Vec<u32>, extents: Vec<String> },
 }
 
+/// A cost that is affine in one launch extent, with the terms that produced it.
+///
+/// The expression is serialised **and** so are its coefficients: the string is for a reader,
+/// the numbers are for a generator, and neither is derived from the other at read time so they
+/// cannot drift. `terms` is what makes the expression checkable rather than merely stated --
+/// `a` contributes `4/32` per unit of `k` because a tile of 32 threads shares each element it
+/// stages, and a schedule that does not stage it contributes 4.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SymbolicCost {
+    /// The `u32` parameter the cost is a function of.
+    pub extent: String,
+    /// Human-readable, e.g. `0.25 * k + 4`.
+    pub bytes: String,
+    pub flops: String,
+    pub bytes_per_extent: f64,
+    pub bytes_fixed: f64,
+    pub flops_per_extent: f64,
+    pub flops_fixed: f64,
+    /// The limit as the extent grows: `flops_per_extent / bytes_per_extent`.
+    pub asymptotic_intensity: f64,
+    pub terms: Vec<SymbolicTerm>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SymbolicTerm {
+    pub buffer: String,
+    pub write: bool,
+    pub fixed: f64,
+    pub per_extent: f64,
+    /// Threads that share one loaded element. Earned by staging, not by tiling.
+    pub reuse: u32,
+}
+
+/// The one-line contract every generated binding carries at the top of the file.
+///
+/// One function, three languages. It used to be three `format!` calls with the same arguments,
+/// which is two places for the sentence to drift from the third -- and the contracted form is
+/// a different sentence, so the drift would have had somewhere to start.
+pub fn contract_line(c: &ContractSpec) -> String {
+    match &c.symbolic {
+        Some(sym) => format!(
+            "Contract: {:.4} flop/byte asymptotic on {}, {} flop and {} byte per element.",
+            c.derived_intensity, c.machine, sym.flops, sym.bytes
+        ),
+        None => format!(
+            "Contract: {:.4} flop/byte derived on {}, {} flop and {} byte per element.",
+            c.derived_intensity,
+            c.machine,
+            c.flops_per_element.unwrap_or(0.0),
+            c.bytes_per_element.unwrap_or(0.0)
+        ),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ContractSpec {
     pub machine: String,
     /// What the source declared, if it declared anything. `None` is not a failure: a kernel
     /// may stay silent about its intensity and still be compiled.
     pub declared_intensity: Option<f64>,
+    /// For a contracted kernel this is the **limit** the intensity approaches, and
+    /// `asymptotic` is true. It is the right roofline number either way; what changes is
+    /// whether it is reached or approached. See ADR-0018.
     pub derived_intensity: f64,
-    pub flops_per_element: f64,
-    pub bytes_per_element: f64,
+    #[serde(default)]
+    pub asymptotic: bool,
+    /// `None` when the cost is a function of a launch extent. A reader that wants a number
+    /// must then go through `symbolic` and supply the extent, which is the whole point: the
+    /// constant part of a matmul is 4 bytes per output and looks like any other figure here.
+    pub flops_per_element: Option<f64>,
+    pub bytes_per_element: Option<f64>,
+    /// Present exactly when the cost is an expression rather than a constant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbolic: Option<SymbolicCost>,
     pub read_bytes_per_element: f64,
     pub write_bytes_per_element: f64,
     /// A reduction writes one partial per block rather than per element, so this is reported
@@ -305,8 +370,30 @@ impl Manifest {
                 machine: ir.machine.clone(),
                 declared_intensity: declared,
                 derived_intensity: ir.cost.intensity,
-                flops_per_element: ir.cost.flops_per_element,
+                asymptotic: ir.cost.asymptotic,
+                flops_per_element: ir.cost.flops_per_element(),
                 bytes_per_element: ir.cost.bytes_per_element(),
+                symbolic: ir.cost.contracted.as_ref().map(|c| SymbolicCost {
+                    extent: c.extent.clone(),
+                    bytes: c.bytes_expr(ir.cost.bytes_fixed()),
+                    flops: c.flops_expr(ir.cost.flops_fixed_part()),
+                    bytes_per_extent: c.bytes_per_extent,
+                    bytes_fixed: ir.cost.bytes_fixed(),
+                    flops_per_extent: c.flops_per_extent,
+                    flops_fixed: ir.cost.flops_fixed_part(),
+                    asymptotic_intensity: ir.cost.intensity,
+                    terms: c
+                        .terms
+                        .iter()
+                        .map(|t| SymbolicTerm {
+                            buffer: t.buffer.clone(),
+                            write: t.write,
+                            fixed: t.fixed,
+                            per_extent: t.per_extent,
+                            reuse: t.reuse,
+                        })
+                        .collect(),
+                }),
                 read_bytes_per_element: ir.cost.read_bytes_per_element(),
                 write_bytes_per_element: ir.cost.write_bytes_per_element(),
                 dram_bytes_per_block: ir.cost.dram_bytes_per_block,
@@ -422,8 +509,8 @@ mod tests {
         );
         assert_eq!(m.contract.machine, "sm_120");
         assert_eq!(m.contract.declared_intensity, Some(0.1667));
-        assert_eq!(m.contract.flops_per_element, 2.0);
-        assert_eq!(m.contract.bytes_per_element, 12.0);
+        assert_eq!(m.contract.flops_per_element, Some(2.0));
+        assert_eq!(m.contract.bytes_per_element, Some(12.0));
         assert_eq!(m.contract.read_bytes_per_element, 8.0);
         assert_eq!(m.contract.write_bytes_per_element, 4.0);
     }
@@ -573,5 +660,125 @@ kernel k(n: u32, a: f32, x: [f32; n], y: [f32; n])
         assert_eq!(sum.launch.grid.blocks(&|_| 0, 256, 1 << 20), 1);
         // And the cap binds before the extent does.
         assert_eq!(sum.launch.grid.blocks(&|_| u32::MAX, 256, 64), 64);
+    }
+}
+
+#[cfg(test)]
+mod symbolic {
+    //! The contract that travels, when the contract is an expression (ADR-0018 step 2).
+
+    use super::*;
+    use lyth_lang::{ir::lower, parse::parse};
+
+    const MATMUL: &str = "machine sm_120
+
+kernel mm(m: u32, n: u32, k: u32,
+              a: [f32; m, k], b: [f32; k, n], c: [f32; m, n])
+    space i, j : m, n
+    contract sum p : k
+    tile 32, 32
+    intensity asymptotic 8.0
+    stream a : dram -> smem -> reg
+    stream b : dram -> smem -> reg
+    stream c : dram -> reg, drain
+    at reg:
+        c[i, j] = a[i, p] * b[p, j]
+";
+
+    fn manifest(src: &str) -> Manifest {
+        let unit = parse(src).unwrap();
+        let ir = lower(&unit, &unit.kernels[0]).unwrap();
+        Manifest::of(&ir, Some(8.0), 256, 1 << 20, vec![])
+    }
+
+    #[test]
+    fn the_constant_fields_are_absent_and_the_expression_is_there_instead() {
+        let m = manifest(MATMUL);
+        // A reader that wants a number has to supply the extent. That is the whole decision.
+        assert_eq!(m.contract.flops_per_element, None);
+        assert_eq!(m.contract.bytes_per_element, None);
+        assert!(m.contract.asymptotic);
+        let sym = m.contract.symbolic.as_ref().expect("a symbolic cost");
+        assert_eq!(sym.extent, "k");
+        assert_eq!(sym.bytes, "0.25 * k + 4");
+        assert_eq!(sym.flops, "2 * k");
+        assert_eq!(sym.bytes_per_extent, 0.25);
+        assert_eq!(sym.bytes_fixed, 4.0);
+        assert_eq!(sym.asymptotic_intensity, 8.0);
+    }
+
+    #[test]
+    fn the_expression_and_its_coefficients_agree_because_one_is_rendered_from_the_other() {
+        // Serialising a sentence and a set of numbers side by side is two chances to be
+        // right. They agree here because the sentence is rendered from the numbers at the
+        // moment the manifest is built, and never parsed back.
+        let m = manifest(MATMUL);
+        let sym = m.contract.symbolic.unwrap();
+        assert_eq!(
+            sym.bytes,
+            format!("{} * {} + {}", sym.bytes_per_extent, sym.extent, sym.bytes_fixed)
+        );
+        // 4 * (2 * 4096 / 32 + 1)
+        let at_4096 = sym.bytes_per_extent * 4096.0 + sym.bytes_fixed;
+        assert_eq!(at_4096, 1028.0);
+    }
+
+    #[test]
+    fn every_stream_says_what_it_contributed_and_why() {
+        // The provenance Grok asked for: an expression a reader cannot check is a constant
+        // with extra steps.
+        let m = manifest(MATMUL);
+        let sym = m.contract.symbolic.unwrap();
+        assert_eq!(sym.terms.len(), 3);
+        for t in &sym.terms {
+            match t.buffer.as_str() {
+                "a" | "b" => {
+                    assert_eq!(t.reuse, 32);
+                    assert_eq!(t.per_extent, 0.125);
+                    assert_eq!(t.fixed, 0.0);
+                    assert!(!t.write);
+                }
+                "c" => {
+                    assert!(t.write);
+                    assert_eq!(t.fixed, 4.0);
+                    assert_eq!(t.per_extent, 0.0, "c is not walked by the contraction");
+                }
+                other => panic!("unexpected stream {other}"),
+            }
+        }
+    }
+
+    #[test]
+    fn the_manifest_round_trips_and_a_constant_kernel_grows_no_symbolic_block() {
+        let m = manifest(MATMUL);
+        let json = serde_json::to_string_pretty(&m).unwrap();
+        assert!(json.contains("0.25 * k + 4"), "{json}");
+        let back: Manifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(m, back);
+
+        let saxpy = "machine sm_120
+
+kernel saxpy(n: u32, a: f32, x: [f32; n], y: [f32; n])
+    stream x : dram -> reg
+    stream y : dram -> reg, drain
+    at reg:
+        y = a * x + y
+";
+        let unit = parse(saxpy).unwrap();
+        let ir = lower(&unit, &unit.kernels[0]).unwrap();
+        let m = Manifest::of(&ir, None, 256, 1 << 20, vec![]);
+        assert!(m.contract.symbolic.is_none());
+        assert!(!m.contract.asymptotic);
+        // And the key is not merely null: a constant contract carries no symbolic block at all.
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(!json.contains("symbolic"), "{json}");
+    }
+
+    #[test]
+    fn the_one_line_contract_says_asymptotic_when_it_is() {
+        let m = manifest(MATMUL);
+        let line = contract_line(&m.contract);
+        assert!(line.contains("8.0000 flop/byte asymptotic"), "{line}");
+        assert!(line.contains("2 * k flop and 0.25 * k + 4 byte"), "{line}");
     }
 }

@@ -1,11 +1,8 @@
 //! ADR-0018 step 1: `contract` parses and resolves, and every way of writing one that the
 //! derivation does not cover is refused at the declaration rather than at the numbers.
 //!
-//! What is deliberately *not* here is a cost. `lower` ends in `ContractCostNotDerived` for
-//! every kernel in this file, and one test pins that. A contraction moves `2K/T + 1` elements
-//! per output, which is an expression in a launch extent rather than a constant, and a
-//! compiler whose entire claim is that the number it publishes is the number the silicon moves
-//! must not publish the constant part of it in the meantime.
+//! The cost these kernels derive is `symbolic_cost.rs`. This file is the grammar and the
+//! resolution: what `contract` accepts, and what it will not.
 
 use lyth_lang::ast::ReduceOp;
 use lyth_lang::ir::{lower, KernelIr, LowerError};
@@ -53,13 +50,18 @@ fn a_matmul_parses() {
 }
 
 #[test]
-fn it_resolves_before_it_refuses_to_cost_itself() {
-    // The refusal must be the *last* thing lowering does, or none of the checks below are
-    // reachable and this file would be testing one error message fifteen times.
-    let e = err(&matmul(CONTRACT, BODY));
-    assert!(e.contains("cost is not derived yet"), "{e}");
-    assert!(e.contains("2K/T + 1"), "{e}");
-    assert!(e.contains("ADR-0018"), "{e}");
+fn it_resolves_and_costs_itself() {
+    // Step 1 ended here in a refusal to derive a cost, because `Cost` carried constants. Step
+    // 2 lifted that by deriving the expression -- so this asserts the lift, and every refusal
+    // below stays reachable rather than being shadowed by a blanket one.
+    let k = lower_src(&matmul(CONTRACT, BODY)).expect("a contraction costs itself now");
+    let c = k.contract.expect("a resolved contraction");
+    assert_eq!(c.var, "p");
+    assert_eq!(c.extent, "k");
+    // Both operands, in declaration order, each at the position `p` occupies in its index.
+    assert_eq!(c.over, vec![("a".to_string(), 1), ("b".to_string(), 0)]);
+    // Untiled and unstaged, so no reuse: 2k elements per output.
+    assert_eq!(k.cost.bytes_expr().as_deref(), Some("8 * k + 4"));
 }
 
 #[test]
@@ -74,8 +76,12 @@ fn all_three_operators_are_accepted() {
             u.kernels[0].contract.as_ref().unwrap().op,
             ReduceOp::parse(op).unwrap()
         );
-        // And it reaches the cost, which is where every contraction currently ends.
-        assert!(err(&src).contains("cost is not derived yet"));
+        // And the combinator reaches the cost: `sum` retires a flop per step, `max` and `min`
+        // do not (ADR-0013), and the traffic is the same for all three.
+        let k = lower_src(&src).expect("lowers");
+        let want = if op == "sum" { "2 * k" } else { "1 * k" };
+        assert_eq!(k.cost.flops_expr().as_deref(), Some(want), "{op}");
+        assert_eq!(k.cost.bytes_expr().as_deref(), Some("8 * k + 4"), "{op}");
     }
 }
 

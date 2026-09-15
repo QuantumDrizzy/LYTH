@@ -176,6 +176,7 @@ impl Parser {
 
         let mut declared_intensity = None;
         let mut intensity_span = None;
+        let mut intensity_is_asymptotic = false;
         let mut streams = Vec::new();
         let mut space = None;
         let mut tile = None;
@@ -194,6 +195,7 @@ impl Parser {
                 if declared_intensity.is_some() {
                     return self.msg("`intensity` declared twice");
                 }
+                intensity_is_asymptotic = self.eat_word("asymptotic");
                 let (v, _) = self.number()?;
                 // `flop/byte` may be written out; the unit is fixed, so it is decoration.
                 if self.at_word("flop") {
@@ -236,6 +238,7 @@ impl Parser {
             params,
             declared_intensity,
             intensity_span,
+            intensity_is_asymptotic,
             streams,
             space,
             tile,
