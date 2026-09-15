@@ -173,10 +173,15 @@ mod tests {
         lower(&u, &u.kernels[0]).unwrap()
     }
 
-    // Measured on this machine, 2026-09-14: 15.37 TFLOP/s achieved SGEMM, 358.43 GB/s.
+    // Re-measured 2026-09-15: 15.30 TFLOP/s achieved SGEMM over 414.51 GB/s, a ridge of 36.9.
+    //
+    // The bandwidth was 358.43 here until the probe that produced it was found to be timing a
+    // host round trip as memory traffic -- `float(x.sum())` inside the timed loop, worth 10.4%
+    // of the figure. Every `% of peak` in the project inherited it, which is how `saxpy` came
+    // to report 112% of a peak it cannot exceed. See ADR-0004.
     const SM_120: Ridge = Ridge {
-        peak_tflops: 15.37,
-        bandwidth_gbs: 358.43,
+        peak_tflops: 15.30,
+        bandwidth_gbs: 414.51,
     };
 
     #[test]
@@ -206,8 +211,11 @@ mod tests {
 
     #[test]
     fn the_ridge_comes_out_of_the_machine_not_a_constant() {
+        // 15.30e3 / 414.51. It was 42.88 until the bandwidth was re-measured; a ridge is a
+        // quotient of two measurements and moves when either of them is corrected, which is
+        // exactly why it is not a constant.
         assert!(
-            (SM_120.flops_per_byte() - 42.88).abs() < 0.1,
+            (SM_120.flops_per_byte() - 36.91).abs() < 0.1,
             "{}",
             SM_120.flops_per_byte()
         );

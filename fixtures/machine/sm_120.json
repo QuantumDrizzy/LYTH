@@ -1,13 +1,13 @@
 {
   "schema": "lyth-machine/0.1",
   "id": "sm_120",
-  "peak_tflops": 15.37,
-  "peak_tflops_fp16": 44.25,
+  "peak_tflops": 15.30,
+  "peak_tflops_fp16": 46.07,
   "levels": [
     {
       "name": "dram",
       "capacity": "16GiB GDDR7",
-      "bandwidth_gbs": 358.43,
+      "bandwidth_gbs": 414.51,
       "latency_cyc": null
     },
     {

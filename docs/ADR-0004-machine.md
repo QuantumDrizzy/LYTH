@@ -30,6 +30,47 @@ are ignored until a measurement names them.
 
 ## Which figures the ridge is made of, and why (2026-09-14)
 
+> ## [CORRECTION, 2026-09-15] The denominator was measuring the wrong thing
+>
+> Everything below about *where* the ridge comes from still stands. The number does not.
+>
+> `tools/peak_probe.py` measured bandwidth as `float(x.sum())` inside a `perf_counter` loop.
+> `float(...)` on a device tensor blocks until the value reaches the host, so **a round trip to
+> the CPU was being timed as memory traffic**. Measured both ways on this machine: **368.02 GB/s
+> with the conversion, 410.66 GB/s without** — the synchronisation was **10.4% of the figure**.
+>
+> Re-measured with CUDA events and nothing host-touching inside the timed region:
+>
+> | | was | is |
+> |---|---|---|
+> | `bandwidth_gbs` | 358.43 | **414.51** |
+> | `peak_tflops` | 15.37 | 15.30 |
+> | ridge | 42.9 | **36.9** |
+>
+> Every `% of peak` in this project was a ratio against that denominator, so every one of them
+> was ~10% too high. That is why `saxpy` reported **112%** and `sum` **115%** of a bandwidth
+> neither can exceed. They now read 96.1% and 100.4%.
+>
+> Two further things the correction forced, both of which were latent:
+>
+> **One pattern is not "peak".** The old figure was read-only and was compared against kernels
+> that read *and* write, which are different quantities on this hardware. The probe now measures
+> three — `read` 414.51, `copy` 377.63, `triad` 387.22 — and records all of them. `bandwidth_gbs`
+> takes the fastest, and the fact that a writing kernel cannot reach it is a property of the
+> machine, now written down instead of inferred from a percentage.
+>
+> **The baseline is a reference kernel, not a bound.** `sum` comes out at 100.4% because it is
+> 0.4% faster than `torch.sum`, which is allowed. The `ABOVE` guard used to fire its four-item
+> diagnostic at anything over 100%; it now says what a small excess means in one line and keeps
+> the diagnostic for 110% and up. The threshold moved because the guard's *premise* changed —
+> it was written when 112% meant the probe was broken, and the probe is no longer broken.
+>
+> **The ADRs below and elsewhere are not rewritten.** Transcripts quoting `ridge 42.9` recorded
+> what the tool printed on the day, and editing them would falsify the record rather than
+> correct it. Where a prose claim depends on the ridge materially, it carries a pointer here.
+> ADR-0018's claim 3 is the one that matters: reaching the ridge needs `T ≈ 148` rather than
+> `T ≈ 172`, against a cap of 32 — the conclusion is unchanged and the number is not.
+
 Asked of `sm_120.json`: the FP32 ridge reads **42.9 flop/byte**, but this card's datasheet gives
 23.7 TFLOP/s over 448 GB/s, a ridge of **52.9**. Where does 42.9 come from?
 

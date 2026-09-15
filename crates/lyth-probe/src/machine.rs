@@ -25,7 +25,7 @@ pub struct Machine {
     /// bandwidth answers "is this kernel memory-bound on this machine", and a datasheet pair
     /// answers a procurement question. One of each answers nothing.
     ///
-    /// For sm_120 the achieved pair is 15.37 TFLOP/s over 358.43 GB/s, a ridge of 42.9; the
+    /// For sm_120 the achieved pair is 15.30 TFLOP/s over 414.51 GB/s, a ridge of 36.9; the
     /// datasheet pair is 23.7 over 448, a ridge of 52.9. Substituting 23.7 here makes
     /// `machine-check` fail against the measurement, which is the point — see ADR-0004.
     #[serde(default)]

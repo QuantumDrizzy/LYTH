@@ -1,20 +1,26 @@
 {
-  "schema": "lyth-machine-measurement/0.1",
+  "schema": "lyth-machine-measurement/0.2",
   "machine_id": "sm_120",
-  "source": "lyth/tools/peak_probe.py torch 2.12.0.dev20260408+cu128",
-  "levels": [
-    {
-      "name": "dram",
-      "bandwidth_gbs": 354.3790106153365
-    }
-  ],
-  "peak_tflops_fp32": 14.882119534870178,
-  "peak_tflops_fp16": 44.24505051210574,
-  "peak_tflops": 14.882119534870178,
-  "arch": "sm_120",
   "device": "NVIDIA GeForce RTX 5060 Ti",
+  "sm_count": 36,
+  "measured_utc": "2026-09-15T16:47:53.502880+00:00",
+  "host": "DESKTOP-Q7QO6HG",
+  "source": "lyth/tools/peak_probe.py torch 2.12.0.dev20260408+cu128",
+  "buffer_bytes": 1073741824,
+  "reps": 20,
+  "bandwidth_gbs_by_pattern": {
+    "read": 414.51,
+    "copy": 377.63,
+    "triad": 387.22
+  },
+  "bandwidth_gbs": 414.51,
+  "bandwidth_pattern": "read",
+  "peak_tflops": 15.3,
+  "peak_tflops_fp16": 46.07,
+  "ridge_flops_per_byte": 36.9,
   "notes": [
-    "peak_tflops is achieved cuBLAS GEMM, not marketing datasheet.",
-    "Use peak_tflops_fp32 for ridge unless the kernel is tensor-core dominant."
+    "peak_tflops is achieved cuBLAS GEMM, not a datasheet figure.",
+    "Timed with CUDA events, and nothing in the timed region touches the host: the previous probe converted the result to a Python float each iteration and measured that round trip as memory traffic, which cost 10.4% of the figure and made every derived percentage 10% too high.",
+    "bandwidth_gbs is the fastest pattern. A kernel that writes cannot reach it, which is a property of the device."
   ]
 }

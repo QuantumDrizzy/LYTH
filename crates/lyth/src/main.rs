@@ -735,8 +735,19 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
     // reduction grid was fixed here and the manifest went on emitting the elementwise rule,
     // which a caller in another repository then launched at half the achievable bandwidth.
     let rule = crate::manifest::GridRule::of(ir, crate::manifest::extent_params(ir));
+    // The fallback is the element count, not 1.
+    //
+    // At rank 2 every extent arrives through `--set` and this map has it. At rank 1 the single
+    // extent is `-n`, which is a different flag and is not in `scalars` -- so a fallback of 1
+    // made `blocks()` see a product of 1 and launch **one block**. Every rank-1 timing between
+    // that refactor and this line ran at grid 1 with 262,144 elements per thread: saxpy
+    // reported 9.2 GB/s where it reaches 400.
+    //
+    // Same shape as the defect the dogfood found this morning, one layer up. The rule was
+    // moved into one place correctly; the caller then fed it something the old code never fed
+    // it, and no test looked at what `lyth run` actually launched.
     let want = rule.blocks(
-        &|e| scalars.get(e).map(|v| *v as u32).unwrap_or(1),
+        &|e| scalars.get(e).map(|v| *v as u32).unwrap_or(n),
         block,
         MAX_GRID,
     );
@@ -1132,14 +1143,33 @@ fn report_timing(
         Some((id, peak)) => {
             let pct = gbs / peak * 100.0;
             println!(
-                " vs {pct:.1}% of {peak:.2} GB/s, the measured DRAM bandwidth in the {id} machine file"
+                " vs {pct:.1}% of {peak:.2} GB/s, the fastest streaming rate measured on this device ({id})"
             );
+            // **The baseline is a reference kernel, not a hardware bound**, and the wording
+            // above says so now. `tools/peak_probe.py` times the best torch streaming kernel
+            // it can, which is a number a tight specialised kernel can beat by a little. The
+            // device's theoretical ceiling is a different and higher figure.
+            //
+            // That distinction is why this guard has two levels. It used to fire its whole
+            // four-item list at anything over 100%, which was right when the baseline was
+            // 10% too low and 112% meant the probe was broken. With the probe fixed, `sum`
+            // comes out at 100.4% because it is 0.4% faster than `torch.sum`, and printing
+            // four diagnostic lines at that is how a warning gets trained out of a reader.
+            //
+            // Nothing is hidden: a small excess still prints a line saying what it is.
+            const REFERENCE_HEADROOM: f64 = 110.0;
+            if pct > 100.0 && pct <= REFERENCE_HEADROOM {
+                println!("  ABOVE    over the reference by {:.1}%. The baseline is the fastest", pct - 100.0);
+                println!("           streaming kernel the probe could time, not a bound, so a");
+                println!("           few percent means this kernel beat it. Past {REFERENCE_HEADROOM:.0}% it does");
+                println!("           not mean that, and this line says so instead.");
+            }
             // A tool that prints "above peak" and says nothing is the tool that produced
-            // exercise 01's 385.71 GB/s. Above the baseline means one of three things and the
-            // reader is told which to check, in the order they are worth checking.
-            if pct > 100.0 {
+            // exercise 01's 385.71 GB/s. Well above the baseline means one of four things and
+            // the reader is told which to check, in the order they are worth checking.
+            if pct > REFERENCE_HEADROOM {
                 let working_set = ir.cost.bytes_fixed() * n as f64;
-                println!("  ABOVE    this is over the baseline, which is a claim about the");
+                println!("  ABOVE    this is well over the baseline, which is a claim about the");
                 println!("           baseline, not a result. Four things to check, in order:");
                 println!("           1. the working set is {:.0} MB. If that fits in L2 the bytes", working_set / 1e6);
                 println!("              never crossed the memory controller and this is an L2");
@@ -1148,9 +1178,9 @@ fn report_timing(
                 println!(
                     " `lyth build --evidence` and `lyth-probe --ncu` (ADR-0009)."
                 );
-                println!("           3. the baseline may not describe this access pattern. The");
-                println!("              {id} figure came from a torch.sum reduction, and the");
-                println!("              machine file says a streaming probe would be better.");
+                println!("           3. the baseline may be measuring something else. It once");
+                println!("              timed a host round trip as memory traffic and read 10%");
+                println!("              low, which is how a kernel came to report 112%.");
                 println!("           4. only then, that the kernel is genuinely faster.");
                 // Past three times the baseline nothing else is a plausible explanation: a
                 // kernel is not three times its own memory system. Say so rather than leaving

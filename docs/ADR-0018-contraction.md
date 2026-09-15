@@ -130,6 +130,12 @@ its sector model by read-for-ownership, and a matmul writes `C` once and coalesc
 mechanism should not appear. **If measured exceeds derived by more than 2%, the excess is the
 result and gets its own investigation**, not a widened tolerance.
 
+> **[RIDGE CORRECTED, see ADR-0004]** The ridge below reads 42.9 because that is what the
+> machine file said when this was written. The bandwidth it was derived from was 10% too low —
+> the probe timed a host round trip as memory traffic — and the ridge is now **36.9**. Claim 3
+> is unaffected in substance: reaching it needs `T ≈ 148` rather than 172, against a thread cap
+> that holds `T ≤ 32`. The margin narrowed and the conclusion did not.
+
 **Claim 3 — the language can say why it cannot reach the ridge, and the reason is the block.**
 A tile of `T` is `T²` threads under one-thread-per-element, and this device reports
 `MAX_THREADS_PER_BLOCK = 1024`, so `T ≤ 32` and the intensity ceiling is `8 flop/byte` against a
