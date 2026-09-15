@@ -13,6 +13,8 @@ use lyth_lang::ast::Ty;
 use lyth_lang::ir::{KernelIr, Op, RegId};
 use lyth_lang::BinOp;
 
+mod tiled;
+
 /// The PTX ISA version each target first became legal in.
 ///
 /// This is not a constant, because it is a property of the machine. `.version 8.5` with
@@ -75,6 +77,17 @@ pub struct Module {
 /// rather than from a flag: ADR-0001 makes the machine a value, and `-arch` is exactly the
 /// kind of flag that rots.
 pub fn emit(ir: &KernelIr, arch: &str) -> Result<Module, EmitError> {
+    emit_with_skew(ir, arch, true)
+}
+
+/// As [`emit`], with the shared-memory skew switchable off.
+///
+/// The only reason this exists is ADR-0017's counterfactual: `bank_conflicts = 0` on a tiled
+/// kernel does not show that the skew caused anything, because that number is also zero if the
+/// kernel never staged or if the emitter ignored the padding. The unpadded variant is a kernel
+/// that must conflict. It is correct and slow, and it is not reachable from the language --
+/// only from the fixture that falsifies the claim.
+pub fn emit_with_skew(ir: &KernelIr, arch: &str, skewed: bool) -> Result<Module, EmitError> {
     // The index space is bounded by the extent the streamed buffers declare, which the front
     // end has already checked they agree on. Taking "the first u32 parameter" instead was
     // right only while a kernel could have exactly one; with shapes a kernel may take a count
@@ -102,12 +115,7 @@ pub fn emit(ir: &KernelIr, arch: &str) -> Result<Module, EmitError> {
     // working code whose cost is nothing like the one the front end derived for it: the model
     // would say 8 bytes per element and the silicon would move 36. A back end that silently
     // drops a declaration is worse than one that cannot honour it yet.
-    if ir.tile.is_some() {
-        return Err(EmitError::Message(format!(
-            "kernel `{}` declares a tile, which this back end does not emit yet (ADR-0017, step 3). It is refused rather than compiled without staging, because the cost the front end derived would not describe the kernel that came out.",
-            ir.name
-        )));
-    }
+
 
     // PTX declares its virtual register banks up front, so the body is emitted first and the
     // header is written once the counts are known.
@@ -118,7 +126,10 @@ pub fn emit(ir: &KernelIr, arch: &str) -> Result<Module, EmitError> {
         n_b64: 0,
     };
     let mut body = String::new();
-    e.body(ir, &bound, &mut body)?;
+    match ir.tile {
+        Some(_) => e.tiled_body(ir, skewed, &mut body)?,
+        None => e.body(ir, &bound, &mut body)?,
+    }
 
     let mut ptx = String::new();
     let _ = writeln!(ptx, "//");
@@ -144,7 +155,7 @@ pub fn emit(ir: &KernelIr, arch: &str) -> Result<Module, EmitError> {
     let _ = writeln!(ptx, ".target {arch}");
     let _ = writeln!(ptx, ".address_size 64");
     let _ = writeln!(ptx);
-    if ir.reduction.is_some() {
+    if ir.reduction.is_some() || ir.shared.is_some() {
         // Dynamic, sized at launch, so the block size is not baked into the module.
         let _ = writeln!(ptx, ".extern .shared .align 4 .b8 lyth_smem[];");
         let _ = writeln!(ptx);
@@ -190,34 +201,34 @@ pub fn emit(ir: &KernelIr, arch: &str) -> Result<Module, EmitError> {
     })
 }
 
-struct Emitter {
+pub(crate) struct Emitter {
     n_pred: u32,
     n_f32: u32,
     n_b32: u32,
     n_b64: u32,
 }
 
-fn line(o: &mut String, s: &str) {
+pub(crate) fn line(o: &mut String, s: &str) {
     let _ = writeln!(o, "    {s}");
 }
 
 impl Emitter {
-    fn pred(&mut self) -> String {
+    pub(crate) fn pred(&mut self) -> String {
         self.n_pred += 1;
         format!("%p{}", self.n_pred)
     }
 
-    fn f32(&mut self) -> String {
+    pub(crate) fn f32(&mut self) -> String {
         self.n_f32 += 1;
         format!("%f{}", self.n_f32)
     }
 
-    fn b32(&mut self) -> String {
+    pub(crate) fn b32(&mut self) -> String {
         self.n_b32 += 1;
         format!("%r{}", self.n_b32)
     }
 
-    fn b64(&mut self) -> String {
+    pub(crate) fn b64(&mut self) -> String {
         self.n_b64 += 1;
         format!("%rd{}", self.n_b64)
     }
@@ -464,12 +475,7 @@ impl Emitter {
                     let r = self.f32();
                     // `.rn` is round-to-nearest-even, the IEEE default. Spelling it out means
                     // a later reader can see that no fast-math rounding was chosen quietly.
-                    let mnemonic = match op {
-                        BinOp::Add => "add.rn.f32",
-                        BinOp::Sub => "sub.rn.f32",
-                        BinOp::Mul => "mul.rn.f32",
-                        BinOp::Div => "div.rn.f32",
-                    };
+                    let mnemonic = bin_mnemonic(*op);
                     line(
                         out,
                         &format!(
@@ -638,7 +644,19 @@ impl Emitter {
 /// PTX writes float immediates as a hex bit pattern, which is exact. A decimal literal would
 /// be re-parsed by `ptxas` and could land on a different value than the one the front end
 /// folded.
-fn hex_f32(v: f32) -> String {
+/// `.rn` is round-to-nearest-even, the IEEE default. Spelling it out means a later reader can
+/// see that no fast-math rounding was chosen quietly. One table, so the tiled body cannot grow
+/// a second opinion about how `a * b + c` lowers.
+pub(crate) fn bin_mnemonic(op: BinOp) -> &'static str {
+    match op {
+        BinOp::Add => "add.rn.f32",
+        BinOp::Sub => "sub.rn.f32",
+        BinOp::Mul => "mul.rn.f32",
+        BinOp::Div => "div.rn.f32",
+    }
+}
+
+pub(crate) fn hex_f32(v: f32) -> String {
     format!("0f{:08X}", v.to_bits())
 }
 

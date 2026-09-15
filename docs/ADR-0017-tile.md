@@ -126,7 +126,7 @@ would show as a size-dependent excess and is testable by picking extents that di
 |---|---|---|
 | 1 | `tile` syntax, the staged stream path, and both in the IR | every existing example is unchanged; a tiled source parses and refuses what it must |
 | 2 | derived shared layout and padding, in `Cost` and the manifest | `shared_bytes` is 32 x 33 x 4 and the three bindings pass it |
-| 3 | the four-phase PTX | the transpose is bit-exact **and** clean under `racecheck`, and wrong when launched with no shared memory |
+| 3 | the four-phase PTX | **done**, below |
 | 4 | the bus model over a staged stream | derived bus cost falls to 8 bytes per element |
 | 5 | `--ncu` | the table above, either way |
 
@@ -196,6 +196,62 @@ bit-exactness also failed, on 137 of 65536 elements, which is exactly the coin-f
 described. The barrier was restored and the tree is clean again.
 
 An instrument that has only ever said "clean" has not been verified.
+
+## Step 3 as it came out
+
+```
+kernel transpose_tiled(rows: u32, cols: u32, a: [f32; rows, cols], b: [f32; cols, rows])
+    space i, j : rows, cols
+    tile 32, 32
+    stream a : dram -> smem -> reg
+    stream b : dram -> reg, drain
+    at reg:
+        b[j, i] = a[i, j]
+```
+
+Byte for byte the body of `examples/transpose.lyth`. Two declared lines and a stream path are
+the whole difference.
+
+| oracle | result |
+|---|---|
+| bit-exact, 1024², 4095², 4097², 33x17, 31x129, 1024x33, 1x1 | all exact |
+| `compute-sanitizer --tool racecheck` | 0 hazards |
+| `compute-sanitizer --tool memcheck`, ragged 4095 x 257 | 0 errors |
+| `bar.sync` in the emitted PTX | 2 |
+| skewed stride in the emitted PTX | twice, transposed: `ty*33+tx` and `tx*33+ty` |
+| predicated branches in the body | 1, the loop exit on the tile index |
+| launched with `--shared-bytes 0` | `ILLEGAL_ADDRESS` |
+
+The non-divisible extents were the first shapes run, not a regression pass afterwards. A guard
+that is wrong in the generous direction gives correct results on every multiple of 32, and 1024²
+would have said nothing.
+
+The bypass control came back stronger than predicted. The ADR expected "a different answer",
+with a [KNOWN LIMIT] that reading past a zero-length `.extern .shared` array is undefined and so
+a match would prove nothing. On this device it faults outright, which is a harder signal than the
+one that was pre-registered — recorded as what happened rather than upgraded into a guarantee,
+because the undefined behaviour is still undefined.
+
+### What the emitter had to get right, and how it is held
+
+Every trap listed in advance turned out to be a real constraint on the shape of the code, and
+three of them are now structural assertions that need no GPU.
+
+**Two barriers.** The loop is grid-stride over tiles, so tile `T + gridDim`'s load races tile
+`T`'s read. The PTX contains exactly two `bar.sync`, asserted.
+
+**No branch around a barrier.** A thread that skipped one while its block reached it would
+deadlock the block or abort the launch, so the loop bound is the **tile** index — uniform across
+the block — and the boundary guards predicate the global accesses instead of branching. The test
+asserts exactly one predicated branch in the body and that every global access is guarded.
+
+**The skew in both phases.** A store on the padded stride and a load on the unpadded one
+compiles, runs and produces correct bits while conflicting on every read. The test finds both
+`mad` instructions carrying the derived 33 and asserts their operands are transposes of each
+other.
+
+**No second fma rule.** The mnemonic table moved into one function the flat and tiled bodies
+share, rather than being copied.
 
 ## Two claims that needed a counterfactual, and one that needed normalising
 

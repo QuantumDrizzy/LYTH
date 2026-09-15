@@ -85,6 +85,9 @@ fn every_working_example_compiles_with_the_cost_it_documents() {
         ("not-a-number.lyth", 2.0, 4.0, 1, 1),
         // Rank 2: one load and one store, each at its own strided address.
         ("transpose.lyth", 0.0, 8.0, 1, 1),
+        // Same payload as the untiled one. That is the point: the body did not change.
+        ("transpose-tiled.lyth", 0.0, 8.0, 1, 1),
+        ("copy2d.lyth", 0.0, 8.0, 1, 1),
     ];
     for (name, flops, bytes, loads, stores) in cases {
         let src = example(name);
@@ -423,13 +426,14 @@ mod tile {
     }
 
     #[test]
-    fn the_back_end_refuses_a_tile_it_cannot_emit_rather_than_dropping_it() {
-        // The dangerous alternative is working code whose cost is nothing like the derived
-        // one: the model would say 8 bytes per element and the silicon would move 36.
+    fn the_back_end_emits_the_tile_it_used_to_refuse() {
+        // Step 1 refused a tile rather than compiling the flat body for it, because the cost
+        // the front end derived would not have described the kernel that came out. Step 3
+        // makes it describable.
         let ir = lower(TILED).unwrap();
-        let e = lyth_ptx::emit(&ir, "sm_120").expect_err("a tile is not emitted yet");
-        assert!(e.to_string().contains("does not emit yet"), "{e}");
-        assert!(e.to_string().contains("refused rather than"), "{e}");
+        let m = lyth_ptx::emit(&ir, "sm_120").expect("a tile is emitted now");
+        assert!(m.ptx.contains("st.shared.f32"), "it stages: {}", m.ptx);
+        assert!(m.ptx.contains("ld.shared.f32"), "and reads back: {}", m.ptx);
     }
 
     #[test]
@@ -466,5 +470,104 @@ mod tile {
         let src = "machine sm_120\n\nkernel t(n: u32, x: [f32; n], y: [f32; n])\n    stream x : dram\n    stream y : dram -> reg, drain\n    at reg:\n        y = x\n";
         let e = lower(src).expect_err("a path needs two levels");
         assert!(e.contains("moves between levels"), "{e}");
+    }
+}
+
+/// The four-phase tiled body, asserted on the emitted text (ADR-0017, step 3).
+///
+/// These need no GPU and they are the deterministic half of the schedule oracle: the PTX
+/// cannot lie about what it contains. The launch-with-zero check catches the other case, where
+/// what it contains goes unused.
+mod tiled_ptx {
+    use super::*;
+
+    fn ptx(name: &str) -> String {
+        compile(name).expect("the tiled transpose should compile").ptx
+    }
+
+    #[test]
+    fn there_are_two_barriers_and_not_one() {
+        // The loop is grid-stride over tiles, so the next tile's load races the previous
+        // tile's read without a barrier after the read as well as after the write. One
+        // barrier corrupts the output only sometimes, which is worse than always.
+        let m = ptx("transpose-tiled.lyth");
+        assert_eq!(m.matches("bar.sync 0;").count(), 2, "{m}");
+        assert_eq!(m.matches(".extern .shared").count(), 1, "{m}");
+    }
+
+    #[test]
+    fn the_skew_is_applied_to_both_phases() {
+        // A store that uses the padded stride and a load that does not compiles, runs, and
+        // produces correct bits while conflicting on every read. Only this and the
+        // counterfactual fixture separate that from a correct emitter.
+        let m = ptx("transpose-tiled.lyth");
+        let skewed: Vec<&str> = m
+            .lines()
+            .filter(|l| l.contains("mad.lo.u32") && l.contains(", 33, "))
+            .collect();
+        assert_eq!(skewed.len(), 2, "one per phase, got: {skewed:?}
+{m}");
+        // And the two are transposes of each other: ty*33+tx against tx*33+ty.
+        // `mad.lo.u32 %rD, %rA, 33, %rB;` -> (%rA, %rB). parts[0] ends in the destination.
+        let operands = |l: &str| -> (String, String) {
+            let parts: Vec<&str> = l.trim().split(", ").collect();
+            (
+                parts[1].to_string(),
+                parts[3].trim_end_matches(';').to_string(),
+            )
+        };
+        let (a0, a1) = operands(skewed[0]);
+        let (b0, b1) = operands(skewed[1]);
+        assert_eq!((a0, a1), (b1, b0), "the phases must swap the indices");
+    }
+
+    #[test]
+    fn no_thread_can_branch_around_a_barrier() {
+        // A thread that skipped a bar.sync while its block reached one deadlocks the block or
+        // aborts the launch. So the only branch in the body is the loop exit, and its
+        // predicate is on the tile index, which every thread of the block shares.
+        let m = ptx("transpose-tiled.lyth");
+        let branches: Vec<&str> = m.lines().filter(|l| l.contains(" bra ")).collect();
+        let predicated: Vec<&&str> = branches.iter().filter(|l| l.contains("@%p")).collect();
+        assert_eq!(
+            predicated.len(),
+            1,
+            "exactly one predicated branch, the uniform loop exit: {branches:?}"
+        );
+        assert!(predicated[0].contains("$L_tile_end"), "{:?}", predicated[0]);
+        // The boundary guards predicate instructions instead.
+        assert!(m.contains("@%p") && m.contains("ld.global.f32"), "{m}");
+        for l in m.lines().filter(|l| l.contains("global.f32")) {
+            assert!(
+                l.trim().starts_with("@%p") || l.contains("mov"),
+                "a global access outside a guard: {l}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_unpadded_variant_differs_and_exists_only_for_the_counterfactual() {
+        // `bank_conflicts = 0` on the padded kernel shows the conflicts are absent, not that
+        // the skew removed them. The fixture that must conflict is built here.
+        let src = example("transpose-tiled.lyth");
+        let unit = parse(&src).unwrap();
+        let ir = ir::lower(&unit, &unit.kernels[0]).unwrap();
+        let padded = lyth_ptx::emit_with_skew(&ir, "sm_120", true).unwrap();
+        let flat = lyth_ptx::emit_with_skew(&ir, "sm_120", false).unwrap();
+        assert!(padded.ptx.contains(", 33, "), "the derived stride");
+        assert!(flat.ptx.contains(", 32, "), "the unpadded one");
+        assert!(!flat.ptx.contains(", 33, "), "no skew anywhere in the counterfactual");
+        assert_ne!(padded.ptx, flat.ptx);
+    }
+
+    #[test]
+    fn a_tile_that_stages_nothing_is_refused() {
+        // It would change no traffic and derive no shared memory, so it is a declaration that
+        // means nothing -- refused rather than compiled into the flat body.
+        let src = example("transpose-tiled.lyth").replace("dram -> smem -> reg", "dram -> reg");
+        let unit = parse(&src).unwrap();
+        let ir = ir::lower(&unit, &unit.kernels[0]).unwrap();
+        let e = lyth_ptx::emit(&ir, "sm_120").expect_err("a tile with nothing staged");
+        assert!(e.to_string().contains("stages nothing"), "{e}");
     }
 }

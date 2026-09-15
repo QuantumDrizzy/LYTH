@@ -1,0 +1,21 @@
+machine sm_120
+
+# The same transpose as transpose.lyth, with two declared lines added.
+#
+# The body is identical. The algorithm is identical. The payload is identical: 4 bytes read and
+# 4 written per element. What changes is where the transposition happens -- on the memory bus,
+# where a strided access costs a whole 32-byte sector per element, or in shared memory, where a
+# derived one-element skew makes it cost nothing.
+#
+# This is the first kernel in this language whose derived cost depends on a schedule the author
+# declared rather than on the body. ADR-0017.
+kernel transpose_tiled(rows: u32, cols: u32, a: [f32; rows, cols], b: [f32; cols, rows])
+    space i, j : rows, cols
+    tile 32, 32
+    intensity 0.0
+
+    stream a : dram -> smem -> reg
+    stream b : dram -> reg, drain
+
+    at reg:
+        b[j, i] = a[i, j]

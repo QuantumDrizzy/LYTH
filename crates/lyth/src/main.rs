@@ -123,6 +123,14 @@ enum Cmd {
         /// per thread, and could not vary it.
         #[arg(long)]
         block: Option<u32>,
+        /// Override the dynamic shared memory the launch requests.
+        ///
+        /// This exists for one thing: ADR-0017's bypass control. A tiled kernel launched with
+        /// 0 must produce a different answer, because a kernel that is right without shared
+        /// memory is a kernel that never staged. Not a tuning knob -- the correct value is
+        /// derived and passing anything else is asking for undefined behaviour on purpose.
+        #[arg(long, value_name = "N")]
+        shared_bytes: Option<u32>,
         /// Time the kernel over this many runs after a warm-up, and report achieved
         /// bandwidth against the machine file's measured figure. 0 disables timing.
         #[arg(long, default_value_t = 0)]
@@ -197,6 +205,7 @@ fn main() -> ExitCode {
             n,
             grid,
             block,
+            shared_bytes,
             time,
             json,
             sets,
@@ -208,6 +217,7 @@ fn main() -> ExitCode {
                 n,
                 grid,
                 block,
+                shared_bytes,
                 reps: time,
                 json: json.as_deref(),
                 sets: &sets,
@@ -543,6 +553,7 @@ struct RunOpts<'a> {
     n: u32,
     grid: Option<u32>,
     block: Option<u32>,
+    shared_bytes: Option<u32>,
     reps: u32,
     json: Option<&'a Path>,
     sets: &'a [String],
@@ -554,6 +565,7 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
         n,
         grid: grid_arg,
         block: block_arg,
+        shared_bytes: shared_override,
         reps,
         json,
         sets,
@@ -623,7 +635,18 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
 
     // One element per thread by default, because that is what measured fastest -- not because
     // it is obvious. `--grid` takes anything, and below `want` the loop starts doing real work.
-    let want = grid_for(n, block);
+    // One block per tile when tiled, one element per thread otherwise. The same rule the
+    // manifest carries and the three generators emit.
+    let want = match (&ir.tile, &ir.space) {
+        (Some(t), Some(sp)) => sp
+            .extents
+            .iter()
+            .zip(t)
+            .map(|(e, d)| scalars.get(e).map(|v| *v as u32).unwrap_or(1).div_ceil(*d))
+            .product::<u32>()
+            .max(1),
+        _ => grid_for(n, block),
+    };
     let grid = grid_arg.unwrap_or_else(|| want.clamp(1, MAX_GRID));
     let per_thread = (n as f64 / (grid as f64 * block as f64)).ceil() as u64;
     println!(
@@ -819,7 +842,20 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
     }
 
     // One f32 slot per thread for the reduction tree; nothing without a reduction.
-    let shared = if ir.reduction.is_some() { block * 4 } else { 0 };
+    // A tile's shared memory is sized by the TILE, not by the problem: the same block walks
+    // however many tiles the grid-stride gives it, reusing one staging buffer. Sizing this by
+    // the extents is the bug that appears when the front end knows about extents and the back
+    // end knows about tiles.
+    let derived_shared = match (&ir.shared, ir.reduction.is_some()) {
+        (Some(l), _) => l.bytes,
+        (None, true) => block * 4,
+        (None, false) => 0,
+    };
+    let shared = shared_override.unwrap_or(derived_shared);
+    if shared != derived_shared {
+        println!("  [BYPASS] launching with {shared} B instead of the derived {derived_shared} B.");
+        println!("           A tiled kernel that is still correct here never staged anything.");
+    }
     println!("  launch   grid {grid} x block {block} over {n} elements, {shared} B shared");
     if let Err(e) = func.launch_shared(grid, block, shared, &args) {
         eprintln!("error[cuda]: {e}");
