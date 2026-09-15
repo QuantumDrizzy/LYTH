@@ -115,7 +115,17 @@ pub struct ContractSpec {
     pub sector_read_per_element: f64,
     pub sector_write_per_element: f64,
     pub strided_buffers: Vec<String>,
-    /// Per-level traffic, each with the counter that measures it.
+    /// Traffic per interface, each with the counter that measures it.
+    ///
+    /// The level names the **interface the figure is a claim about**, which is not always the
+    /// level the source declared. `stream x : dram -> reg` says where the data lives and that
+    /// is true; the sector model was measured exact at the L1-to-L2 interface and wrong at
+    /// DRAM in both directions (ADR-0015), so the figure derived from it is an `l2` claim.
+    /// This file is what a CI job asserts against, and a level named after the wrong
+    /// interface is a cost contract that lies quietly.
+    ///
+    /// **Nothing here is a DRAM claim.** DRAM traffic is a function of how far the working set
+    /// exceeds the cache, which this compiler does not model and does not pretend to.
     ///
     /// One number per interface, because a byte in shared memory and a byte at DRAM are not
     /// the same byte. A single figure would have to pick one and would be wrong about the
@@ -231,7 +241,11 @@ impl Manifest {
                     .iter()
                     .filter(|l| l.total() > 0.0)
                     .map(|l| LevelTraffic {
-                        level: l.level.name().to_string(),
+                        level: match l.level {
+                            lyth_lang::ast::Level::Dram | lyth_lang::ast::Level::L2 => "l2",
+                            other => other.name(),
+                        }
+                        .to_string(),
                         read_per_element: if l.level == lyth_lang::ast::Level::Dram {
                             ir.cost.sector_read_per_element
                         } else {
@@ -242,6 +256,12 @@ impl Manifest {
                         } else {
                             l.write
                         },
+                        // The level a figure is a claim about is the level its counter
+                        // measures, not the level the source declared the buffer to live in.
+                        // `stream x : dram -> reg` is true about where the data is; the sector
+                        // model was measured exact at the L1-to-L2 interface and wrong at DRAM
+                        // in both directions (ADR-0015), so calling this `dram` while naming
+                        // an L2 counter would put a lie in the file CI asserts against.
                         counter: match l.level {
                             lyth_lang::ast::Level::Dram => "lts__t_bytes.sum",
                             lyth_lang::ast::Level::L2 => "lts__t_bytes.sum",

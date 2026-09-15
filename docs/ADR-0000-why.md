@@ -80,6 +80,28 @@ Choosing the schedule is what Halide and TVM do, by search. This project has no 
 and should not acquire one by implication: it checks the schedule you wrote, which is a smaller
 and different job.
 
+## The rule that pre-registration needs, learned by breaking it twice
+
+ADR-0017 pre-registered two claims and both were wrong. They were wrong in the same way, which
+is what makes it a rule rather than two mistakes.
+
+| claim as written | what the theory supported | what measured |
+|---|---|---|
+| the untiled control measures **36.00 ± 0.2** | 36 sectors, plus the read-for-ownership ADR-0015 had already published at that size | 38.97 |
+| shared store conflicts are **0** in both variants | the skew changes the **loads**; the stores were never what it was about | 0 below 1024², a few thousand at 1024², unchanged by the skew |
+
+Both times the reasoning was right and narrow, and the sentence written down was wider and
+tidier. An absolute zero and an exact equality read better than "unchanged from nominal" and
+"36 plus the excess we already measured", and neither was what the theory implied.
+
+> **Pre-register what the theory implies, not what would look clean.**
+
+A claim that is stronger than its derivation is not a bolder version of the same claim. It is a
+different claim, one nobody derived, and when it fails it fails for reasons that have nothing to
+do with the thing being tested — which is how a real result gets thrown out with a bad
+prediction. Both of these were caught by measuring rather than by review, and review is where
+they should have been caught, because the derivation was sitting in the same document.
+
 ## Why this is written down late, and kept
 
 Every ADR after this one derives a number and then measures it. The reason the numbers are bytes
