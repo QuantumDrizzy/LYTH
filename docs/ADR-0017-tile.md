@@ -126,9 +126,76 @@ would show as a size-dependent excess and is testable by picking extents that di
 |---|---|---|
 | 1 | `tile` syntax, the staged stream path, and both in the IR | every existing example is unchanged; a tiled source parses and refuses what it must |
 | 2 | derived shared layout and padding, in `Cost` and the manifest | `shared_bytes` is 32 x 33 x 4 and the three bindings pass it |
-| 3 | the four-phase PTX and the evaluator that matches it | the tiled transpose is bit-exact against the host |
+| 3 | the four-phase PTX | the transpose is bit-exact **and** clean under `racecheck`, and wrong when launched with no shared memory |
 | 4 | the bus model over a staged stream | derived bus cost falls to 8 bytes per element |
 | 5 | `--ncu` | the table above, either way |
+
+## What bit-exactness does not prove here, and what does
+
+The first draft of this ADR said step 3 was done when the tiled transpose came out bit-exact
+against the host. **That sentence is true before the emitter is written.** A transpose has no
+accumulator and no cross-element dependence, so its result is the same under every schedule:
+untiled, tiled, tiled with the skew wrong, tiled with a barrier missing and no race that
+particular run. A check whose failing state is unreachable is not a check, and this is the
+second time that trap has come up in this project — the first was comparing infinity with
+infinity and calling it verified.
+
+The reflex was to make the host evaluator model shared memory so the check would have something
+to catch. It would not have. The comparison is on the output buffer, and the output buffer is
+the same either way; modelling shared memory in the evaluator adds a second place to make the
+same index mistake and catches nothing the first place missed.
+
+### Where the evaluator does model the schedule, and why
+
+The rule this settles, which was implicit and is now written down:
+
+> **The evaluator models the schedule exactly where the schedule changes the values.**
+
+For a reduction it must: floating-point addition is not associative, there *is* no
+order-independent specification of a float sum, and `tree_reduce` has reproduced the device's
+tree step for step since ADR-0011. For a transpose it must not: nothing about staging changes a
+value, so mirroring it is mirror-bug risk bought with no coverage.
+
+That is why the shared-memory model does not arrive with this ADR. It arrives with the first
+tiled **reduction**, where the tile geometry changes the rounding, derived from the tile in the
+IR rather than copied from the emitter, and tested on properties that need no device: that the
+skewed index function is injective over the tile, and that two elements the model puts in one
+bank without the skew are in different banks with it.
+
+### The three oracles, and what each can refuse
+
+| claim | what can falsify it | what cannot |
+|---|---|---|
+| it computes a transpose | host against device on `b` | the schedule, the skew, a barrier |
+| it moves 8 bytes per element, not 36 | `lts__t_bytes` at 4096², against the untiled kernel | the evaluator |
+| the skew removed the conflicts | `l1tex__data_bank_conflicts_pipe_lsu.sum` | anything on the host |
+| it synchronises | `compute-sanitizer --tool racecheck` | bit-exactness, except by luck |
+| it staged at all | launching with `sharedMemBytes = 0` and getting a different answer | `cuFuncGetAttribute` |
+
+The last row is worth explaining, because the obvious check does not work.
+`cuFuncGetAttribute(CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES)` reports the **static** shared memory a
+module declares. Measured on the existing reduction, which uses 1024 bytes of shared memory and
+works: it reports **0**, because `.extern .shared` sizes the array at launch. The attribute would
+refuse a correct kernel. What does work is the negative control: a kernel that produces the right
+answer with no shared memory is a kernel that is not using shared memory.
+
+[KNOWN LIMIT] Reading past the end of a zero-sized `.extern .shared` array is undefined, so
+"the answer differs" is expected rather than guaranteed. The check is a signal, not a proof, and
+is written down as one.
+
+### `racecheck`, validated in both directions
+
+A missing `bar.sync` is caught by bit-exactness only when the race happens to corrupt the output
+on that run, which is worse than not catching it: it is a test that passes intermittently.
+`compute-sanitizer --tool racecheck` detects the hazard itself.
+
+The instrument was checked before being trusted, the way the machine file's ridge should have
+been and was not for fifteen ADRs. On the existing reduction it reports **0 hazards**. With one
+`bar.sync` deleted from the emitter it reports **130,816 hazards, 1 error** — and, that run,
+bit-exactness also failed, on 137 of 65536 elements, which is exactly the coin-flip being
+described. The barrier was restored and the tree is clean again.
+
+An instrument that has only ever said "clean" has not been verified.
 
 ## What is deliberately not here
 
