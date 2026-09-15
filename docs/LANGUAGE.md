@@ -49,6 +49,45 @@ target is `[f32; blocks]` and the grid decides how many that is. Declaring it `[
 a caller to allocate one per element, which is far too big until someone tightens it to what
 the declaration says and the kernel writes past the end. See `examples/partial-by-n.lyth`.
 
+## The index space
+
+A kernel without a `space` is rank 1: it walks its buffers at the loop index and the body names
+no indices. That is every kernel above.
+
+```
+kernel transpose(rows: u32, cols: u32, a: [f32; rows, cols], b: [f32; cols, rows])
+    space i, j : rows, cols
+    ...
+    at reg:
+        b[j, i] = a[i, j]
+```
+
+`space` names the index variables **outermost first** and the extent each runs over. With one
+declared, every buffer access must be indexed: a buffer used bare is a buffer nobody said how to
+walk, and assuming row-major would silently pick one of the two answers.
+
+An index is a **permutation** of the space variables — each one once, in any order — and nothing
+else. No offsets, no arithmetic. An offset brings the halo problem at the edges with it, and a
+computed index makes the memory footprint something to solve for rather than to read off, which
+is the property the whole cost model rests on.
+
+A buffer is indexed one way per kernel. `a[i, j]` and `a[j, i]` in the same kernel would be two
+addresses per element for one buffer, and this compiler loads each buffer once.
+
+**The traversal order is part of the contract**, exactly as the reduction tree's is. The linear
+index decomposes row-major, outermost first:
+
+```
+k = i * cols + j        i = k / cols        j = k % cols
+```
+
+The host reference walks that same order, so a reduction over a rank-2 space folds its operands
+in the order the device folded them.
+
+[KNOWN LIMIT] The flattened index is 32 bits, so `rows * cols` must fit in a `u32`. It is
+checked once at launch rather than carried as 64-bit arithmetic on every iteration: 2^32 f32
+elements is 17.2 GB, more than any device this compiler has a machine file for.
+
 ## Streams
 
 ```

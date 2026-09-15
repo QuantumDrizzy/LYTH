@@ -35,10 +35,10 @@ fn the_contract_travels_in_the_generated_code() {
 
 #[test]
 fn the_default_grid_is_one_element_per_thread() {
-    assert_eq!(saxpy::grid(1), 1);
-    assert_eq!(saxpy::grid(256), 1);
-    assert_eq!(saxpy::grid(257), 2);
-    assert_eq!(saxpy::grid(1 << 20), 4096);
+    assert_eq!(saxpy::grid(1), Some(1));
+    assert_eq!(saxpy::grid(256), Some(1));
+    assert_eq!(saxpy::grid(257), Some(2));
+    assert_eq!(saxpy::grid(1 << 20), Some(4096));
 }
 
 #[test]

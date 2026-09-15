@@ -172,6 +172,7 @@ impl Parser {
         let mut declared_intensity = None;
         let mut intensity_span = None;
         let mut streams = Vec::new();
+        let mut space = None;
         let mut reductions = Vec::new();
         let mut blocks = Vec::new();
 
@@ -195,6 +196,11 @@ impl Parser {
                 }
                 declared_intensity = Some(v);
                 intensity_span = Some(s);
+            } else if self.at_word("space") {
+                if space.is_some() {
+                    return self.msg("`space` declared twice");
+                }
+                space = Some(self.space()?);
             } else if self.at_word("stream") {
                 streams.push(self.stream()?);
             } else if self.at_word("reduce") {
@@ -202,7 +208,7 @@ impl Parser {
             } else if self.at_word("at") {
                 blocks.push(self.block()?);
             } else {
-                return self.expected("`intensity`, `stream`, `reduce` or `at`");
+                return self.expected("`intensity`, `space`, `stream`, `reduce` or `at`");
             }
         }
 
@@ -213,6 +219,7 @@ impl Parser {
             declared_intensity,
             intensity_span,
             streams,
+            space,
             reductions,
             blocks,
         })
@@ -306,6 +313,41 @@ impl Parser {
         })
     }
 
+    /// `space i, j : rows, cols`
+    fn space(&mut self) -> Result<SpaceDecl, ParseError> {
+        let span = self.span();
+        self.expect(Tok::Word("space".into()))?;
+        let mut vars = Vec::new();
+        loop {
+            let (v, _) = self.word()?;
+            vars.push(v);
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        self.expect(Tok::Colon)?;
+        let mut extents = Vec::new();
+        loop {
+            let (e, _) = self.word()?;
+            extents.push(e);
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        if vars.len() != extents.len() {
+            return self.msg(format!(
+                "`space` names {} index variables and {} extents; they pair up one to one",
+                vars.len(),
+                extents.len()
+            ));
+        }
+        Ok(SpaceDecl {
+            vars,
+            extents,
+            span,
+        })
+    }
+
     fn stream(&mut self) -> Result<StreamDecl, ParseError> {
         let span = self.span();
         self.expect(Tok::Word("stream".into()))?;
@@ -381,13 +423,32 @@ impl Parser {
 
     fn stmt(&mut self) -> Result<Stmt, ParseError> {
         let (target, target_span) = self.word()?;
+        let target_index = self.index_list()?;
         self.expect(Tok::Equals)?;
         let value = self.expr(0)?;
         Ok(Stmt {
             target,
+            target_index,
             target_span,
             value,
         })
+    }
+
+    /// `[i, j]` after a name, or nothing. Only index variables: an index expression that can
+    /// be arithmetic is an index expression whose footprint needs solving for, and v1 does not.
+    fn index_list(&mut self) -> Result<Vec<String>, ParseError> {
+        let mut idx = Vec::new();
+        if self.eat(&Tok::LBracket) {
+            loop {
+                let (v, _) = self.word()?;
+                idx.push(v);
+                if !self.eat(&Tok::Comma) {
+                    break;
+                }
+            }
+            self.expect(Tok::RBracket)?;
+        }
+        Ok(idx)
     }
 
     /// Precedence climbing. `+ -` bind loosest, then `* /`, then unary minus.
@@ -428,7 +489,16 @@ impl Parser {
         match self.peek().clone() {
             Tok::Word(w) => {
                 let span = self.bump().span;
-                Ok(Expr::Name(w, span))
+                let index = self.index_list()?;
+                if index.is_empty() {
+                    Ok(Expr::Name(w, span))
+                } else {
+                    Ok(Expr::At {
+                        buffer: w,
+                        index,
+                        span,
+                    })
+                }
             }
             Tok::Float(v) => {
                 let span = self.bump().span;

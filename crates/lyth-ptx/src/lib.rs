@@ -79,17 +79,22 @@ pub fn emit(ir: &KernelIr, arch: &str) -> Result<Module, EmitError> {
     // end has already checked they agree on. Taking "the first u32 parameter" instead was
     // right only while a kernel could have exactly one; with shapes a kernel may take a count
     // that is not a length, and picking by type would silently loop over the wrong number.
-    let bound = ir
-        .streams
-        .iter()
-        .find_map(|s| {
-            ir.params
-                .iter()
-                .find(|p| p.name == s.buffer)
-                .and_then(|p| p.shape.first())
-        })
-        .cloned()
-        .ok_or_else(|| EmitError::NoBound(ir.name.clone()))?;
+    // At rank 2 the bound is the product of the space's extents and is computed in the
+    // kernel; at rank 1 it is the extent the streamed buffers declare.
+    let bound = match &ir.space {
+        Some(_) => String::new(),
+        None => ir
+            .streams
+            .iter()
+            .find_map(|s| {
+                ir.params
+                    .iter()
+                    .find(|p| p.name == s.buffer)
+                    .and_then(|p| p.shape.first())
+            })
+            .cloned()
+            .ok_or_else(|| EmitError::NoBound(ir.name.clone()))?,
+    };
     if ir.drains.is_empty() && ir.reduction.is_none() {
         return Err(EmitError::NoDrain(ir.name.clone()));
     }
@@ -211,8 +216,61 @@ impl Emitter {
         let k = &ir.name;
 
         // --- parameters into registers ----------------------------------------------
-        let r_bound = self.b32();
-        line(out, &format!("ld.param.u32 {r_bound}, [{k}_{bound}];"));
+        //
+        // Every u32 is loaded, not only the bound: at rank 2 the extents are needed to
+        // decompose the linear index and to stride each buffer, and which u32 is which is a
+        // question the shapes answer.
+        //
+        // Only the ones something uses: an extent named by a buffer or by the space, or the
+        // rank-1 bound. A kernel may take a u32 that is a count rather than a length, and
+        // loading it would put an instruction in the listing that nothing reads.
+        let mut needed: std::collections::BTreeSet<&str> = ir
+            .params
+            .iter()
+            .flat_map(|p| p.shape.iter().map(String::as_str))
+            .collect();
+        if let Some(sp) = &ir.space {
+            needed.extend(sp.extents.iter().map(String::as_str));
+        } else {
+            needed.insert(bound);
+        }
+        let mut u32s: Vec<(String, String)> = Vec::new();
+        for p in &ir.params {
+            if p.ty == Ty::U32 && needed.contains(p.name.as_str()) {
+                let r = self.b32();
+                line(out, &format!("ld.param.u32 {r}, [{k}_{}];", p.name));
+                u32s.push((p.name.clone(), r));
+            }
+        }
+        let u32_of = |name: &str| -> String {
+            u32s.iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, r)| r.clone())
+                .unwrap_or_else(|| panic!("`{name}` is not a u32 parameter"))
+        };
+
+        let r_bound = match &ir.space {
+            None => u32_of(&bound),
+            Some(sp) => {
+                // rows * cols, the flattened extent.
+                //
+                // [KNOWN LIMIT] This product is 32-bit and wraps past 2^32 - 1. It is checked
+                // once at launch rather than carried in 64-bit index arithmetic on every
+                // iteration: 2^32 f32 elements is 17.2 GB, so a buffer cannot reach that
+                // index on any device this compiler has a machine file for, and paying wider
+                // arithmetic per element for an unreachable case is the wrong trade.
+                let b = self.b32();
+                line(
+                    out,
+                    &format!(
+                        "mul.lo.u32 {b}, {}, {};",
+                        u32_of(&sp.extents[0]),
+                        u32_of(&sp.extents[1])
+                    ),
+                );
+                b
+            }
+        };
 
         let mut scalars: Vec<(String, String)> = Vec::new();
         for p in &ir.params {
@@ -269,10 +327,48 @@ impl Emitter {
         line(out, &format!("setp.ge.u32 {p}, {idx}, {r_bound};"));
         line(out, &format!("@{p} bra $L_loop_end_{k};"));
 
+        // --- the index space, decomposed ----------------------------------------------
+        //
+        // Row-major, outermost first: `i = k / e1` and `j = k % e1`. The order is part of the
+        // contract -- `lyth_lang::eval` walks the same one -- because a reduction folding in a
+        // different order is a different bit pattern on a correct kernel.
+        //
+        // `div.u32` and `rem.u32` are not one instruction on this hardware unless the divisor
+        // is a power of two. They are integer work: they move no bytes and retire no flops, so
+        // they change neither the traffic model nor the intensity, and `--ncu` cannot be
+        // misled by them. What they do change is the instruction count, which ADR-0014
+        // measures rather than derives.
+        let index_regs: Vec<(String, String)> = match &ir.space {
+            None => Vec::new(),
+            Some(sp) => {
+                let e1 = u32_of(&sp.extents[1]);
+                let i = self.b32();
+                let j = self.b32();
+                line(out, &format!("div.u32 {i}, {idx}, {e1};"));
+                line(out, &format!("rem.u32 {j}, {idx}, {e1};"));
+                vec![(sp.vars[0].clone(), i), (sp.vars[1].clone(), j)]
+            }
+        };
+        let index_of = |v: &str| -> String {
+            index_regs
+                .iter()
+                .find(|(n, _)| n == v)
+                .map(|(_, r)| r.clone())
+                .unwrap_or_else(|| panic!("`{v}` is not an index of this space"))
+        };
+
         // --- element addresses, recomputed each iteration -----------------------------
-        let off = self.b64();
-        line(out, &format!("mul.wide.u32 {off}, {idx}, 4;"));
         let reduce_target = ir.reduction.as_ref().map(|r| r.into.as_str());
+        // At rank 1 every buffer sits at the same element, so the offset is computed once.
+        // At rank 2 each buffer has its own permutation and its own row length.
+        let shared_off = match &ir.space {
+            None => {
+                let off = self.b64();
+                line(out, &format!("mul.wide.u32 {off}, {idx}, 4;"));
+                Some(off)
+            }
+            Some(_) => None,
+        };
         let mut addrs: Vec<(String, String)> = Vec::new();
         for (name, base) in &buffers {
             // The reduction's target is indexed by block, never by element: computing an
@@ -280,6 +376,38 @@ impl Emitter {
             if Some(name.as_str()) == reduce_target {
                 continue;
             }
+            let off = match &shared_off {
+                Some(o) => o.clone(),
+                None => {
+                    let st = ir
+                        .streams
+                        .iter()
+                        .find(|s| s.buffer == *name)
+                        .expect("a buffer with an address is streamed");
+                    let shape = &ir
+                        .params
+                        .iter()
+                        .find(|p| p.name == *name)
+                        .expect("a streamed buffer is a parameter")
+                        .shape;
+                    // Row-major: the element at [p, q] of a [_, w] buffer is at p * w + q.
+                    // `w` is the buffer's own last extent, not the space's, which is exactly
+                    // the difference a transpose turns into strided access.
+                    let lin = self.b32();
+                    line(
+                        out,
+                        &format!(
+                            "mad.lo.u32 {lin}, {}, {}, {};",
+                            index_of(&st.index[0]),
+                            u32_of(&shape[1]),
+                            index_of(&st.index[1])
+                        ),
+                    );
+                    let off = self.b64();
+                    line(out, &format!("mul.wide.u32 {off}, {lin}, 4;"));
+                    off
+                }
+            };
             let a = self.b64();
             line(out, &format!("add.s64 {a}, {base}, {off};"));
             addrs.push((name.clone(), a));

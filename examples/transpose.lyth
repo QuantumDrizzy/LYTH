@@ -1,0 +1,18 @@
+machine sm_120
+
+# The first kernel in this language whose traffic depends on how it is walked.
+#
+# `a` is read along its rows and `b` is written along its columns, so one of the two accesses
+# has consecutive threads touching addresses `rows * 4` bytes apart. The derived byte count
+# below says 8 per element -- the payload -- and that is a claim ADR-0015 exists to test: a
+# strided access pulls a 32-byte sector per 4-byte element, so the real traffic should be far
+# larger on that side. The model does not know that yet. Measuring it is step 4.
+kernel transpose(rows: u32, cols: u32, a: [f32; rows, cols], b: [f32; cols, rows])
+    space i, j : rows, cols
+    intensity 0.0
+
+    stream a : dram -> reg
+    stream b : dram -> reg, drain
+
+    at reg:
+        b[j, i] = a[i, j]

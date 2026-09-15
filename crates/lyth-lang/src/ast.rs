@@ -24,6 +24,8 @@ pub struct Kernel {
     pub declared_intensity: Option<f64>,
     pub intensity_span: Option<Span>,
     pub streams: Vec<StreamDecl>,
+    /// `None` is rank 1: buffers are walked at the loop index and the body names no indices.
+    pub space: Option<SpaceDecl>,
     /// At most one in v1. See ADR-0011.
     pub reductions: Vec<ReduceDecl>,
     /// `at <level>:` blocks, in source order.
@@ -268,10 +270,31 @@ pub struct Block {
     pub stmts: Vec<Stmt>,
 }
 
+/// `space i, j : rows, cols`
+///
+/// The index space, named. A kernel without one is rank 1 and walks its buffers at the loop
+/// index, which is every kernel written before ADR-0015. A kernel with one names its indices
+/// so the body can permute them, and the extents so the compiler knows how far each runs.
+///
+/// Declared rather than inferred from the buffers, for the reason movement is declared: the
+/// shape of a buffer says how long it is, not which order a kernel walks it in, and those are
+/// different facts. Two kernels over the same buffers can disagree about the second.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpaceDecl {
+    /// Index variables, **outermost first**.
+    pub vars: Vec<String>,
+    /// The extent each one runs over, naming a `u32` parameter.
+    pub extents: Vec<String>,
+    pub span: Span,
+}
+
 /// `<target> = <expr>`. The only statement there is.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Stmt {
     pub target: String,
+    /// `b[j, i] = ...` gives `["j", "i"]`. Empty when the kernel is rank 1 and the target is
+    /// written at the loop index.
+    pub target_index: Vec<String>,
     pub target_span: Span,
     pub value: Expr,
 }
@@ -280,6 +303,15 @@ pub struct Stmt {
 pub enum Expr {
     /// A buffer element at the current index, or a scalar parameter.
     Name(String, Span),
+    /// `a[i, j]`: a buffer element at a permutation of the index variables.
+    ///
+    /// v1 allows a permutation and nothing else -- no offsets, no arithmetic on an index. An
+    /// offset brings the halo problem at the edges with it, and that is its own decision.
+    At {
+        buffer: String,
+        index: Vec<String>,
+        span: Span,
+    },
     Const(f64, Span),
     Bin {
         op: BinOp,
@@ -293,9 +325,11 @@ pub enum Expr {
 impl Expr {
     pub fn span(&self) -> Span {
         match self {
-            Expr::Name(_, s) | Expr::Const(_, s) | Expr::Bin { span: s, .. } | Expr::Neg(_, s) => {
-                *s
-            }
+            Expr::Name(_, s)
+            | Expr::At { span: s, .. }
+            | Expr::Const(_, s)
+            | Expr::Bin { span: s, .. }
+            | Expr::Neg(_, s) => *s,
         }
     }
 }

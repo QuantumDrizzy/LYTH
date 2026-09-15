@@ -72,9 +72,18 @@ $L_done_saxpy:
 }
 "#;
 
+/// Elements the kernel walks: the product of its extents.
+///
+/// `None` when that product does not fit in a u32, which is the flattened index the
+/// kernel uses. At 4 bytes an element that is past 17 GB, so it cannot be reached on
+/// a device this kernel was compiled for.
+pub fn elements(n: u32) -> Option<u32> {
+    Some(n)
+}
+
 /// Blocks the default launch uses: one element per thread, capped.
-pub fn grid(n: u32) -> u32 {
-    n.div_ceil(BLOCK).max(1).min(MAX_GRID)
+pub fn grid(n: u32) -> Option<u32> {
+    Some(elements(n)?.div_ceil(BLOCK).max(1).min(MAX_GRID))
 }
 
 /// Load the embedded PTX. The module must outlive every launcher.
@@ -93,7 +102,9 @@ impl<'m> Saxpy<'m> {
 
     /// Launch at the compiler's default grid.
     pub fn launch(&self, n: u32, a: f32, x: &Buffer<'_>, y: &mut Buffer<'_>) -> Result<(), CudaError> {
-        self.launch_with(grid(n), n, a, x, y)
+        let grid = grid(n)
+            .ok_or_else(|| CudaError::Message("the extents overflow a u32 index".into()))?;
+        self.launch_with(grid, n, a, x, y)
     }
 
     /// Launch at a grid of your choosing, for a sweep.

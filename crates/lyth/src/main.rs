@@ -287,11 +287,11 @@ fn front(file: &Path, machine_path: Option<&Path>, tol: f64) -> Result<Front, Ex
 fn print_cost(ir: &KernelIr, report: &lyth_lang::IntensityReport) {
     println!("kernel {} on machine {}", ir.name, ir.machine);
     println!(
-        " derived {:.4} flop/byte ({} flop / {} byte per element)",
+        "  derived  {:.4} flop/byte  ({} flop / {} byte per element)",
         report.derived, report.flops, report.bytes
     );
     println!(
-        " traffic {} read + {} written, at {}",
+        "  traffic  {} read + {} written, at {}",
         ir.cost.read_bytes_per_element(),
         ir.cost.write_bytes_per_element(),
         ir.cost.level().name()
@@ -537,7 +537,7 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
     let grid = grid_arg.unwrap_or_else(|| want.clamp(1, MAX_GRID));
     let per_thread = (n as f64 / (grid as f64 * block as f64)).ceil() as u64;
     println!(
-        " grid {grid} blocks of {block} on {} SMs, {per_thread} element(s) per thread",
+        "  grid     {grid} blocks of {block} on {} SMs, {per_thread} element(s) per thread",
         ctx.sm_count
     );
     // A reduction writes one value per block, so its target is sized by the grid, not by the
@@ -547,6 +547,42 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
     // Deterministic inputs. A fixed generator rather than random ones so a disagreement is
     // reproducible from the command line alone, and so the same bytes are compared every run.
     let mut inputs = Inputs::default();
+
+    // A rank-2 kernel is walked by its space, so `-n` does not describe it: the extents do,
+    // and their product is the element count. They come from `--set`, like any other value
+    // the caller supplies, and a missing one is refused rather than guessed at -- guessing a
+    // shape would silently transpose a different matrix than the caller meant.
+    let n = if let Some(sp) = &ir.space {
+        let mut total: u64 = 1;
+        for e in &sp.extents {
+            let Some(v) = scalars.get(e).map(|v| *v as u32) else {
+                eprintln!(
+                    "error[launch]: `space` walks `{e}`, but no value was given for it. Pass `--set {e}=<u32>`; a rank-2 kernel has no single element count."
+                );
+                return ExitCode::from(EXIT_UNUSABLE);
+            };
+            if v == 0 {
+                eprintln!("error[launch]: extent `{e}` is 0, so the kernel walks nothing");
+                return ExitCode::from(EXIT_UNUSABLE);
+            }
+            inputs.extents.insert(e.clone(), v);
+            total *= v as u64;
+        }
+        // The flattened index is 32-bit. See the [KNOWN LIMIT] in `lyth-ptx`: 2^32 f32
+        // elements is 17.2 GB, so this is unreachable on any device with a machine file here,
+        // and checking once at launch is cheaper than 64-bit index arithmetic per element.
+        if total > u32::MAX as u64 {
+            eprintln!(
+                "error[launch]: {} elements overflows the 32-bit flattened index. That is {:.1} GB of f32 and more than any device this compiler targets.",
+                total,
+                total as f64 * 4.0 / 1e9
+            );
+            return ExitCode::from(EXIT_UNUSABLE);
+        }
+        total as u32
+    } else {
+        n
+    };
     for p in &ir.params {
         match p.ty {
             Ty::F32 => {
@@ -619,7 +655,10 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
         .params
         .iter()
         .map(|p| match p.ty {
-            Ty::U32 => Arg::U32(n),
+            // Each u32 carries its own value. Passing `n` for all of them was right only
+            // while a kernel had exactly one; a rank-2 kernel takes `rows` and `cols` and
+            // would otherwise receive the element count twice.
+            Ty::U32 => Arg::U32(inputs.extents.get(&p.name).copied().unwrap_or(n)),
             Ty::F32 => Arg::F32(inputs.scalars[&p.name]),
             Ty::BufF32 => Arg::Buf(
                 &buffers
@@ -766,7 +805,7 @@ fn report_timing(
 
     println!("  time     {median_ms:.4} ms median of n={reps} (warm-up {warmup} discarded), spread {:.1}%", spread * 100.0);
     println!(
-        " moved {:.3} MB by the compiler's derived byte model, NOT measured",
+        "  moved    {:.3} MB by the compiler's derived byte model, NOT measured",
         bytes / 1e6
     );
     println!("  achieved {gbs:.2} GB/s");

@@ -83,6 +83,8 @@ fn every_working_example_compiles_with_the_cost_it_documents() {
         // The two probes. Their arithmetic exists only to manufacture the awkward values.
         ("signed-zero.lyth", 2.0, 4.0, 1, 1),
         ("not-a-number.lyth", 2.0, 4.0, 1, 1),
+        // Rank 2: one load and one store, each at its own strided address.
+        ("transpose.lyth", 0.0, 8.0, 1, 1),
     ];
     for (name, flops, bytes, loads, stores) in cases {
         let src = example(name);
@@ -268,4 +270,69 @@ fn the_extent_is_the_one_the_shape_names_not_the_first_u32() {
     assert_eq!(by("x").shape, vec!["n".to_string()]);
     assert_eq!(by("partial").shape, vec!["blocks".to_string()]);
     assert!(by("n").shape.is_empty(), "a scalar has no shape of its own");
+}
+
+#[test]
+fn a_transpose_actually_transposes() {
+    // The device check compares against the host evaluator, so if both walked the buffer the
+    // same wrong way they would agree and the run would print BIT-EXACT. This compares the
+    // evaluator against an independent transpose instead.
+    //
+    // Non-square on purpose: with rows == cols a swapped extent is invisible.
+    use lyth_lang::eval::{eval_with_launch, Inputs};
+
+    let rows = 5usize;
+    let cols = 3usize;
+    let src = example("transpose.lyth");
+    let unit = parse(&src).unwrap();
+    let ir = ir::lower(&unit, &unit.kernels[0]).unwrap();
+
+    let mut inputs = Inputs::default();
+    inputs.extents.insert("rows".into(), rows as u32);
+    inputs.extents.insert("cols".into(), cols as u32);
+    // a[i][j] = i * 10 + j, so every element says where it came from.
+    let a: Vec<f32> = (0..rows * cols)
+        .map(|k| ((k / cols) * 10 + (k % cols)) as f32)
+        .collect();
+    inputs.buffers.insert("a".into(), a.clone());
+    inputs.buffers.insert("b".into(), vec![0.0; rows * cols]);
+
+    let n = rows * cols;
+    let out = eval_with_launch(&ir, n, &inputs, n.div_ceil(256).max(1), 256).unwrap();
+    let b = &out.buffers["b"];
+
+    for i in 0..rows {
+        for j in 0..cols {
+            // b is [cols, rows], so b[j][i] sits at j * rows + i.
+            assert_eq!(
+                b[j * rows + i],
+                a[i * cols + j],
+                "b[{j}][{i}] should be a[{i}][{j}]"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_rank_two_kernel_decomposes_the_linear_index_and_strides_each_buffer() {
+    let m = compile("transpose.lyth").expect("transpose should compile");
+    // Row-major, outermost first: i = k / cols, j = k % cols.
+    assert_eq!(m.ptx.matches("div.u32").count(), 1, "{}", m.ptx);
+    assert_eq!(m.ptx.matches("rem.u32").count(), 1, "{}", m.ptx);
+    // One address per buffer, each with its own row length: a is [rows, cols] and b is
+    // [cols, rows], so the two `mad` instructions multiply by different registers.
+    assert_eq!(m.ptx.matches("mad.lo.u32").count(), 2, "{}", m.ptx);
+    // The flattened bound is the product, computed once outside the loop.
+    assert_eq!(m.ptx.matches("mul.lo.u32").count(), 1, "{}", m.ptx);
+}
+
+#[test]
+fn the_report_keeps_its_columns() {
+    // A cleanup pass over string literals once collapsed the padding in these lines, turning
+    // an aligned report into ragged prose. The alignment is the readable part.
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/main.rs");
+    let text = std::fs::read_to_string(src).unwrap();
+    for line in ["  derived  ", "  traffic  ", "  grid     ", "  moved    "] {
+        assert!(text.contains(line), "the report lost its alignment at {line:?}");
+    }
 }

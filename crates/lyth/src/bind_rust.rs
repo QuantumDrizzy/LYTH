@@ -69,9 +69,37 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
         })
         .collect();
 
-    let extent = m
-        .extent()
+    // Every extent, not just the first: a rank-2 kernel is walked by the product of its
+    // extents, and sizing the grid from one of them would launch a fraction of the work while
+    // compiling cleanly.
+    let extents: Vec<String> = m
+        .params
+        .iter()
+        .filter(|p| p.is_extent)
         .map(|p| p.name.clone())
+        .collect();
+    let extent_args = extents
+        .iter()
+        .map(|e| format!("{e}: u32"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let extent_pass = extents.join(", ");
+    // The element count, as the generated code computes it.
+    let elements = if extents.len() <= 1 {
+        extents
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "n".to_string())
+    } else {
+        extents
+            .iter()
+            .map(|e| format!("{e} as u64"))
+            .collect::<Vec<_>>()
+            .join(" * ")
+    };
+    let extent = extents
+        .first()
+        .cloned()
         .unwrap_or_else(|| "n".to_string());
 
     let declared = match m.contract.declared_intensity {
@@ -127,9 +155,31 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
     push(&mut out, "");
     push(&mut out, &format!("pub const PTX: &str = r{f}\"{}\"{f};", ptx));
     push(&mut out, "");
+    push(&mut out, "/// Elements the kernel walks: the product of its extents.");
+    push(&mut out, "///");
+    push(
+        &mut out,
+        "/// `None` when that product does not fit in a u32, which is the flattened index the",
+    );
+    push(
+        &mut out,
+        "/// kernel uses. At 4 bytes an element that is past 17 GB, so it cannot be reached on",
+    );
+    push(&mut out, "/// a device this kernel was compiled for.");
+    push(&mut out, &format!("pub fn elements({extent_args}) -> Option<u32> {{"));
+    if extents.len() <= 1 {
+        push(&mut out, &format!("    Some({elements})"));
+    } else {
+        push(&mut out, &format!("    u32::try_from({elements}).ok()"));
+    }
+    push(&mut out, "}");
+    push(&mut out, "");
     push(&mut out, "/// Blocks the default launch uses: one element per thread, capped.");
-    push(&mut out, &format!("pub fn grid({extent}: u32) -> u32 {{"));
-    push(&mut out, &format!("    {extent}.div_ceil(BLOCK).max(1).min(MAX_GRID)"));
+    push(&mut out, &format!("pub fn grid({extent_args}) -> Option<u32> {{"));
+    push(
+        &mut out,
+        &format!("    Some(elements({extent_pass})?.div_ceil(BLOCK).max(1).min(MAX_GRID))"),
+    );
     push(&mut out, "}");
     push(&mut out, "");
 
@@ -141,8 +191,11 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
                 p.name
             ),
         );
-        push(&mut out, &format!("pub fn {}_len({extent}: u32) -> usize {{", p.name));
-        push(&mut out, &format!("    grid({extent}) as usize"));
+        push(
+            &mut out,
+            &format!("pub fn {}_len({extent_args}) -> Option<usize> {{", p.name),
+        );
+        push(&mut out, &format!("    Some(grid({extent_pass})? as usize)"));
         push(&mut out, "}");
         push(&mut out, "");
     }
@@ -168,7 +221,14 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
     );
     push(
         &mut out,
-        &format!("        self.launch_with(grid({extent}), {})", pass.join(", ")),
+        &format!(
+            "        let grid = grid({extent_pass})
+            .ok_or_else(|| CudaError::Message(\"the extents overflow a u32 index\".into()))?;"
+        ),
+    );
+    push(
+        &mut out,
+        &format!("        self.launch_with(grid, {})", pass.join(", ")),
     );
     push(&mut out, "    }");
     push(&mut out, "");

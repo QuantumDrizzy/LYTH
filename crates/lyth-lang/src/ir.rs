@@ -26,6 +26,9 @@ pub struct KernelIr {
     pub machine: String,
     pub params: Vec<Param>,
     pub streams: Vec<StreamIr>,
+    /// `None` is rank 1. Rank 2 names its indices and the extents they run over, and every
+    /// buffer access permutes them.
+    pub space: Option<SpaceIr>,
     /// Flattened straight-line body, in evaluation order.
     pub ops: Vec<Op>,
     /// Registers holding the final value of each drained buffer.
@@ -45,9 +48,27 @@ pub struct ReductionIr {
     pub path: Vec<Level>,
 }
 
+/// The index space, resolved.
+///
+/// The traversal order is **row-major, outermost first**, and it is part of the contract, not
+/// an implementation detail: the linear index `k` decomposes as `i = k / extents[1]` and
+/// `j = k % extents[1]`, and `eval` walks that same order so any accumulation meets its
+/// operands in the order the device met them. ADR-0015.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpaceIr {
+    pub vars: Vec<String>,
+    pub extents: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct StreamIr {
     pub buffer: String,
+    /// The permutation of the space variables this buffer is accessed with: `a[i, j]` gives
+    /// `["i", "j"]`. Empty at rank 1, where every buffer is walked at the loop index.
+    ///
+    /// One permutation per buffer per kernel. A buffer read at `a[i, j]` **and** at `a[j, i]`
+    /// would need two addresses per element, and this IR loads each buffer once.
+    pub index: Vec<String>,
     pub from: Level,
     pub to: Level,
     pub drain: bool,
@@ -228,12 +249,56 @@ pub enum LowerError {
         dim: String,
     },
     #[error(
-        "{span}: `{buffer}` is declared with {rank} extents. v1 walks one index space, so a buffer has exactly one. ADR-0015 lifts this."
+        "{span}: `{buffer}` is declared with {rank} extents, but this kernel declares no `space`. Add `space i, j : rows, cols` to walk it, or give the buffer one extent."
     )]
     UnsupportedRank {
         span: Span,
         buffer: String,
         rank: usize,
+    },
+    #[error(
+        "{span}: `space` names {vars} index variables but `{buffer}` is declared with {rank} extents. Every buffer has one extent per index."
+    )]
+    RankMismatch {
+        span: Span,
+        buffer: String,
+        rank: usize,
+        vars: usize,
+    },
+    #[error(
+        "{span}: `{buffer}` is used without an index, but this kernel declares `space {vars}`. Write `{buffer}[{first}]` and say which way it is walked."
+    )]
+    MissingIndex {
+        span: Span,
+        buffer: String,
+        vars: String,
+        first: String,
+    },
+    #[error(
+        "{span}: `{buffer}[{index}]` indexes a kernel that declares no `space`. Either add one, or drop the index and let the buffer be walked at the loop index."
+    )]
+    IndexWithoutSpace {
+        span: Span,
+        buffer: String,
+        index: String,
+    },
+    #[error(
+        "{span}: `{buffer}[{index}]` is not a permutation of `space {vars}`. v1 allows the index variables in any order, each exactly once, and nothing else: an offset or an expression makes the footprint something to solve for rather than to read off."
+    )]
+    NotAPermutation {
+        span: Span,
+        buffer: String,
+        index: String,
+        vars: String,
+    },
+    #[error(
+        "{span}: `{buffer}` is indexed as `[{first}]` and as `[{second}]` in the same kernel. That is two addresses per element for one buffer, and this compiler loads each buffer once. Split it into two kernels or two parameters."
+    )]
+    TwoIndexings {
+        span: Span,
+        buffer: String,
+        first: String,
+        second: String,
     },
     #[error("{span}: `stream {name}` is declared twice")]
     DuplicateStream { span: Span, name: String },
@@ -294,21 +359,37 @@ fn check_shapes(kernel: &Kernel, params: &BTreeMap<&str, Ty>) -> Result<(), Lowe
         if !p.ty.is_buffer() {
             continue;
         }
-        if p.shape.len() != 1 {
-            return Err(LowerError::UnsupportedRank {
-                span: p.span,
-                buffer: p.name.clone(),
-                rank: p.shape.len(),
-            });
+        let rank = kernel.space.as_ref().map(|s| s.vars.len()).unwrap_or(1);
+        if p.shape.len() != rank {
+            // A reduction target is one per block whatever the rank of the space.
+            let is_target = Some(p.name.as_str()) == reduce_target;
+            if !(is_target && p.shape.len() == 1) {
+                return Err(if kernel.space.is_some() {
+                    LowerError::RankMismatch {
+                        span: p.span,
+                        buffer: p.name.clone(),
+                        rank: p.shape.len(),
+                        vars: rank,
+                    }
+                } else {
+                    LowerError::UnsupportedRank {
+                        span: p.span,
+                        buffer: p.name.clone(),
+                        rank: p.shape.len(),
+                    }
+                });
+            }
+        }
+        for dim in &p.shape {
+            if dim != crate::ast::BLOCKS && params.get(dim.as_str()) != Some(&Ty::U32) {
+                return Err(LowerError::UnknownExtent {
+                    span: p.span,
+                    buffer: p.name.clone(),
+                    dim: dim.clone(),
+                });
+            }
         }
         let dim = &p.shape[0];
-        if dim != crate::ast::BLOCKS && params.get(dim.as_str()) != Some(&Ty::U32) {
-            return Err(LowerError::UnknownExtent {
-                span: p.span,
-                buffer: p.name.clone(),
-                dim: dim.clone(),
-            });
-        }
         // A reduction target is sized by the launch and nothing else is.
         let is_target = Some(p.name.as_str()) == reduce_target;
         if is_target && dim != crate::ast::BLOCKS {
@@ -332,8 +413,12 @@ fn check_shapes(kernel: &Kernel, params: &BTreeMap<&str, Ty>) -> Result<(), Lowe
     // with a diagnosis of its own -- `ReduceIntoStream`, which says the buffer carries no
     // per-element traffic -- and that is the cause. A mismatched extent is only the symptom,
     // and reporting a symptom first is how an error message sends someone to the wrong place.
+    //
+    // Only at rank 1. A rank-2 kernel may stream `[rows, cols]` beside `[cols, rows]` on
+    // purpose -- that is what a transpose is -- and the index space, not the buffers, says
+    // how far the walk goes.
     let mut first: Option<(&str, &str)> = None;
-    for s in &kernel.streams {
+    for s in kernel.streams.iter().filter(|_| kernel.space.is_none()) {
         if Some(s.buffer.as_str()) == reduce_target {
             continue;
         }
@@ -401,14 +486,35 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
             from: s.from,
             to: s.to,
             drain: s.drain,
+            index: Vec::new(),
             loaded: None,
             read: false,
         });
     }
 
     // --- body ---------------------------------------------------------------------
+    let space = match &kernel.space {
+        None => None,
+        Some(sp) => {
+            for e in &sp.extents {
+                if params.get(e.as_str()) != Some(&Ty::U32) {
+                    return Err(LowerError::UnknownExtent {
+                        span: sp.span,
+                        buffer: format!("space {}", sp.vars.join(", ")),
+                        dim: e.clone(),
+                    });
+                }
+            }
+            Some(SpaceIr {
+                vars: sp.vars.clone(),
+                extents: sp.extents.clone(),
+            })
+        }
+    };
+
     let mut ctx = Lowering {
         params: &params,
+        space: space.clone(),
         streams: &mut streams,
         ops: Vec::new(),
         next_reg: 0,
@@ -435,6 +541,17 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
     for block in &kernel.blocks {
         for stmt in &block.stmts {
             let value = ctx.expr(&stmt.value)?;
+            // A write is an address like a read, so the target's index is recorded the same
+            // way -- and a local, which has no address, must not carry one.
+            if params.get(stmt.target.as_str()).is_some_and(|t| t.is_buffer()) {
+                ctx.note_index(&stmt.target, &stmt.target_index, stmt.target_span)?;
+            } else if !stmt.target_index.is_empty() {
+                return Err(LowerError::IndexWithoutSpace {
+                    span: stmt.target_span,
+                    buffer: stmt.target.clone(),
+                    index: stmt.target_index.join(", "),
+                });
+            }
             match params.get(stmt.target.as_str()) {
                 // Not a parameter: a local. Legal only if a reduction consumes it, which is
                 // checked once the whole body is known.
@@ -568,6 +685,7 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
         machine: unit.machine.clone(),
         params: kernel.params.clone(),
         streams,
+        space,
         ops,
         drains,
         reduction,
@@ -642,6 +760,7 @@ fn derive_cost(streams: &[StreamIr], ops: &[Op], reduction: Option<&ReductionIr>
 
 struct Lowering<'a> {
     params: &'a BTreeMap<&'a str, Ty>,
+    space: Option<SpaceIr>,
     streams: &'a mut Vec<StreamIr>,
     ops: Vec<Op>,
     next_reg: RegId,
@@ -668,6 +787,11 @@ impl Lowering<'_> {
                 Ok(self.emit(Op::Const { dst, value: *v }))
             }
             Expr::Name(name, span) => self.name(name, *span),
+            Expr::At {
+                buffer,
+                index,
+                span,
+            } => self.at(buffer, index, *span),
             Expr::Neg(inner, _) => {
                 let src = self.expr(inner)?;
                 let dst = self.fresh();
@@ -718,7 +842,83 @@ impl Lowering<'_> {
         }
     }
 
+    /// Record how a buffer is walked, refusing a second, different walk of the same buffer.
+    ///
+    /// Called for a read and for a write, because both are the same address.
+    fn note_index(
+        &mut self,
+        buffer: &str,
+        index: &[String],
+        span: Span,
+    ) -> Result<(), LowerError> {
+        let Some(sp) = self.space.clone() else {
+            if index.is_empty() {
+                return Ok(());
+            }
+            return Err(LowerError::IndexWithoutSpace {
+                span,
+                buffer: buffer.into(),
+                index: index.join(", "),
+            });
+        };
+        if index.is_empty() {
+            return Err(LowerError::MissingIndex {
+                span,
+                buffer: buffer.into(),
+                vars: sp.vars.join(", "),
+                first: sp.vars.join(", "),
+            });
+        }
+        // A permutation: every index variable once, in any order, and nothing else.
+        let mut sorted = index.to_vec();
+        sorted.sort();
+        let mut want = sp.vars.clone();
+        want.sort();
+        if sorted != want {
+            return Err(LowerError::NotAPermutation {
+                span,
+                buffer: buffer.into(),
+                index: index.join(", "),
+                vars: sp.vars.join(", "),
+            });
+        }
+        if let Some(st) = self.streams.iter_mut().find(|s| s.buffer == buffer) {
+            if st.index.is_empty() {
+                st.index = index.to_vec();
+            } else if st.index != index {
+                return Err(LowerError::TwoIndexings {
+                    span,
+                    buffer: buffer.into(),
+                    first: st.index.join(", "),
+                    second: index.join(", "),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn at(&mut self, buffer: &str, index: &[String], span: Span) -> Result<RegId, LowerError> {
+        self.note_index(buffer, index, span)?;
+        self.load(buffer, span)
+    }
+
+    /// An unindexed name. A buffer reached this way in a kernel with a `space` is a buffer
+    /// nobody said how to walk, and guessing `[i, j]` would silently pick row-major.
     fn name(&mut self, name: &str, span: Span) -> Result<RegId, LowerError> {
+        if let (Some(sp), Some(ty)) = (self.space.clone(), self.params.get(name)) {
+            if ty.is_buffer() && self.env.get(name).is_none() {
+                return Err(LowerError::MissingIndex {
+                    span,
+                    buffer: name.into(),
+                    vars: sp.vars.join(", "),
+                    first: sp.vars.join(", "),
+                });
+            }
+        }
+        self.load(name, span)
+    }
+
+    fn load(&mut self, name: &str, span: Span) -> Result<RegId, LowerError> {
         // A value already computed for this name in this element shadows the loaded one,
         // so `y = a*x + y` reads the loaded y and a later statement would read the new one.
         if let Some(r) = self.env.get(name) {

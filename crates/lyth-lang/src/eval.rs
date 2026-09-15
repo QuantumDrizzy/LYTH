@@ -21,6 +21,8 @@ pub enum EvalError {
     MissingBuffer(String),
     #[error("no scalar named `{0}` was supplied")]
     MissingScalar(String),
+    #[error("no value for the extent `{0}`; a rank-2 kernel needs every extent it walks")]
+    MissingExtent(String),
     #[error("a block of zero threads reduces nothing")]
     ZeroBlock,
     #[error("buffer `{name}` has {got} elements, expected at least {want}")]
@@ -36,6 +38,9 @@ pub enum EvalError {
 pub struct Inputs {
     pub scalars: BTreeMap<String, f32>,
     pub buffers: BTreeMap<String, Vec<f32>>,
+    /// Values for the `u32` extents a rank-2 kernel walks. Empty at rank 1, where the element
+    /// count is the only length there is and arrives as `n`.
+    pub extents: BTreeMap<String, u32>,
 }
 
 /// Run every element of the kernel on the host, returning the drained buffers.
@@ -136,6 +141,69 @@ pub fn eval_with_launch(
     let _ = &loads;
     let _ = &drain_cols;
 
+    // How each buffer's element index is computed from the linear one.
+    //
+    // At rank 1 they coincide. At rank 2 the linear index decomposes row-major -- the order
+    // `lyth-ptx` emits as `div.u32` and `rem.u32` -- and each buffer applies its own
+    // permutation and its own row length. A transpose reads one operand down a column, and
+    // this is where the host reproduces that rather than approximating it.
+    struct Walk {
+        /// `None` at rank 1.
+        rank2: Option<(bool, usize)>,
+    }
+    let space_cols = ir
+        .space
+        .as_ref()
+        .map(|sp| {
+            inputs
+                .extents
+                .get(&sp.extents[1])
+                .copied()
+                .ok_or_else(|| EvalError::MissingExtent(sp.extents[1].clone()))
+                .map(|v| v as usize)
+        })
+        .transpose()?;
+    let walks: Vec<Walk> = buffer_order
+        .iter()
+        .map(|name| {
+            let Some(sp) = ir.space.as_ref() else {
+                return Ok(Walk { rank2: None });
+            };
+            let Some(st) = ir.streams.iter().find(|s| s.buffer == *name) else {
+                // A reduction target has no element address.
+                return Ok(Walk { rank2: None });
+            };
+            let shape = &ir
+                .params
+                .iter()
+                .find(|p| p.name == *name)
+                .expect("a streamed buffer is a parameter")
+                .shape;
+            let row = inputs
+                .extents
+                .get(&shape[1])
+                .copied()
+                .ok_or_else(|| EvalError::MissingExtent(shape[1].clone()))? as usize;
+            // `[j, i]` against `space i, j` means the outer index comes second.
+            let swap = st.index[0] != sp.vars[0];
+            Ok(Walk {
+                rank2: Some((swap, row)),
+            })
+        })
+        .collect::<Result<_, EvalError>>()?;
+
+    let at = |col: usize, k: usize| -> usize {
+        match walks[col].rank2 {
+            None => k,
+            Some((swap, row)) => {
+                let cols = space_cols.expect("rank 2 resolved its space extent");
+                let (i, j) = (k / cols, k % cols);
+                let (outer, inner) = if swap { (j, i) } else { (i, j) };
+                outer * row + inner
+            }
+        }
+    };
+
     // clippy would rather this were an iterator, but the body indexes several columns at the
     // same position and writes back into one of them; an index is the honest expression of that.
     #[allow(clippy::needless_range_loop)]
@@ -146,7 +214,7 @@ pub fn eval_with_launch(
                     let col =
                         index_of(buffer).ok_or_else(|| EvalError::MissingBuffer(buffer.clone()))?;
                     let _ = dst;
-                    columns[col][i]
+                    columns[col][at(col, i)]
                 }
                 Op::Param { name, .. } => *out
                     .scalars
@@ -175,7 +243,9 @@ pub fn eval_with_launch(
         // Every drain lands after the whole body, so a kernel that reads y and writes y sees
         // the old value throughout the element, exactly as the generated code does.
         for (col, reg) in &drain_cols {
-            columns[*col][i] = regs[*reg as usize];
+            // The write is the same address as a read would be: a drained buffer at rank 2
+            // is walked by its own permutation, which for a transpose is the whole point.
+            columns[*col][at(*col, i)] = regs[*reg as usize];
         }
         if let Some(r) = &ir.reduction {
             reduced.push(regs[r.value as usize]);
