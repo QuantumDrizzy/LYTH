@@ -95,18 +95,67 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
     w(&format!("MAX_GRID = {}", m.launch.max_grid));
     w("");
     w("# The cost model, so a caller can assert on it without a profiler.");
-    w(&format!(
-        "DERIVED_INTENSITY = {:?}",
-        m.contract.derived_intensity
-    ));
-    w(&format!(
-        "FLOPS_PER_ELEMENT = {:?}",
-        m.contract.flops_per_element.unwrap_or(0.0)
-    ));
-    w(&format!(
-        "BYTES_PER_ELEMENT = {:?}",
-        m.contract.bytes_per_element.unwrap_or(0.0)
-    ));
+    match &m.contract.symbolic {
+        // Functions rather than constants, and the constants are absent rather than wrong.
+        // `unwrap_or(0.0)` used to publish `BYTES_PER_ELEMENT = 0.0` for a matmul -- the
+        // number `Cost::bytes_per_element` returns `None` for, handed out by the layer that
+        // exists to hand things out. A caller reaching for it now gets an AttributeError,
+        // which is the closest Python has to a compile error.
+        Some(sym) => {
+            let k = &sym.extent;
+            w(&format!(
+                "ASYMPTOTIC_INTENSITY = {:?}",
+                sym.asymptotic_intensity
+            ));
+            w("");
+            w("");
+            w(&format!("def derived_bytes_per_element({k}):"));
+            w(&format!(
+                "    \"\"\"Bytes moved per output element at a known {k}: {}.",
+                sym.bytes
+            ));
+            w("");
+            w("    There is no BYTES_PER_ELEMENT for this kernel. Its traffic is a function of");
+            w(&format!("    {k}, and a constant cannot be one."));
+            w("    \"\"\"");
+            w(&format!(
+                "    return {:?} * {k} + {:?}",
+                sym.bytes_per_extent, sym.bytes_fixed
+            ));
+            w("");
+            w("");
+            w(&format!("def derived_flops_per_element({k}):"));
+            w(&format!(
+                "    \"\"\"FLOPs retired per output element at a known {k}: {}.\"\"\"",
+                sym.flops
+            ));
+            w(&format!(
+                "    return {:?} * {k} + {:?}",
+                sym.flops_per_extent, sym.flops_fixed
+            ));
+            w("");
+            w("");
+            w(&format!("def derived_intensity({k}):"));
+            w("    \"\"\"The exact intensity at a known extent, for a CI job with no profiler.\"\"\"");
+            w(&format!(
+                "    return derived_flops_per_element({k}) / derived_bytes_per_element({k})"
+            ));
+        }
+        None => {
+            w(&format!(
+                "DERIVED_INTENSITY = {:?}",
+                m.contract.derived_intensity
+            ));
+            w(&format!(
+                "FLOPS_PER_ELEMENT = {:?}",
+                m.contract.flops_per_element.expect("a constant contract has one")
+            ));
+            w(&format!(
+                "BYTES_PER_ELEMENT = {:?}",
+                m.contract.bytes_per_element.expect("a constant contract has one")
+            ));
+        }
+    }
     w(&format!("COALESCENCE = {:?}", m.contract.coalescence));
     w("");
     w("PTX = (");
@@ -179,8 +228,24 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
         w("        import warnings");
         w("        warnings.warn(");
         w("            f\"{KERNEL} will be JIT-compiled for sm_{got[0]}{got[1]}, but its\"");
-        w("            f\" contract -- {DERIVED_INTENSITY:.4f} flop/byte,\"");
-        w("            f\" {BYTES_PER_ELEMENT:.0f} B/element -- was derived on {MACHINE}.\"");
+        // The names differ because a contracted kernel has no constant to quote -- and a
+        // warning that raises NameError while warning about something else is worse than the
+        // thing it warns about.
+        match &m.contract.symbolic {
+            Some(sym) => {
+                w("            f\" contract -- {ASYMPTOTIC_INTENSITY:.4f} flop/byte asymptotic,\"");
+                // An f-string like the lines around it. The expression has no braces in it --
+                // an extent is an identifier -- so it cannot collide with the formatting.
+                w(&format!(
+                    "            f\" {} B/element -- was derived on {{MACHINE}}.\"",
+                    sym.bytes
+                ));
+            }
+            None => {
+                w("            f\" contract -- {DERIVED_INTENSITY:.4f} flop/byte,\"");
+                w("            f\" {BYTES_PER_ELEMENT:.0f} B/element -- was derived on {MACHINE}.\"");
+            }
+        }
         w("            \" The kernel is correct; the cost model is about another machine.\",");
         w("            stacklevel=2)");
         w("    return got");

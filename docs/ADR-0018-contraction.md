@@ -315,6 +315,32 @@ it against. `Manifest` carries `symbolic` — the expression, its coefficients, 
 the three generators emit the contracted contract line. The evaluator functions land in step 3,
 with the PTX.
 
+> **[DONE, and it was hiding a defect.]** With the PTX emitted, the bindings now project the
+> expression: `ASYMPTOTIC_INTENSITY` plus `derived_bytes_per_element(k)`,
+> `derived_flops_per_element(k)` and `derived_intensity(k)` in all three languages — `static
+> inline` in C rather than a function-like macro, because the intensity needs its argument
+> twice and a macro would evaluate it twice.
+>
+> Deferring it had left a hole exactly where the rest of this ADR closed one. `Cost::bytes_per_element`
+> returns `None` for a contraction *because* the constant part of a matmul is 0 flops and 4
+> bytes and those print without complaint — and all three generators then wrote
+> `unwrap_or(0.0)`, so a generated matmul binding published:
+>
+> ```rust
+> pub const FLOPS_PER_ELEMENT: f64 = 0.0;
+> pub const BYTES_PER_ELEMENT: f64 = 0.0;
+> ```
+>
+> A matmul that moves nothing, in the artifact whose whole job is to carry the cost model to a
+> caller. The type made the wrong number unreachable inside the compiler and the layer that
+> exists to hand numbers out handed it out anyway.
+>
+> The constants are now **absent** for a contracted kernel rather than zero, so a caller
+> reaching for one gets a compile error in Rust and C and an `AttributeError` in Python. Same
+> protection, one layer out. `DERIVED_INTENSITY` is absent too: a limit under the name of the
+> exact figure is the weaker claim wearing the stronger one, which is the rule `intensity
+> asymptotic` exists for.
+
 ### One thing measured rather than assumed
 
 A reviewer proposed the gap "`tile` only over the contracted axis — that is not `2K/T+1`, so

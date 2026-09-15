@@ -132,18 +132,73 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
     ));
     w("");
     w("/* The cost model, so a caller can assert on it without a profiler. */");
-    w(&format!(
-        "#define LYTH_{guard}_DERIVED_INTENSITY {:?}",
-        m.contract.derived_intensity
-    ));
-    w(&format!(
-        "#define LYTH_{guard}_FLOPS_PER_ELEMENT {:?}",
-        m.contract.flops_per_element.unwrap_or(0.0)
-    ));
-    w(&format!(
-        "#define LYTH_{guard}_BYTES_PER_ELEMENT {:?}",
-        m.contract.bytes_per_element.unwrap_or(0.0)
-    ));
+    match &m.contract.symbolic {
+        // `static inline` rather than a function-like macro: the intensity needs its argument
+        // twice, and a macro would evaluate it twice. The constants are absent rather than
+        // wrong -- `unwrap_or(0.0)` published a matmul as moving 0 bytes per element -- so a
+        // caller reaching for one gets an undefined identifier at compile time.
+        Some(sym) => {
+            let k = &sym.extent;
+            w(&format!(
+                "#define LYTH_{guard}_ASYMPTOTIC_INTENSITY {:?}",
+                sym.asymptotic_intensity
+            ));
+            w("");
+            w(&format!(
+                "/* Bytes per output element at a known {k}: {}. There is no",
+                sym.bytes
+            ));
+            w(&format!(
+                "   LYTH_{guard}_BYTES_PER_ELEMENT: this kernel's traffic is a function of {k}. */"
+            ));
+            w(&format!(
+                "static inline double lyth_{k_low}_derived_bytes_per_element(unsigned int {k})",
+                k_low = m.kernel
+            ));
+            w("{");
+            w(&format!(
+                "    return {:?} * (double){k} + {:?};",
+                sym.bytes_per_extent, sym.bytes_fixed
+            ));
+            w("}");
+            w("");
+            w(&format!(
+                "static inline double lyth_{}_derived_flops_per_element(unsigned int {k})",
+                m.kernel
+            ));
+            w("{");
+            w(&format!(
+                "    return {:?} * (double){k} + {:?};",
+                sym.flops_per_extent, sym.flops_fixed
+            ));
+            w("}");
+            w("");
+            w(&format!(
+                "static inline double lyth_{}_derived_intensity(unsigned int {k})",
+                m.kernel
+            ));
+            w("{");
+            w(&format!(
+                "    return lyth_{n}_derived_flops_per_element({k}) / lyth_{n}_derived_bytes_per_element({k});",
+                n = m.kernel
+            ));
+            w("}");
+        }
+        None => {
+            w(&format!(
+                "#define LYTH_{guard}_DERIVED_INTENSITY {:?}",
+                m.contract.derived_intensity
+            ));
+            w(&format!(
+                "#define LYTH_{guard}_FLOPS_PER_ELEMENT {:?}",
+                m.contract.flops_per_element.expect("a constant contract has one")
+            ));
+            w(&format!(
+                "#define LYTH_{guard}_BYTES_PER_ELEMENT {:?}",
+                m.contract.bytes_per_element.expect("a constant contract has one")
+            ));
+        }
+    }
     w(&format!(
         "#define LYTH_{guard}_COALESCENCE {:?}",
         m.contract.coalescence

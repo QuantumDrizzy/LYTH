@@ -127,25 +127,61 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
     push(&mut out, "");
     push(&mut out, "/// What the source claimed, or `None` if it stayed silent.");
     push(&mut out, &format!("pub const DECLARED_INTENSITY: Option<f64> = {declared};"));
-    push(&mut out, "/// What the compiler derived from the body. Assert on it if you care.");
-    push(
-        &mut out,
-        &format!("pub const DERIVED_INTENSITY: f64 = {:?};", m.contract.derived_intensity),
-    );
-    push(
-        &mut out,
-        &format!(
-            "pub const FLOPS_PER_ELEMENT: f64 = {:?};",
-            m.contract.flops_per_element.unwrap_or(0.0)
-        ),
-    );
-    push(
-        &mut out,
-        &format!(
-            "pub const BYTES_PER_ELEMENT: f64 = {:?};",
-            m.contract.bytes_per_element.unwrap_or(0.0)
-        ),
-    );
+    match &m.contract.symbolic {
+        // A cost that is a function of a launch extent becomes a function in the binding.
+        //
+        // The constants are **not** emitted for a contraction, and that is the point rather
+        // than an omission. `unwrap_or(0.0)` published `BYTES_PER_ELEMENT: f64 = 0.0` for a
+        // matmul -- the plausible-looking wrong number `Cost::bytes_per_element` was changed to
+        // return `None` for. The type made it unreachable inside the compiler and this layer
+        // handed it out anyway. A caller reaching for a constant that cannot describe this
+        // kernel now fails to compile, which is the same protection one layer out.
+        Some(sym) => {
+            let k = &sym.extent;
+            push(&mut out, "/// The limit the intensity approaches as the contracted extent grows.");
+            push(&mut out, "///");
+            push(&mut out, "/// There is no `DERIVED_INTENSITY` here: this kernel's exact intensity is a");
+            push(&mut out, &format!("/// function of `{k}`, and a constant cannot be one. Use `derived_intensity`."));
+            push(&mut out, &format!("pub const ASYMPTOTIC_INTENSITY: f64 = {:?};", sym.asymptotic_intensity));
+            push(&mut out, "");
+            push(&mut out, &format!("/// Bytes moved per output element at a known `{k}`: `{}`.", sym.bytes));
+            push(&mut out, &format!("pub fn derived_bytes_per_element({k}: u32) -> f64 {{"));
+            push(&mut out, &format!("    {:?} * {k} as f64 + {:?}", sym.bytes_per_extent, sym.bytes_fixed));
+            push(&mut out, "}");
+            push(&mut out, "");
+            push(&mut out, &format!("/// FLOPs retired per output element at a known `{k}`: `{}`.", sym.flops));
+            push(&mut out, &format!("pub fn derived_flops_per_element({k}: u32) -> f64 {{"));
+            push(&mut out, &format!("    {:?} * {k} as f64 + {:?}", sym.flops_per_extent, sym.flops_fixed));
+            push(&mut out, "}");
+            push(&mut out, "");
+            push(&mut out, "/// The exact intensity at a known extent, which is what a CI job can assert");
+            push(&mut out, "/// on without a profiler.");
+            push(&mut out, &format!("pub fn derived_intensity({k}: u32) -> f64 {{"));
+            push(&mut out, &format!("    derived_flops_per_element({k}) / derived_bytes_per_element({k})"));
+            push(&mut out, "}");
+        }
+        None => {
+            push(&mut out, "/// What the compiler derived from the body. Assert on it if you care.");
+            push(
+                &mut out,
+                &format!("pub const DERIVED_INTENSITY: f64 = {:?};", m.contract.derived_intensity),
+            );
+            push(
+                &mut out,
+                &format!(
+                    "pub const FLOPS_PER_ELEMENT: f64 = {:?};",
+                    m.contract.flops_per_element.expect("a constant contract has one")
+                ),
+            );
+            push(
+                &mut out,
+                &format!(
+                    "pub const BYTES_PER_ELEMENT: f64 = {:?};",
+                    m.contract.bytes_per_element.expect("a constant contract has one")
+                ),
+            );
+        }
+    }
     push(&mut out, "");
     push(&mut out, &format!("pub const PTX: &str = r{f}\"{}\"{f};", ptx));
     push(&mut out, "");
@@ -408,5 +444,128 @@ kernel k(n: u32, a: f32, x: [f32; n], y: [f32; n])
         assert!(rs.contains("div_ceil(BLOCK)") && !rs.contains("BLOCK * "), "{rs}");
         assert!(c.contains("(total + LYTH_K_BLOCK - 1u) / LYTH_K_BLOCK"), "{c}");
         assert!(py.contains("-(-total // BLOCK)") && !py.contains("per_block"), "{py}");
+    }
+}
+
+#[cfg(test)]
+mod symbolic_bindings {
+    //! A cost that is a function of a launch extent becomes a function in the binding.
+    //!
+    //! The defect these exist for: `Cost::bytes_per_element` was changed to return `None` for a
+    //! contraction, because the constant part of a matmul is 0 flops and 4 bytes and those are
+    //! numbers that print without complaint. Three generators then wrote `unwrap_or(0.0)`, and
+    //! the binding published `BYTES_PER_ELEMENT: f64 = 0.0` -- a matmul that moves nothing. The
+    //! type made it unreachable inside the compiler and the layer whose job is to hand things
+    //! out handed it out anyway.
+
+    use super::*;
+    use crate::manifest::Manifest;
+    use lyth_lang::{ir::lower, parse::parse};
+
+    const MATMUL: &str = "machine sm_120
+
+kernel mm(m: u32, n: u32, k: u32,
+              a: [f32; m, k], b: [f32; k, n], c: [f32; m, n])
+    space i, j : m, n
+    contract sum p : k
+    tile 32, 32
+    intensity asymptotic 8.0
+    stream a : dram -> smem -> reg
+    stream b : dram -> smem -> reg
+    stream c : dram -> reg, drain
+    at reg:
+        c[i, j] = a[i, p] * b[p, j]
+";
+    const SAXPY: &str = "machine sm_120
+
+kernel k(n: u32, a: f32, x: [f32; n], y: [f32; n])
+    intensity 0.1667
+    stream x : dram -> reg
+    stream y : dram -> reg, drain
+    at reg:
+        y = a * x + y
+";
+
+    fn all_three(src: &str) -> (String, String, String) {
+        let unit = parse(src).unwrap();
+        let ir = lower(&unit, &unit.kernels[0]).unwrap();
+        let m = Manifest::of(&ir, ir.cost.contracted.as_ref().map(|_| 8.0), 256, 1 << 20, vec![]);
+        (
+            generate(&m, "// ptx", "k.lyth"),
+            crate::bind_c::generate(&m, "// ptx", "k.lyth"),
+            crate::bind_py::generate(&m, "// ptx", "k.lyth"),
+        )
+    }
+
+    #[test]
+    fn a_contracted_binding_does_not_publish_a_constant_it_cannot_have() {
+        // The absence is the assertion. A caller that reaches for `BYTES_PER_ELEMENT` gets a
+        // compile error in Rust and C and an AttributeError in Python, rather than 0.0.
+        // On the **declaration**, not on the substring: the binding's own doc comment says
+        // "there is no `DERIVED_INTENSITY` here", and a test that cannot tell an explanation
+        // from a definition is a test that forbids explaining anything.
+        let (rs, c, py) = all_three(MATMUL);
+        for name in ["BYTES_PER_ELEMENT", "FLOPS_PER_ELEMENT", "DERIVED_INTENSITY"] {
+            assert!(!rs.contains(&format!("pub const {name}")), "{rs}");
+            assert!(!c.contains(&format!("#define LYTH_MM_{name} ")), "{c}");
+            assert!(
+                !py.lines().any(|l| l.starts_with(&format!("{name} = "))),
+                "{py}"
+            );
+        }
+        // And nothing anywhere says this kernel moves nothing.
+        for s in [&rs, &c, &py] {
+            assert!(!s.contains("= 0.0;") && !s.contains("= 0.0
+"), "a zero cost leaked:
+{s}");
+        }
+    }
+
+    #[test]
+    fn it_publishes_the_expression_as_a_function_instead() {
+        let (rs, c, py) = all_three(MATMUL);
+        assert!(rs.contains("pub const ASYMPTOTIC_INTENSITY: f64 = 8.0;"), "{rs}");
+        assert!(rs.contains("pub fn derived_bytes_per_element(k: u32) -> f64 {"), "{rs}");
+        assert!(rs.contains("0.25 * k as f64 + 4.0"), "{rs}");
+        assert!(rs.contains("pub fn derived_intensity(k: u32) -> f64 {"), "{rs}");
+
+        assert!(c.contains("#define LYTH_MM_ASYMPTOTIC_INTENSITY 8.0"), "{c}");
+        // `static inline`, not a function-like macro: the intensity needs its argument twice.
+        assert!(c.contains("static inline double lyth_mm_derived_intensity(unsigned int k)"), "{c}");
+        assert!(!c.contains("#define LYTH_MM_DERIVED_INTENSITY("), "a macro would double-evaluate:
+{c}");
+
+        assert!(py.contains("ASYMPTOTIC_INTENSITY = 8.0"), "{py}");
+        assert!(py.contains("def derived_bytes_per_element(k):"), "{py}");
+        assert!(py.contains("return 0.25 * k + 4.0"), "{py}");
+    }
+
+    #[test]
+    fn the_functions_evaluate_to_what_the_compiler_derived() {
+        // Not a test of the string: of the arithmetic in it. 4 * (2 * 4096 / 32 + 1) = 1028.
+        let unit = parse(MATMUL).unwrap();
+        let ir = lower(&unit, &unit.kernels[0]).unwrap();
+        assert_eq!(ir.cost.bytes_at(4096), 1028.0);
+        assert!((ir.cost.intensity_at(4096) - 7.9689).abs() < 1e-4);
+
+        let (rs, _, _) = all_three(MATMUL);
+        // The emitted coefficients are the ones the cost carries, so a reader checking the
+        // generated line against the manifest is checking one number, not two.
+        let c = ir.cost.contracted.as_ref().unwrap();
+        assert!(rs.contains(&format!("{:?} * k as f64 + {:?}", c.bytes_per_extent, ir.cost.bytes_fixed())), "{rs}");
+    }
+
+    #[test]
+    fn a_constant_kernel_keeps_the_constants_and_grows_no_functions() {
+        // The change has to be invisible to every kernel written before a contraction, which
+        // is what the checked-in saxpy fixtures also pin byte for byte.
+        let (rs, c, py) = all_three(SAXPY);
+        assert!(rs.contains("pub const BYTES_PER_ELEMENT: f64 = 12.0;"), "{rs}");
+        assert!(rs.contains("pub const DERIVED_INTENSITY: f64 ="), "{rs}");
+        assert!(!rs.contains("ASYMPTOTIC"), "{rs}");
+        assert!(!rs.contains("derived_bytes_per_element"), "{rs}");
+        assert!(c.contains("#define LYTH_K_BYTES_PER_ELEMENT 12.0"), "{c}");
+        assert!(py.contains("BYTES_PER_ELEMENT = 12.0"), "{py}");
+        assert!(!py.contains("def derived_bytes_per_element"), "{py}");
     }
 }
