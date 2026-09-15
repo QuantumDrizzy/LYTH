@@ -73,8 +73,45 @@ without touching the compiler.
 | 1 | the manifest: signature, launch facts, contract | `lyth build --manifest` round-trips every example |
 | 2 | Rust binding: embedded PTX, typed launch over `lyth-cuda` | a Rust test calls saxpy and matches `lyth run` |
 | 3 | C header: `cuModuleLoadData` + `cuLaunchKernel`, no C++ required | a C file compiles and links against it |
-| 4 | Python: `cuda-python` or `cupy` loader from the same manifest | a numpy round trip matches the host reference |
+| 4 | Python: `ctypes` against the driver, from the same manifest | it launches and the result matches |
 | 5 | ADR-0015 (shape), which now regenerates typed bindings | transpose is callable with its shapes checked |
+
+All five are done. Steps 3 and 4 were driven against the device by hand, since neither can be
+built by `cargo test` without a C toolchain and `cuda.h`:
+
+```
+cl /W4 /I "%CUDA%\include" use_sum.c /link cuda.lib
+  blocks=256  contract: 0.25 flop/byte on sm_120
+  host=1067171840.0  device=1067171840.0  MATCH
+
+python use_saxpy.py
+  contract: 0.1667 flop/byte on sm_120
+  grid=256  mismatches=0 of 65536  MATCH
+```
+
+The C header produced no warnings of its own at `/W4`. What the suite holds afterwards is that
+the generator has not changed its output, plus a parse of the generated Python, which needs no
+driver.
+
+### Two things the other languages cannot have
+
+The Rust binding takes a written buffer by `&mut`, so the borrow checker refuses a launch that
+aliases an input with an output. C and Python have no way to say that. **The C header does not
+pretend to**: `const CUdeviceptr` would look like the guarantee without being it, because
+`CUdeviceptr` is an integer handle and the qualifier would apply to the handle rather than the
+memory. Both bindings name the written buffers in a comment and leave the signature honest.
+
+Python's binding has one place it could be silently, catastrophically wrong: the driver reads
+the parameter buffer by offset, so an argument passed at the wrong width shifts every argument
+after it. Each is built with an explicit `ctypes` type and a test asserts on which.
+
+### The API that moved underneath
+
+`cuCtxCreate` is `_v4` in CUDA 13 and takes a params pointer, and a caller that passes the old
+three arguments gets a success code and a context the next call rejects as invalid. Neither
+binding creates a context -- that is the caller's, by rule 1 -- but the worked examples use
+`cuDevicePrimaryCtxRetain` instead, which is stable across versions and is what a caller sharing
+a device with torch or cupy wants anyway.
 
 Rust first because that is where the kernels this compiler exists for are being written.
 

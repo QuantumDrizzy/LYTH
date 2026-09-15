@@ -13,6 +13,8 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+mod bind_c;
+mod bind_py;
 mod bind_rust;
 mod manifest;
 use manifest::Manifest;
@@ -88,6 +90,14 @@ enum Cmd {
         /// call that aliases an input with an output (ADR-0016).
         #[arg(long, value_name = "RS")]
         bind_rust: Option<PathBuf>,
+        /// Also write a single-file C header: the embedded PTX, the launch facts and the cost
+        /// contract, over the CUDA driver API and nothing else (ADR-0016).
+        #[arg(long, value_name = "H")]
+        bind_c: Option<PathBuf>,
+        /// Also write a Python module: ctypes against the CUDA driver, no dependencies, the
+        /// PTX embedded. Takes device pointers, so it composes with torch and cupy (ADR-0016).
+        #[arg(long, value_name = "PY")]
+        bind_py: Option<PathBuf>,
         /// Elements the profiled launch will process, recorded in the evidence.
         #[arg(long, default_value_t = 1 << 20)]
         elements: u32,
@@ -165,6 +175,8 @@ fn main() -> ExitCode {
             evidence,
             manifest,
             bind_rust,
+            bind_c,
+            bind_py,
             elements,
             tol,
         } => cmd_build(
@@ -174,6 +186,8 @@ fn main() -> ExitCode {
             evidence.as_deref(),
             manifest.as_deref(),
             bind_rust.as_deref(),
+            bind_c.as_deref(),
+            bind_py.as_deref(),
             elements,
             tol,
         ),
@@ -356,6 +370,8 @@ fn cmd_build(
     evidence: Option<&Path>,
     manifest: Option<&Path>,
     bind_rust: Option<&Path>,
+    bind_c: Option<&Path>,
+    bind_py: Option<&Path>,
     elements: u32,
     tol: f64,
 ) -> ExitCode {
@@ -406,6 +422,30 @@ fn cmd_build(
             return ExitCode::from(EXIT_UNUSABLE);
         }
         println!("  wrote    {} (Rust binding over lyth-cuda)", p.display());
+    }
+    if let Some(p) = bind_c {
+        let name = file
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| file.display().to_string());
+        let code = bind_c::generate(&m, &module.ptx, &name);
+        if let Err(e) = std::fs::write(p, code) {
+            eprintln!("error: write {}: {e}", p.display());
+            return ExitCode::from(EXIT_UNUSABLE);
+        }
+        println!("  wrote    {} (C header over the driver API)", p.display());
+    }
+    if let Some(p) = bind_py {
+        let name = file
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| file.display().to_string());
+        let code = bind_py::generate(&m, &module.ptx, &name);
+        if let Err(e) = std::fs::write(p, code) {
+            eprintln!("error: write {}: {e}", p.display());
+            return ExitCode::from(EXIT_UNUSABLE);
+        }
+        println!("  wrote    {} (Python over ctypes)", p.display());
     }
     if let Some(p) = manifest {
         let json = match serde_json::to_string_pretty(&m) {

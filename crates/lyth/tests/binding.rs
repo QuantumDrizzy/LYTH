@@ -184,3 +184,69 @@ fn aliasing_an_input_with_an_output_does_not_compile() {
         "it failed, but not for the aliasing reason:\n{err}"
     );
 }
+
+/// The generated C and Python, pinned the same way the Rust binding is.
+///
+/// Neither can be compiled by `cargo test` without dragging in a C toolchain and cuda.h, so
+/// what is held here is that the generator has not changed its output. Both were compiled and
+/// run against the device by hand when they were written; ADR-0016 records how.
+#[test]
+fn the_checked_in_c_and_python_match_the_generator() {
+    for (flag, name) in [("--bind-c", "saxpy.h"), ("--bind-py", "saxpy.py")] {
+        let repo = repo();
+        let out = tempfile::NamedTempFile::new().expect("a temporary file");
+        let status = Command::new(env!("CARGO_BIN_EXE_lyth"))
+            .args([
+                "build",
+                repo.join("examples/saxpy.lyth").to_str().unwrap(),
+                "--machine",
+                repo.join("fixtures/machine/sm_120.json").to_str().unwrap(),
+                "-o",
+                if cfg!(windows) { "nul" } else { "/dev/null" },
+                flag,
+                out.path().to_str().unwrap(),
+            ])
+            .output()
+            .expect("the compiler should run");
+        assert!(status.status.success(), "{}", String::from_utf8_lossy(&status.stderr));
+
+        let fresh = std::fs::read_to_string(out.path()).unwrap();
+        let checked_in = std::fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/generated")
+                .join(name),
+        )
+        .unwrap();
+        assert_eq!(
+            fresh.replace("\r\n", "\n"),
+            checked_in.replace("\r\n", "\n"),
+            "tests/generated/{name} is stale; regenerate it"
+        );
+    }
+}
+
+#[test]
+fn the_generated_python_is_valid_python() {
+    // Cheap and toolchain-free: the interpreter parses it without importing it, so no driver
+    // is needed and a generator that emits a syntax error fails the suite rather than the user.
+    let file = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/generated/saxpy.py");
+    let out = match Command::new("python")
+        .args([
+            "-c",
+            "import sys; compile(open(sys.argv[1], encoding='utf-8').read(), sys.argv[1], 'exec')",
+            file.to_str().unwrap(),
+        ])
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("skipped: no python on PATH ({e})");
+            return;
+        }
+    };
+    assert!(
+        out.status.success(),
+        "the generated Python does not parse:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
