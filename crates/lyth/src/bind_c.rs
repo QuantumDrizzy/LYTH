@@ -222,7 +222,10 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
     w(&format!("unsigned int lyth_{k}_grid({extent_args})"));
     w("{");
     match &m.launch.grid {
-        crate::manifest::GridRule::Elementwise { .. } => {
+        crate::manifest::GridRule::Elementwise {
+            min_elements_per_thread,
+            ..
+        } => {
             // Not `n`: at rank 1 the extent is itself called `n`, and `unsigned int n = f(n)`
             // initialises the new local from its own indeterminate value. The compiler is
             // within its rights to do anything at all with that.
@@ -231,9 +234,20 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
             ));
             w("    unsigned int g;");
             w("    if (total == 0u) return 0u;");
-            w(&format!(
-                "    g = (total + LYTH_{guard}_BLOCK - 1u) / LYTH_{guard}_BLOCK;"
-            ));
+            if *min_elements_per_thread > 1 {
+                w("    /* Not one element per thread: this kernel reduces, and its block tree");
+                w("       would then run once per element. The grid-stride loop walks the rest.");
+                w("       The ceiling division is done in 64 bits: `total + per_block` overflows");
+                w("       an unsigned int at a full extent. */");
+                w(&format!(
+                    "    {{ unsigned long long per_block = (unsigned long long)LYTH_{guard}_BLOCK * {min_elements_per_thread}ull;"
+                ));
+                w("      g = (unsigned int)(((unsigned long long)total + per_block - 1ull) / per_block); }");
+            } else {
+                w(&format!(
+                    "    g = (total + LYTH_{guard}_BLOCK - 1u) / LYTH_{guard}_BLOCK;"
+                ));
+            }
             w("    if (g == 0u) g = 1u;");
             w(&format!(
                 "    if (g > LYTH_{guard}_MAX_GRID) g = LYTH_{guard}_MAX_GRID;"

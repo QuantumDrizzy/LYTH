@@ -89,6 +89,52 @@ def check(name, code):
         raise CudaError(f"{name} failed: {text} ({code})")
 
 
+# Compute capability this PTX targets, from `machine sm_120`.
+ARCH = (12, 0)
+
+# CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_{MAJOR,MINOR}
+_CC_MAJOR, _CC_MINOR = 75, 76
+
+
+def device_arch():
+    """Compute capability of the device the *current context* is on.
+
+    Not device 0. A caller with two GPUs, or one whose framework picked the second,
+    would otherwise be told about a device this kernel will never touch.
+    """
+    dev = ctypes.c_int()
+    check("cuCtxGetDevice", cuda.cuCtxGetDevice(ctypes.byref(dev)))
+    out = []
+    for attr in (_CC_MAJOR, _CC_MINOR):
+        v = ctypes.c_int()
+        check("cuDeviceGetAttribute",
+              cuda.cuDeviceGetAttribute(ctypes.byref(v), attr, dev))
+        out.append(v.value)
+    return tuple(out)
+
+
+def check_device():
+    """Refuse a device this PTX cannot run on; warn on one the contract is not about.
+
+    Returns the device's (major, minor). `Kernel()` calls this, so the check is not
+    something a caller has to remember.
+    """
+    got = device_arch()
+    if got < ARCH:
+        raise CudaError(
+            f"this PTX targets {MACHINE} (sm_{ARCH[0]}{ARCH[1]}) and the current"
+            f" context is on sm_{got[0]}{got[1]}, which cannot run it")
+    if got > ARCH:
+        import warnings
+        warnings.warn(
+            f"{KERNEL} will be JIT-compiled for sm_{got[0]}{got[1]}, but its"
+            f" contract -- {DERIVED_INTENSITY:.4f} flop/byte,"
+            f" {BYTES_PER_ELEMENT:.0f} B/element -- was derived on {MACHINE}."
+            " The kernel is correct; the cost model is about another machine.",
+            stacklevel=2)
+    return got
+
+
 def elements(n):
     """Elements the kernel walks. None if the extents overflow a 32-bit index."""
     return n
@@ -101,6 +147,27 @@ def grid(n):
         return None
     return min(max(-(-total // BLOCK), 1), MAX_GRID)
 
+def from_torch(t, count=None):
+    """Device pointer of a torch tensor, refusing what this kernel cannot address.
+
+    Optional, and the only part of this module that assumes anything about its
+    caller. `launch` takes plain integers; use this to get one that has been
+    checked. `count` is how many elements the launch will walk through the buffer.
+    """
+    if not t.is_cuda:
+        raise ValueError("not a CUDA tensor: the kernel takes a device pointer")
+    if not t.is_contiguous():
+        raise ValueError(
+            "not contiguous: this kernel addresses element i at base + i * 4 bytes,"
+            " so a strided view would be read as though it were packed")
+    if str(t.dtype) != "torch.float32":
+        raise ValueError(f"dtype is {t.dtype}; saxpy reads and writes float32")
+    if count is not None and t.numel() < count:
+        raise ValueError(
+            f"the tensor holds {t.numel()} elements and the launch walks {count}")
+    return t.data_ptr()
+
+
 
 class Kernel:
     """The loaded module and its entry point.
@@ -110,6 +177,7 @@ class Kernel:
     """
 
     def __init__(self):
+        check_device()
         self.module = ctypes.c_void_p()
         self.fn = ctypes.c_void_p()
         check("cuModuleLoadData", cuda.cuModuleLoadData(

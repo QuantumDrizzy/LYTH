@@ -17,6 +17,19 @@
 
 use crate::manifest::Manifest;
 
+/// `("sm_120")` -> `(12, 0)`, `("sm_86")` -> `(8, 6)`: the last digit is the minor version.
+///
+/// `None` for a machine name that is not `sm_<digits>`, in which case the binding simply does
+/// not carry a device check -- a wrong check is worse than none.
+fn arch_of(machine: &str) -> Option<(u32, u32)> {
+    let digits = machine.strip_prefix("sm_")?;
+    if digits.len() < 2 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let (major, minor) = digits.split_at(digits.len() - 1);
+    Some((major.parse().ok()?, minor.parse().ok()?))
+}
+
 pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
     let k = &m.kernel;
 
@@ -127,6 +140,59 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
     w("        raise CudaError(f\"{name} failed: {text} ({code})\")");
     w("");
     w("");
+    // The contract says which machine it was derived on, and nothing has ever checked that
+    // the machine in front of us is that one. The driver will JIT this PTX for a newer
+    // architecture and refuse an older one with an error that names no reason; neither case
+    // says anything about the cost model, which was measured on one device and travels as if
+    // it were universal. So: refuse below, warn above, be silent on a match.
+    if let Some((major, minor)) = arch_of(&m.contract.machine) {
+        w(&format!("# Compute capability this PTX targets, from `machine {}`.", m.contract.machine));
+        w(&format!("ARCH = ({major}, {minor})"));
+        w("");
+        w("# CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_{MAJOR,MINOR}");
+        w("_CC_MAJOR, _CC_MINOR = 75, 76");
+        w("");
+        w("");
+        w("def device_arch():");
+        w("    \"\"\"Compute capability of the device the *current context* is on.");
+        w("");
+        w("    Not device 0. A caller with two GPUs, or one whose framework picked the second,");
+        w("    would otherwise be told about a device this kernel will never touch.");
+        w("    \"\"\"");
+        w("    dev = ctypes.c_int()");
+        w("    check(\"cuCtxGetDevice\", cuda.cuCtxGetDevice(ctypes.byref(dev)))");
+        w("    out = []");
+        w("    for attr in (_CC_MAJOR, _CC_MINOR):");
+        w("        v = ctypes.c_int()");
+        w("        check(\"cuDeviceGetAttribute\",");
+        w("              cuda.cuDeviceGetAttribute(ctypes.byref(v), attr, dev))");
+        w("        out.append(v.value)");
+        w("    return tuple(out)");
+        w("");
+        w("");
+        w("def check_device():");
+        w("    \"\"\"Refuse a device this PTX cannot run on; warn on one the contract is not about.");
+        w("");
+        w("    Returns the device's (major, minor). `Kernel()` calls this, so the check is not");
+        w("    something a caller has to remember.");
+        w("    \"\"\"");
+        w("    got = device_arch()");
+        w("    if got < ARCH:");
+        w("        raise CudaError(");
+        w("            f\"this PTX targets {MACHINE} (sm_{ARCH[0]}{ARCH[1]}) and the current\"");
+        w("            f\" context is on sm_{got[0]}{got[1]}, which cannot run it\")");
+        w("    if got > ARCH:");
+        w("        import warnings");
+        w("        warnings.warn(");
+        w("            f\"{KERNEL} will be JIT-compiled for sm_{got[0]}{got[1]}, but its\"");
+        w("            f\" contract -- {DERIVED_INTENSITY:.4f} flop/byte,\"");
+        w("            f\" {BYTES_PER_ELEMENT:.0f} B/element -- was derived on {MACHINE}.\"");
+        w("            \" The kernel is correct; the cost model is about another machine.\",");
+        w("            stacklevel=2)");
+        w("    return got");
+        w("");
+        w("");
+    }
     w(&format!("def elements({extent_args}):"));
     w("    \"\"\"Elements the kernel walks. None if the extents overflow a 32-bit index.\"\"\"");
     if extents.len() <= 1 {
@@ -140,12 +206,36 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
     w("");
     w(&format!("def grid({extent_args}):"));
     match &m.launch.grid {
-        crate::manifest::GridRule::Elementwise { .. } => {
-            w("    \"\"\"Blocks the default launch uses: one element per thread, capped.\"\"\"");
+        crate::manifest::GridRule::Elementwise {
+            min_elements_per_thread,
+            ..
+        } => {
+            if *min_elements_per_thread > 1 {
+                w(&format!(
+                    "    \"\"\"Blocks the default launch uses: at least {min_elements_per_thread} elements per thread, capped."
+                ));
+                w("");
+                w("    Not one per thread. This kernel reduces, and at one element per thread its");
+                w("    shared-memory tree runs once per element: half the achievable bandwidth,");
+                w("    measured. The surplus elements are walked by the grid-stride loop.");
+                w("    \"\"\"");
+            } else {
+                w("    \"\"\"Blocks the default launch uses: one element per thread, capped.\"\"\"");
+            }
             w(&format!("    total = elements({extent_args})"));
             w("    if total is None:");
             w("        return None");
-            w("    return min(max(-(-total // BLOCK), 1), MAX_GRID)");
+            let per_block = if *min_elements_per_thread > 1 {
+                w(&format!(
+                    "    per_block = BLOCK * {min_elements_per_thread}"
+                ));
+                "per_block"
+            } else {
+                "BLOCK"
+            };
+            w(&format!(
+                "    return min(max(-(-total // {per_block}), 1), MAX_GRID)"
+            ));
         }
         crate::manifest::GridRule::Tiled { tile, extents } => {
             w("    \"\"\"Blocks the default launch uses: one per tile, not one per element.\"\"\"");
@@ -169,6 +259,39 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
         w(&format!("    return grid({extent_args})"));
         w("");
     }
+    // The third assertion. `launch` takes integers, so a transposed view, a strided slice or
+    // a float64 tensor all arrive as a number that is a valid device pointer and the kernel
+    // reads the right *count* of bytes from the wrong addresses -- a plausible wrong answer,
+    // which is the worst kind. This is the only place the tensor still exists to be asked.
+    //
+    // It touches no torch symbol and does not import it: the checks are attribute calls and a
+    // string compare, so the binding keeps its "imports on a bare interpreter" property.
+    if m.params.iter().any(|p| p.ty == "buf_f32") {
+        w("def from_torch(t, count=None):");
+        w("    \"\"\"Device pointer of a torch tensor, refusing what this kernel cannot address.");
+        w("");
+        w("    Optional, and the only part of this module that assumes anything about its");
+        w("    caller. `launch` takes plain integers; use this to get one that has been");
+        w("    checked. `count` is how many elements the launch will walk through the buffer.");
+        w("    \"\"\"");
+        w("    if not t.is_cuda:");
+        w("        raise ValueError(\"not a CUDA tensor: the kernel takes a device pointer\")");
+        w("    if not t.is_contiguous():");
+        w("        raise ValueError(");
+        w("            \"not contiguous: this kernel addresses element i at base + i * 4 bytes,\"");
+        w("            \" so a strided view would be read as though it were packed\")");
+        w("    if str(t.dtype) != \"torch.float32\":");
+        w(&format!(
+            "        raise ValueError(f\"dtype is {{t.dtype}}; {} reads and writes float32\")",
+            m.kernel
+        ));
+        w("    if count is not None and t.numel() < count:");
+        w("        raise ValueError(");
+        w("            f\"the tensor holds {t.numel()} elements and the launch walks {count}\")");
+        w("    return t.data_ptr()");
+        w("");
+        w("");
+    }
     w("");
     w("class Kernel:");
     w(&format!(
@@ -186,6 +309,9 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
     w("    \"\"\"");
     w("");
     w("    def __init__(self):");
+    if arch_of(&m.contract.machine).is_some() {
+        w("        check_device()");
+    }
     w("        self.module = ctypes.c_void_p()");
     w("        self.fn = ctypes.c_void_p()");
     w("        check(\"cuModuleLoadData\", cuda.cuModuleLoadData(");
@@ -237,5 +363,53 @@ mod tests {
         assert!(code.contains("ctypes.c_float(a)"), "{code}");
         assert!(code.contains("ctypes.c_uint64(x)"), "{code}");
         assert!(code.contains("ctypes.c_uint64(y)"), "{code}");
+    }
+}
+
+#[cfg(test)]
+mod defends_its_assumptions {
+    use super::*;
+    use crate::manifest::Manifest;
+    use lyth_lang::{ir::lower, parse::parse};
+
+    const SAXPY: &str = "machine sm_120\n\nkernel k(n: u32, a: f32, x: [f32; n], y: [f32; n])\n    intensity 0.1667\n    stream x : dram -> reg\n    stream y : dram -> reg, drain\n    at reg:\n        y = a * x + y\n";
+
+    #[test]
+    fn an_architecture_is_read_with_the_last_digit_as_the_minor() {
+        // sm_86 is 8.6 and sm_120 is 12.0. Splitting on length rather than on a fixed width is
+        // the whole of it, and getting it backwards would refuse every device it was built for.
+        assert_eq!(arch_of("sm_120"), Some((12, 0)));
+        assert_eq!(arch_of("sm_86"), Some((8, 6)));
+        assert_eq!(arch_of("sm_90"), Some((9, 0)));
+        // No check at all is better than a check derived from a name it does not understand.
+        assert_eq!(arch_of("sm_"), None);
+        assert_eq!(arch_of("sm_9"), None);
+        assert_eq!(arch_of("sm_90a"), None);
+        assert_eq!(arch_of("gfx1100"), None);
+    }
+
+    #[test]
+    fn the_binding_checks_the_device_before_it_loads_the_module() {
+        let unit = parse(SAXPY).unwrap();
+        let ir = lower(&unit, &unit.kernels[0]).unwrap();
+        let py = generate(&Manifest::of(&ir, None, 256, 1 << 20, vec![]), "// ptx", "k.lyth");
+        assert!(py.contains("ARCH = (12, 0)"), "{py}");
+        let init = py.find("def __init__").expect("a constructor");
+        let load = py.find("cuModuleLoadData").expect("a module load");
+        let check = py.find("        check_device()").expect("a device check");
+        assert!(init < check && check < load, "the check must precede the load");
+    }
+
+    #[test]
+    fn the_binding_offers_a_checked_way_to_get_a_pointer_out_of_a_tensor() {
+        // It must not import torch: the module's claim is that it runs on a bare interpreter.
+        let unit = parse(SAXPY).unwrap();
+        let ir = lower(&unit, &unit.kernels[0]).unwrap();
+        let py = generate(&Manifest::of(&ir, None, 256, 1 << 20, vec![]), "// ptx", "k.lyth");
+        assert!(py.contains("def from_torch(t, count=None):"), "{py}");
+        assert!(py.contains("t.is_contiguous()"), "{py}");
+        assert!(py.contains("torch.float32"), "{py}");
+        assert!(py.contains("t.numel() < count"), "{py}");
+        assert!(!py.contains("import torch"), "the binding must not depend on torch");
     }
 }

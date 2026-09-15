@@ -82,6 +82,84 @@ pub struct LaunchSpec {
 
 /// The grid the default launch uses.
 ///
+/// Elements a thread must be given before the launch shape stops being pathological.
+///
+/// One, for an elementwise kernel: ADR-0012 swept `saxpy` and one element per thread was
+/// fastest. Eight for a **reduction**, where the block's shared-memory tree runs once per
+/// thread and therefore, at one element per thread, once per element. Measured on `sum` at
+/// n = 2^26: 213.69 GB/s against 419.68.
+///
+/// This function is the single definition of that rule. `cmd_run` and the manifest both call
+/// it, because they did not: the run path was fixed and the manifest kept emitting the
+/// elementwise grid, so `lyth run` and the generated bindings disagreed about how to launch
+/// the same kernel. Found by using a binding in another repository, not by a test -- and the
+/// test below now asserts the two agree.
+/// The scalar parameters that are some buffer's extent, in declaration order -- which is the
+/// order a generated signature takes them in.
+pub fn extent_params(ir: &KernelIr) -> Vec<String> {
+    let named: std::collections::BTreeSet<&str> = ir
+        .params
+        .iter()
+        .flat_map(|p| p.shape.iter().map(String::as_str))
+        .collect();
+    ir.params
+        .iter()
+        .filter(|p| p.ty == Ty::U32 && named.contains(p.name.as_str()))
+        .map(|p| p.name.clone())
+        .collect()
+}
+
+impl GridRule {
+    /// The rule this kernel launches under. One definition, used by the manifest and by
+    /// `lyth run` alike.
+    pub fn of(ir: &KernelIr, extents: Vec<String>) -> Self {
+        match (&ir.tile, &ir.space) {
+            (Some(t), Some(sp)) => GridRule::Tiled {
+                tile: t.clone(),
+                extents: sp.extents.clone(),
+            },
+            _ => GridRule::Elementwise {
+                extents,
+                min_elements_per_thread: min_elements_per_thread(ir),
+            },
+        }
+    }
+
+    /// Blocks the default launch uses, evaluated.
+    ///
+    /// The three generators emit this arithmetic in Rust, C and Python, and `lyth run`
+    /// performs it here; this is the definition all four are checked against. `extent` maps
+    /// an extent parameter's name to its value, and any name it does not know is 1 -- which
+    /// is what `lyth run` does for an extent nobody passed.
+    pub fn blocks(&self, extent: &dyn Fn(&str) -> u32, block: u32, max_grid: u32) -> u32 {
+        let n = match self {
+            GridRule::Elementwise {
+                extents,
+                min_elements_per_thread,
+            } => {
+                let total: u64 = extents.iter().map(|e| extent(e) as u64).product();
+                // In 64 bits, because a rank-2 product of 32-bit extents does not fit in 32.
+                let per_block = (block as u64) * (*min_elements_per_thread as u64);
+                total.div_ceil(per_block.max(1))
+            }
+            GridRule::Tiled { tile, extents } => extents
+                .iter()
+                .zip(tile)
+                .map(|(e, t)| extent(e).div_ceil(*t) as u64)
+                .product(),
+        };
+        n.clamp(1, max_grid as u64) as u32
+    }
+}
+
+pub fn min_elements_per_thread(ir: &KernelIr) -> u32 {
+    if ir.reduction.is_some() {
+        8
+    } else {
+        1
+    }
+}
+
 /// `Elementwise` is one element per thread over the product of the extents. `Tiled` is one
 /// block per tile, which is a different formula and not a different constant -- a generator
 /// that hard-coded the first would launch a fraction of the work on a tiled kernel and
@@ -89,8 +167,20 @@ pub struct LaunchSpec {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GridRule {
-    /// `min(ceil(product(extents) / block), max_grid)`
-    Elementwise { extents: Vec<String> },
+    /// `min(ceil(product(extents) / (block * min_elements_per_thread)), max_grid)`
+    ///
+    /// `min_elements_per_thread` is 1 for an elementwise kernel, where ADR-0012 measured one
+    /// element per thread fastest, and 8 for a **reduction**, where it is twice as slow: the
+    /// block's shared-memory tree runs once per thread, so one element per thread runs it once
+    /// per element. Measured on `sum` at n = 2^26: 213.69 GB/s against 419.68.
+    ///
+    /// It is a field rather than a second variant because a generator that did not know about
+    /// it would silently emit the elementwise rule -- which is exactly what happened, and was
+    /// found by using the bindings rather than by a test.
+    Elementwise {
+        extents: Vec<String>,
+        min_elements_per_thread: u32,
+    },
     /// `product(ceil(extent[d] / tile[d]))`, one block per tile.
     Tiled { tile: Vec<u32>, extents: Vec<String> },
 }
@@ -159,13 +249,7 @@ impl Manifest {
             .iter()
             .flat_map(|p| p.shape.iter().map(String::as_str))
             .collect();
-        // Declaration order, which is the order a generated signature takes them in.
-        let extents: Vec<String> = ir
-            .params
-            .iter()
-            .filter(|p| p.ty == Ty::U32 && named.contains(p.name.as_str()))
-            .map(|p| p.name.clone())
-            .collect();
+        let extents = extent_params(ir);
 
         let params = ir
             .params
@@ -208,13 +292,7 @@ impl Manifest {
                     (None, true) => block * 4,
                     (None, false) => 0,
                 },
-                grid: match (&ir.tile, &ir.space) {
-                    (Some(t), Some(sp)) => GridRule::Tiled {
-                        tile: t.clone(),
-                        extents: sp.extents.clone(),
-                    },
-                    _ => GridRule::Elementwise { extents },
-                },
+                grid: GridRule::of(ir, extents),
                 max_grid,
                 predicted_bank_conflicts: ir
                     .shared
@@ -421,5 +499,79 @@ mod tiled {
             .map(|p| p.name.as_str())
             .collect();
         assert_eq!(names, vec!["rows", "cols"]);
+    }
+}
+
+#[cfg(test)]
+mod reduction_grid {
+    use super::*;
+    use lyth_lang::{ir::lower, parse::parse};
+
+    const SUM: &str = "machine sm_120
+
+kernel s(n: u32, x: [f32; n], partial: [f32; blocks])
+    intensity 0.25
+    stream x : dram -> reg
+    reduce sum v : reg -> smem -> dram into partial
+    at reg:
+        v = x
+";
+    const SAXPY: &str = "machine sm_120
+
+kernel k(n: u32, a: f32, x: [f32; n], y: [f32; n])
+    intensity 0.1667
+    stream x : dram -> reg
+    stream y : dram -> reg, drain
+    at reg:
+        y = a * x + y
+";
+
+    fn manifest(src: &str) -> Manifest {
+        let unit = parse(src).unwrap();
+        let ir = lower(&unit, &unit.kernels[0]).unwrap();
+        Manifest::of(&ir, None, 256, 1 << 20, vec![])
+    }
+
+    fn floor(m: &Manifest) -> u32 {
+        match &m.launch.grid {
+            GridRule::Elementwise {
+                min_elements_per_thread,
+                ..
+            } => *min_elements_per_thread,
+            other => panic!("expected an elementwise rule, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_reduction_does_not_publish_one_element_per_thread() {
+        // The defect this test exists for: `cmd_run` was fixed to amortise a reduction's block
+        // tree and the manifest was not, so `lyth run` and every generated binding launched the
+        // same kernel differently -- the bindings at half the achievable bandwidth. It was found
+        // by calling a binding from another repository, which is a worse place to find it.
+        assert_eq!(floor(&manifest(SUM)), 8);
+        assert_eq!(floor(&manifest(SAXPY)), 1, "an elementwise kernel is unchanged");
+    }
+
+    #[test]
+    fn the_published_rule_evaluates_to_what_lyth_run_launches() {
+        // Both call `GridRule::blocks`. This asserts the arithmetic itself, so a generator
+        // emitting the formula by hand has something to be compared against.
+        let n = 1u32 << 26;
+        let at = |v: u32| move |_: &str| v;
+        let sum = manifest(SUM);
+        let f = at(n);
+        assert_eq!(sum.launch.grid.blocks(&f, 256, 1 << 20), 32768);
+        let saxpy = manifest(SAXPY);
+        assert_eq!(saxpy.launch.grid.blocks(&f, 256, 1 << 20), 262144);
+    }
+
+    #[test]
+    fn the_grid_is_at_least_one_block_and_never_above_the_cap() {
+        let sum = manifest(SUM);
+        // Fewer elements than a single block amortises: still one block, not zero.
+        assert_eq!(sum.launch.grid.blocks(&|_| 1, 256, 1 << 20), 1);
+        assert_eq!(sum.launch.grid.blocks(&|_| 0, 256, 1 << 20), 1);
+        // And the cap binds before the extent does.
+        assert_eq!(sum.launch.grid.blocks(&|_| u32::MAX, 256, 64), 64);
     }
 }

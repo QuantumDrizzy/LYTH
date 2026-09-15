@@ -172,12 +172,34 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
     push(&mut out, "}");
     push(&mut out, "");
     match &m.launch.grid {
-        crate::manifest::GridRule::Elementwise { .. } => {
-            push(&mut out, "/// Blocks the default launch uses: one element per thread, capped.");
+        crate::manifest::GridRule::Elementwise {
+            min_elements_per_thread,
+            ..
+        } => {
+            if *min_elements_per_thread > 1 {
+                push(&mut out, &format!(
+                    "/// Blocks the default launch uses: at least {min_elements_per_thread} elements per thread, capped."
+                ));
+                push(&mut out, "///");
+                push(&mut out, "/// Not one per thread. This kernel reduces, and at one element per");
+                push(&mut out, "/// thread its shared-memory tree runs once per element: half the");
+                push(&mut out, "/// achievable bandwidth, measured.");
+            } else {
+                push(&mut out, "/// Blocks the default launch uses: one element per thread, capped.");
+            }
+            // `BLOCK` alone when the floor is one, so an elementwise binding is not made to
+            // read `BLOCK * 1`.
+            let per_block = if *min_elements_per_thread > 1 {
+                format!("(BLOCK * {min_elements_per_thread})")
+            } else {
+                "BLOCK".to_string()
+            };
             push(&mut out, &format!("pub fn grid({extent_args}) -> Option<u32> {{"));
             push(
                 &mut out,
-                &format!("    Some(elements({extent_pass})?.div_ceil(BLOCK).max(1).min(MAX_GRID))"),
+                &format!(
+                    "    Some(elements({extent_pass})?.div_ceil({per_block}).max(1).min(MAX_GRID))"
+                ),
             );
             push(&mut out, "}");
         }
@@ -335,5 +357,59 @@ mod tiled {
         assert!(py.contains("SHARED_BYTES = 4224"), "{py}");
         // And the block is the tile, not the compiler's 256.
         assert!(rs.contains("pub const BLOCK: u32 = 1024;"), "{rs}");
+    }
+}
+
+#[cfg(test)]
+mod reduction_grid {
+    use super::*;
+    use crate::manifest::Manifest;
+    use lyth_lang::{ir::lower, parse::parse};
+
+    const SUM: &str = "machine sm_120
+
+kernel s(n: u32, x: [f32; n], partial: [f32; blocks])
+    intensity 0.25
+    stream x : dram -> reg
+    reduce sum v : reg -> smem -> dram into partial
+    at reg:
+        v = x
+";
+    const SAXPY: &str = "machine sm_120
+
+kernel k(n: u32, a: f32, x: [f32; n], y: [f32; n])
+    intensity 0.1667
+    stream x : dram -> reg
+    stream y : dram -> reg, drain
+    at reg:
+        y = a * x + y
+";
+
+    fn all_three(src: &str) -> (String, String, String) {
+        let unit = parse(src).unwrap();
+        let ir = lower(&unit, &unit.kernels[0]).unwrap();
+        let m = Manifest::of(&ir, None, 256, 1 << 20, vec![]);
+        (
+            generate(&m, "// ptx", "k.lyth"),
+            crate::bind_c::generate(&m, "// ptx", "k.lyth"),
+            crate::bind_py::generate(&m, "// ptx", "k.lyth"),
+        )
+    }
+
+    #[test]
+    fn every_binding_amortises_a_reduction_and_none_amortises_an_elementwise_kernel() {
+        // The defect: `lyth run` was fixed to give a reduction eight elements per thread and
+        // the generators went on emitting one, so a caller of the binding launched the same
+        // kernel at half the achievable bandwidth. Three languages, one rule, asserted here
+        // because the divergence was found by running a binding in another repository.
+        let (rs, c, py) = all_three(SUM);
+        assert!(rs.contains("div_ceil((BLOCK * 8))"), "{rs}");
+        assert!(c.contains("LYTH_S_BLOCK * 8ull"), "{c}");
+        assert!(py.contains("per_block = BLOCK * 8"), "{py}");
+
+        let (rs, c, py) = all_three(SAXPY);
+        assert!(rs.contains("div_ceil(BLOCK)") && !rs.contains("BLOCK * "), "{rs}");
+        assert!(c.contains("(total + LYTH_K_BLOCK - 1u) / LYTH_K_BLOCK"), "{c}");
+        assert!(py.contains("-(-total // BLOCK)") && !py.contains("per_block"), "{py}");
     }
 }

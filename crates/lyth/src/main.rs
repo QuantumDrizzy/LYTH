@@ -20,7 +20,7 @@ mod manifest;
 use manifest::Manifest;
 use serde::Deserialize;
 
-use lyth_cuda::{grid_for, median_and_spread, time_launches, Arg, Context, Launch};
+use lyth_cuda::{median_and_spread, time_launches, Arg, Context, Launch};
 use lyth_lang::ast::{ReduceOp, Ty};
 use lyth_lang::eval::{eval_with_launch, Inputs};
 use lyth_lang::{check_intensity, ir, parse, KernelIr, Ridge};
@@ -708,22 +708,16 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
     // at grid 36864. Every grid from 144 to 36864 lands between 387 and 420, so the plateau is
     // wide and only the extreme collapses. Eight elements per thread is inside it with room on
     // both sides, and is a floor rather than a tuned peak.
-    const REDUCTION_MIN_ELEMENTS_PER_THREAD: u32 = 8;
-    let want = match (&ir.tile, &ir.space) {
-        (Some(t), Some(sp)) => sp
-            .extents
-            .iter()
-            .zip(t)
-            .map(|(e, d)| scalars.get(e).map(|v| *v as u32).unwrap_or(1).div_ceil(*d))
-            .product::<u32>()
-            .max(1),
-        _ if ir.reduction.is_some() => {
-            let one_per_thread = grid_for(n, block);
-            let amortised = grid_for(n, block.saturating_mul(REDUCTION_MIN_ELEMENTS_PER_THREAD));
-            one_per_thread.min(amortised).max(1)
-        }
-        _ => grid_for(n, block),
-    };
+    // The rule lives in `manifest`, evaluated by the same code the manifest publishes, so the
+    // generated bindings cannot drift from what `lyth run` does. They already had once: the
+    // reduction grid was fixed here and the manifest went on emitting the elementwise rule,
+    // which a caller in another repository then launched at half the achievable bandwidth.
+    let rule = crate::manifest::GridRule::of(ir, crate::manifest::extent_params(ir));
+    let want = rule.blocks(
+        &|e| scalars.get(e).map(|v| *v as u32).unwrap_or(1),
+        block,
+        MAX_GRID,
+    );
     let grid = grid_arg.unwrap_or_else(|| want.clamp(1, MAX_GRID));
     let per_thread = (n as f64 / (grid as f64 * block as f64)).ceil() as u64;
     println!(

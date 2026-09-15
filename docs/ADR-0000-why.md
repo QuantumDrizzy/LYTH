@@ -122,6 +122,14 @@ new measurement, not an inference.** The fix for the grid default is written tha
 element per thread for elementwise, grid-stride for reductions, each confirmed on both kernels
 before either was changed — rather than as a special case for `sum`.
 
+**Postscript, the same day.** That fix was applied to `cmd_run` and not to the manifest, so the
+generated bindings went on publishing the launch shape that had just been measured at half the
+bandwidth. `lyth run` and a caller of the binding launched the same PTX differently for twenty
+minutes. It is the same shape a third time — two pieces of code stating one rule, one of them
+right — and the correction is in ADR-0019: **a fix belongs where the rule lives, not where the
+symptom appeared.** It was found by calling a binding from another repository, which is the
+only place any of this has ever been caught.
+
 ## Why this is written down late, and kept
 
 Every ADR after this one derives a number and then measures it. The reason the numbers are bytes
