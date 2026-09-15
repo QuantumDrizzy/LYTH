@@ -1,6 +1,6 @@
 # ADR-0018 — Contraction, where the cost model stops being a number
 
-**Status:** Proposed — steps 1, 2 and 3 built
+**Status:** Accepted — built and measured
 **Date:** 2026-09-16
 **Depends on:** ADR-0000 (why), ADR-0017 (the tile), ADR-0015 (shape)
 
@@ -452,6 +452,92 @@ It is not fast, and no timing appears above. Intensity 8 against a ridge of 42.9
 memory-bound by construction (claim 3), and thread coarsening is the way out and the next ADR.
 Step 5 is the `--ncu` traffic measurement: 1028 bytes per output at `k = 4096`, **as an L2
 claim**, with DRAM expected lower.
+
+
+## Step 5, as measured
+
+`tools/contraction_traffic.py`. The derived figure is read out of the manifest the compiler
+emitted, so the number under test comes from the compiler that generated the kernel and no
+human writes the model — ADR-0009's rule, applied to an expression instead of a constant.
+
+| tile | `m=n=k` | derived | L2/output | vs model | L1 hit | DRAM/output | DRAM vs A+B |
+|---|---|---|---|---|---|---|---|
+| 32 | 512 | 132.0 | 132.21 | **+0.16%** | 0.37% | 8.02 | 1.00x |
+| 32 | 1024 | 260.0 | 260.91 | **+0.35%** | 0.00% | 8.04 | 1.00x |
+| 16 | 512 | 260.0 | 252.56 | −2.86% | 2.95% | 8.02 | 1.00x |
+| 16 | 1024 | 516.0 | 487.84 | −5.46% | 5.51% | 8.01 | 1.00x |
+| 16 | 2048 | 1028.0 | 1025.21 | −0.27% | 0.54% | — | — |
+
+### Claim 1 holds, and it is now a measurement rather than a derivation
+
+The same body, the same buffers, the same extents, **one number changed in a declaration**:
+
+* at 512, `tile 32` moves 132.21 bytes per output and `tile 16` moves 252.56 — a factor of
+  **1.91**;
+* at 1024, 260.91 against 487.84 — **1.87**.
+
+The traffic tracks the tile. That is the sentence ADR-0000 exists for: the quantity which
+determines performance is a property of the declared schedule, and here it is one a profiler
+agrees with.
+
+### Claim 2 holds at `tile 32` without needing the tolerance it was given
+
+**+0.16% and +0.35%** against a tolerance of 2%. The read-for-ownership excess that spoiled the
+untiled transpose's prediction does not appear, for the reason pre-registered: a matmul writes
+`C` once and coalesced.
+
+### The finding: what the model is *about* got sharper
+
+At `tile 16` the measurement is **2.86% and 5.46% below** the derivation. Not noise, and not in
+the forgiving direction by luck — the L1 global-load hit rate at those two points is **2.95% and
+5.51%**.
+
+> **The derived figure is what the *kernel* asks for. `lts__t_bytes` is what the *L1* asks the
+> L2 for. They differ by exactly what the L1 served.**
+
+Adjusting for it: **+0.53%, +0.35%, +0.09%, +0.05%, +0.27%** across the five points — every
+one inside 0.6%, on a model that spans a factor of eight in traffic.
+
+The last row is the one that makes this a relation rather than a correlation, because it moves
+the **other way**. At 2048 the L1 hit rate collapses from 5.51% to 0.54% — the working set has
+outgrown what an L1 can hold across blocks — and the disagreement collapses with it, from
+−5.46% to −0.27%. The gap follows the hit rate up and back down across a tenfold change in it.
+
+Every kernel in this language before a contraction had an L1 hit rate of zero. They stream: no
+block ever re-reads data another block read, so nothing is ever in L1 to hit. A tiled
+contraction is the first kernel here whose blocks share operands, and the first where the two
+quantities are different numbers. The distinction was always there and never had to be made.
+
+That is a refinement of ADR-0015's claim rather than a contradiction of it. The sector model was
+measured exact at the L1-to-L2 interface on kernels where the L1 served nothing. It still is;
+the interface has just turned out to have a cache in front of it that can matter.
+
+### DRAM, pre-registered as lower and measured lower
+
+**8.0 bytes per output at every point, which is 1.00x the A+B floor**: the schedule reads each
+input matrix exactly once from DRAM and the L2 serves every re-read. Against 260 bytes per
+output at L2, DRAM is **32x lower**.
+
+`C` never reaches DRAM at all within the launch — 5,632 bytes written against 4 MB — because it
+fits in the 34 MB L2, which is the [KNOWN LIMIT] ADR-0015 already recorded.
+
+Writing "17.25 GB of DRAM" would have been the tidy sentence, and it would have been wrong by a
+factor of 32 in a direction that had already been measured once.
+
+### A defect in the instrument, found by the instrument
+
+The first version of `contraction_traffic.py` compared `max(excess)` and printed
+`HOLDS: the worst overshoot is +0.01%` while sitting on a **−5.37% undershoot** in the row
+below. A model that over-states traffic is safer than one that under-states it and is exactly as
+wrong. It now compares `abs`, and the docstring says why — ADR-0015's own falsification table
+recorded the DRAM figure as wrong in *both* directions, so the one-sided check was not even
+consistent with the document it was built on.
+
+### What is still not claimed
+
+No timing. Intensity 8 against a ridge of 42.9 makes this memory-bound by construction (claim 3)
+and the way out is thread coarsening, which is the next ADR. The numbers above say the compiler
+knows what the kernel moves; they say nothing about how fast it moves it.
 
 ## Build sequence
 
