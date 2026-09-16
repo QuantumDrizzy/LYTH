@@ -11,28 +11,41 @@ use crate::ir::KernelIr;
 /// not depend on `lyth-probe`: the front end has no business knowing how machines are stored.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Ridge {
-    pub peak_tflops: f64,
-    pub bandwidth_gbs: f64,
+    /// FLOPs the machine retires per unit of **its own** time.
+    ///
+    /// `15.30e12` on `sm_120`, where the unit is a second. `14.21` on `unibit`, where it is a
+    /// cycle -- that machine has no clock at all (ADR-0025): `src/cpu.rs` charges one cycle
+    /// per instruction and there is no frequency anywhere in it. Inventing a megahertz so the
+    /// number could be quoted in TFLOP/s would be a datasheet with extra steps, which is what
+    /// `fixtures/machine/sm_120.json` has warned against since it was written.
+    pub flops_per_unit: f64,
+    /// Bytes the deepest declared level moves per unit of the same time.
+    pub bytes_per_unit: f64,
+    /// What that unit is called, for printing. `"s"` or `"cycle"`.
+    ///
+    /// The ratio `flops_per_unit / bytes_per_unit` is a flop/byte either way, which is why the
+    /// ridge, the regime and every ceiling below are unit-agnostic and only the label changes.
+    pub unit: &'static str,
     /// Shared-memory accesses per second, in billions, at thread granularity.
     ///
     /// **Not a bandwidth, and the distinction is measured rather than stylistic** (ADR-0022).
     /// A warp whose lanes all read one address moves 4 useful bytes; a warp reading 32
     /// consecutive floats moves 128. `tools/shared_probe.py` clocked both at 1530 G
     /// accesses/s, agreeing to 0.2% while their payloads differed by 32x -- so the pipe is
-    /// priced in accesses and a `bandwidth_gbs` for this level would be right for one pattern
+    /// priced in accesses and a bandwidth for this level would be right for one pattern
     /// and wrong by 32x for the other. The matmul that forced this ADR uses both, in the same
     /// instruction pair.
     ///
     /// `None` when the machine file predates the probe, and then no shared ceiling is offered
     /// -- a missing rate must not become a rate of zero, which would make every staged kernel
     /// infinitely slow.
-    pub smem_accesses_gps: Option<f64>,
+    pub smem_accesses_per_unit: Option<f64>,
 }
 
 impl Ridge {
     /// FLOPs per byte at which compute and memory are balanced on this machine.
     pub fn flops_per_byte(&self) -> f64 {
-        self.peak_tflops * 1e3 / self.bandwidth_gbs
+        self.flops_per_unit / self.bytes_per_unit
     }
 }
 
@@ -109,6 +122,12 @@ pub struct IntensityReport {
     /// caller, because the caller that redoes the arithmetic is the caller that gets it wrong
     /// once the definition moves.
     pub ceiling_peak_fraction: Option<f64>,
+    /// What this machine keeps time in: `"s"` or `"cycle"` (ADR-0025).
+    ///
+    /// Carried on the report so a caller prints the machine's own unit rather than assuming
+    /// seconds. A ceiling quoted in TFLOP/s on a machine with no clock is a number about
+    /// nothing.
+    pub unit: &'static str,
     /// The contracted extent every figure in `ceilings` is *per unit of*, when there is one.
     ///
     /// A matmul's `0.25 byte/element` is `0.25 * k` bytes, and a line that said `byte/element`
@@ -156,14 +175,14 @@ pub fn check_intensity(
                 continue;
             }
             let seconds = match lc.level {
-                crate::ast::Level::Dram => Some(units / (r.bandwidth_gbs * 1e9)),
+                crate::ast::Level::Dram => Some(units / r.bytes_per_unit),
                 // Every shared access is one f32 in this language, so bytes over four is
                 // accesses. Reads and writes both cross the pipe, and both are counted: the
                 // probe measured loads, and a store is not free because nobody pointed a
                 // counter at it.
                 crate::ast::Level::Smem => r
-                    .smem_accesses_gps
-                    .map(|rate| (units / 4.0) / (rate * 1e9)),
+                    .smem_accesses_per_unit
+                    .map(|rate| (units / 4.0) / rate),
                 _ => None,
             };
             if let Some(seconds) = seconds {
@@ -180,6 +199,33 @@ pub fn check_intensity(
             }
         }
     }
+    // **Compute is a candidate too**, and leaving it out was a bug that only a second machine
+    // could expose. ADR-0022 built the ceiling as a minimum over *memory* levels, which was
+    // invisible on `sm_120` because the densest kernel this language can write is 16 flop/byte
+    // against a ridge of 36.9 -- every kernel was memory-bound, so the memory answer was
+    // always the small one.
+    //
+    // `unibit`'s ridge is **0.4999**, so a matmul at 8 flop/byte sits sixteen times past it
+    // and the memory ceiling came out at **1600% of the machine's peak FLOPS**. A ceiling
+    // above peak is not a tight bound that happens to be large; it is not a bound.
+    //
+    // A roofline has two sides. This is the other one, expressed as a level so the same
+    // `max_by` picks it: you cannot retire more flops per unit of time than the machine
+    // retires, whatever the memory does.
+    if let Some(r) = ridge {
+        let f = match &ir.cost.contracted {
+            Some(c) => c.flops_per_extent,
+            None => ir.cost.flops_per_element().unwrap_or(0.0),
+        };
+        if f > 0.0 && r.flops_per_unit > 0.0 {
+            ceilings.push(LevelCeiling {
+                level: crate::ast::Level::Reg,
+                units: f,
+                seconds: f / r.flops_per_unit,
+            });
+        }
+    }
+
     // Slowest wins. `partial_cmp` cannot fail here -- every `seconds` above is a positive
     // finite quotient of two positive finite numbers.
     let binding = ceilings
@@ -210,7 +256,7 @@ pub fn check_intensity(
         peak_flops_fraction: ridge.map(|r| {
             // At this intensity the kernel is limited by bandwidth; the flops it can retire
             // per second is bandwidth x intensity, as a fraction of peak.
-            (r.bandwidth_gbs * derived) / (r.peak_tflops * 1e3)
+            (r.bytes_per_unit * derived) / r.flops_per_unit
         }),
         // A memory-bound kernel saturates bandwidth by definition; report it as such rather
         // than pretending a number was measured.
@@ -225,7 +271,8 @@ pub fn check_intensity(
         ceiling_flops,
         ceiling_peak_fraction: ceiling_flops
             .zip(ridge)
-            .map(|(f, r)| f / (r.peak_tflops * 1e12)),
+            .map(|(f, r)| f / r.flops_per_unit),
+        unit: ridge.map(|r| r.unit).unwrap_or("s"),
         per_extent: ir.cost.contracted.as_ref().map(|c| c.extent.clone()),
     };
 
@@ -301,11 +348,12 @@ mod tests {
     // of the figure. Every `% of peak` in the project inherited it, which is how `saxpy` came
     // to report 112% of a peak it cannot exceed. See ADR-0004.
     const SM_120: Ridge = Ridge {
-        peak_tflops: 15.30,
-        bandwidth_gbs: 414.51,
+        flops_per_unit: 15.30e12,
+        bytes_per_unit: 414.51e9,
+        unit: "s",
         // tools/shared_probe.py, ADR-0022 step 1: 1530.0 G thread-accesses/s, 0.3% spread
         // across two block sizes and two access patterns whose payloads differ by 32x.
-        smem_accesses_gps: Some(1530.0),
+        smem_accesses_per_unit: Some(1530.0e9),
     };
 
     #[test]

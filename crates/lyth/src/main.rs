@@ -187,6 +187,17 @@ struct Machine {
     levels: Vec<MachineLevel>,
     #[serde(default)]
     peak_tflops: Option<f64>,
+    /// FLOPs retired per cycle, on a machine that has no clock.
+    ///
+    /// `unibit` charges one cycle per instruction and names no frequency, so `peak_tflops` has
+    /// nothing to be per. A machine file declares one or the other and `ridge()` refuses to
+    /// guess which -- see ADR-0025.
+    #[serde(default)]
+    flops_per_cycle: Option<f64>,
+    /// `"s"` or `"cycle"`. Defaults to seconds, which is what every machine file written
+    /// before ADR-0025 means.
+    #[serde(default)]
+    time_unit: Option<String>,
     /// What one block may ask for. `None` when the machine file predates these fields, and
     /// the check is then skipped -- a missing limit must not become a limit of zero.
     #[serde(default)]
@@ -201,6 +212,9 @@ struct Machine {
 struct MachineLevel {
     name: String,
     bandwidth_gbs: f64,
+    /// Bytes this level moves per cycle, on a machine measured in cycles. See `flops_per_cycle`.
+    #[serde(default)]
+    bytes_per_cycle: Option<f64>,
     /// Accesses per second, in billions, where this level is priced in accesses rather than
     /// bytes. `None` on every level that is not `smem`, and on an `smem` written before
     /// ADR-0022's probe -- in which case no shared ceiling is offered at all, because a
@@ -210,17 +224,65 @@ struct MachineLevel {
 }
 
 impl Machine {
+    /// The ridge, in whatever unit this machine keeps time in.
+    ///
+    /// Two shapes of machine file, and the choice is the file's rather than a default:
+    ///
+    /// * **clocked** -- `peak_tflops` and a `dram` level with `bandwidth_gbs`. Everything
+    ///   before ADR-0025.
+    /// * **cycle-counted** -- `flops_per_cycle` and a `mem` level with `bytes_per_cycle`.
+    ///   `unibit` has no frequency anywhere in it, so a rate per second would have to be
+    ///   invented, and an invented number in a file whose first line says EVERY NUMBER HERE IS
+    ///   MEASURED is worse than no number.
+    ///
+    /// The ratio is a flop/byte either way, so the ridge, the regime and every ceiling are
+    /// unit-agnostic and only the label changes.
     fn ridge(&self) -> Option<Ridge> {
-        let dram = self.levels.iter().find(|l| l.name == "dram")?;
-        Some(Ridge {
-            peak_tflops: self.peak_tflops?,
-            bandwidth_gbs: dram.bandwidth_gbs,
-            smem_accesses_gps: self
-                .levels
-                .iter()
-                .find(|l| l.name == "smem")
-                .and_then(|l| l.accesses_gps),
-        })
+        // The deepest level a machine names: `dram` on a GPU, `mem` on a machine with no
+        // cache hierarchy to have a bottom of.
+        let deep = self
+            .levels
+            .iter()
+            .find(|l| l.name == "dram" || l.name == "mem")?;
+        let smem = self
+            .levels
+            .iter()
+            .find(|l| l.name == "smem")
+            .and_then(|l| l.accesses_gps);
+
+        // A declared unit that the data contradicts is refused rather than ignored. This is
+        // the same rule the language applies to `intensity`: a file may say what it is, and
+        // then it has to be it. `time_unit: "cycle"` with no `bytes_per_cycle` anywhere is a
+        // machine file whose author changed their mind halfway.
+        if let Some(u) = self.time_unit.as_deref() {
+            let cycles = self.flops_per_cycle.is_some() && deep.bytes_per_cycle.is_some();
+            if (u == "cycle") != cycles {
+                eprintln!(
+                    "error[machine]: `{}` declares time_unit \"{u}\" but {} the per-cycle                      rates that go with it",
+                    self.id,
+                    if cycles { "carries" } else { "does not carry" }
+                );
+                return None;
+            }
+        }
+
+        match (self.peak_tflops, self.flops_per_cycle, deep.bytes_per_cycle) {
+            // Cycle-counted. Checked first, because a file that declares both is a file whose
+            // author has not decided, and the cycle figures are the measured ones there.
+            (_, Some(flops), Some(bytes)) => Some(Ridge {
+                flops_per_unit: flops,
+                bytes_per_unit: bytes,
+                unit: "cycle",
+                smem_accesses_per_unit: smem,
+            }),
+            (Some(tflops), _, _) => Some(Ridge {
+                flops_per_unit: tflops * 1e12,
+                bytes_per_unit: deep.bandwidth_gbs * 1e9,
+                unit: "s",
+                smem_accesses_per_unit: smem.map(|g| g * 1e9),
+            }),
+            _ => None,
+        }
     }
 }
 
@@ -525,8 +587,12 @@ fn print_ceiling(report: &lyth_lang::check::IntensityReport) {
         return;
     };
 
+    // What one unit of this level's candidate is counted in. Three answers, because a
+    // roofline has three kinds of limit and calling them all bytes is how ADR-0022 ended up
+    // with a shared level priced in the wrong currency.
     let unit = |c: &lyth_lang::check::LevelCeiling| match c.level {
         lyth_lang::ast::Level::Smem => "access",
+        lyth_lang::ast::Level::Reg => "flop",
         _ => "byte",
     };
     match report.ceiling_flops {
@@ -536,9 +602,16 @@ fn print_ceiling(report: &lyth_lang::check::IntensityReport) {
                 .map(|f| format!(", {:.2}% of peak FLOPS", f * 100.0))
                 .unwrap_or_default();
             println!(
-                "  ceiling  {} binds — {:.2} TFLOP/s{of_peak}",
+                "  ceiling  {} binds — {}{of_peak}",
                 binding.level.name(),
-                flops / 1e12,
+                // A machine with no clock has no TFLOP/s. `unibit` counts cycles, so its
+                // ceiling is flop/cycle and saying otherwise would invent a frequency
+                // (ADR-0025).
+                if report.unit == "cycle" {
+                    format!("{flops:.3} flop/cycle")
+                } else {
+                    format!("{:.2} TFLOP/s", flops / 1e12)
+                },
             );
         }
         None => println!(
@@ -560,23 +633,32 @@ fn print_ceiling(report: &lyth_lang::check::IntensityReport) {
     for c in &report.ceilings {
         let mark = if c.level == binding.level { "*" } else { " " };
         println!(
-            "         {mark} {:<5} {:>9.4} {}{per}, {:.3} ns per 1e6 of them",
+            "         {mark} {:<5} {:>9.4} {}{per}, {}",
             c.level.name(),
             c.units,
             unit(c),
-            c.seconds * 1e6 * 1e9,
+            if report.unit == "cycle" {
+                format!("{:.3} cycles per 1e6 of them", c.seconds * 1e6)
+            } else {
+                format!("{:.3} ns per 1e6 of them", c.seconds * 1e6 * 1e9)
+            },
         );
     }
     if report.ceilings.len() > 1 {
-        let slowest = binding.seconds;
-        let fastest = report
-            .ceilings
-            .iter()
-            .map(|c| c.seconds)
-            .fold(f64::INFINITY, f64::min);
+        // The binder against the **runner-up**, not against the most generous candidate.
+        //
+        // With two levels those were the same number. Adding compute as a third (ADR-0025)
+        // made "slowest over fastest" answer a question nobody asked: on a memory-bound
+        // matmul the compute candidate is the fastest of the three by a mile, and quoting
+        // 10.31x says nothing about whether naming `smem` rather than `dram` mattered. The
+        // runner-up is what says that: close means the choice barely matters, far means it
+        // decides the answer.
+        let mut times: Vec<f64> = report.ceilings.iter().map(|c| c.seconds).collect();
+        times.sort_by(|a, b| a.partial_cmp(b).expect("finite"));
+        let runner_up = times[times.len() - 2];
         println!(
-            "           the two disagree by {:.2}x, so which one is quoted is not a detail",
-            slowest / fastest
+            "           the next candidate is {:.2}x faster, so which one binds is not a detail",
+            binding.seconds / runner_up
         );
     }
 }

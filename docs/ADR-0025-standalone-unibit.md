@@ -1,6 +1,6 @@
 # ADR-0025 — Standalone: a second target, and the instruction that is missing
 
-**Status:** Proposed
+**Status:** Proposed — steps 0 and 1 built
 **Date:** 2026-09-16
 **Depends on:** ADR-0022 (the level that binds), ADR-0019 (the dogfood), ADR-0000 (why)
 
@@ -94,6 +94,67 @@ model that matched `ncu` to ±0.80% on one device and matches a different machin
 on another is a much stronger claim than either alone, because the two have almost nothing in
 common except the derivation.
 
+## Step 1, as measured — and the bug only a second machine could show
+
+`tools/unibit_probe.py`, applying `sm_120.json`'s own first line to the second machine:
+
+> EVERY NUMBER HERE IS MEASURED ON THIS MACHINE, NOT A DATASHEET
+
+| | measured | this loop's limit | loop-free |
+|---|---|---|---|
+| memory, `LQ` | **28.43 bytes/cycle** | 28.44 | 32 |
+| arithmetic, `VFMA` | **14.21 flops/cycle** | 14.22 | 16 |
+| **ridge** | **0.4999 flop/byte** | | |
+
+Both within 0.07% of the derivation, which is what a deterministic emulator gives: there is no
+variance to average out, so the probe confirms the accounting rather than discovering a rate.
+
+### The unit is a cycle, and pretending otherwise would have been a datasheet
+
+Unibit has **no clock**. `src/cpu.rs` charges one cycle per instruction, three more for a
+division, three for a mispredicted branch, and names no frequency anywhere. So `bandwidth_gbs`
+is meaningless for it — the same shape of error ADR-0022 caught when the shared pipe turned out
+to want accesses per second rather than bytes per second.
+
+`Ridge` now carries `flops_per_unit`, `bytes_per_unit` and a `unit` label. The ratio is a
+flop/byte either way, so the ridge, the regime and every ceiling are unit-agnostic and only the
+printing changes: TFLOP/s and nanoseconds on a clocked device, flop/cycle and cycles on one
+without. And a machine file that **declares** `time_unit: "cycle"` without carrying per-cycle
+rates is refused, because a declaration nothing checks is a comment.
+
+### The regime flips, which is what a second machine is for
+
+| | `sm_120` | `unibit` |
+|---|---|---|
+| ridge | 36.9 flop/byte | **0.4999** |
+| `saxpy`, 0.167 flop/byte | memory-bound | memory-bound |
+| `sum`, 0.25 | memory-bound | **near the ridge** |
+| `matmul`, 8.0 | **memory-bound**, `smem` binds | **compute-bound**, `reg` binds |
+
+Same source, same derivation, opposite answer — because the machines are a factor of 74 apart.
+
+### And it found a missing side of the roofline
+
+The first run of the matmul on `unibit` printed:
+
+```
+ceiling  dram binds — 227.407 flop/cycle, 1600.34% of peak FLOPS
+```
+
+**A ceiling at sixteen times the machine's peak.** ADR-0022 built the ceiling as a minimum over
+*memory* levels and never compared against compute, and on `sm_120` that was invisible: the
+densest kernel this language can write is 16 flop/byte against a ridge of 36.9, so nothing had
+ever crossed it and the memory answer was always the small one.
+
+A roofline has two sides. The compute side is now a candidate like any other — you cannot retire
+more flops per unit of time than the machine retires — and the matmul on `unibit` reports
+**exactly 100% of peak**, which is what a compute-bound ceiling is.
+
+One consequence worth recording: with three candidates, "slowest over fastest" stopped being a
+useful spread. On a memory-bound matmul the compute candidate is the fastest of the three by a
+mile, and quoting `10.31x` answers a question nobody asked. The line now compares the binder
+against the **runner-up**, which restores the 2.24x that was meaningful and keeps meaning it.
+
 ## What this does not give you
 
 Stated plainly, because the complaint deserves an honest answer rather than a hopeful one.
@@ -114,8 +175,8 @@ then `unibit run main.ubo`, with no other language anywhere in the workflow.**
 
 | step | where | |
 |---|---|---|
-| **0** | **Unibit** | `VFADD`, `VFMUL`, `VFMA` over `.w` as f32: alu, assembler, encode/decode, tests |
-| 1 | LYTH | a `unibit` machine file — levels, widths, rates, from Unibit's own cost model |
+| **0** | **Unibit** | **done — six instructions, 5 tests, `saxpy_f32.uasm` runs on the emulator** |
+| **1** | **LYTH** | **done — 28.43 B/cycle, 14.21 flop/cycle, ridge 0.4999; and it found the missing compute ceiling** |
 | 2 | LYTH | `lyth-uasm`: emit a kernel body as Unibit assembly, checked against the emulator |
 | 3 | LYTH | `space` as a bounded lane loop; `reduce` onto `VREDUCE` |
 | 4 | LYTH | a program: `_start`, declared buffers, `ecall` I/O, and `main.lyth` -> `main.ubo` |

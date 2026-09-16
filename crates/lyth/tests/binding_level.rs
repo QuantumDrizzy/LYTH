@@ -93,7 +93,11 @@ fn a_tiled_contraction_binds_at_shared_memory() {
         // Both candidates are printed, always. A ceiling that reported only the winner gives a
         // reader no way to tell whether it was close -- and here it is not: 2.24x.
         assert!(text.contains("dram "), "{ex}: the loser is not shown:\n{text}");
-        assert!(text.contains("the two disagree by 2.24x"), "{ex}:\n{text}");
+        // That 2.24 is `smem` against `dram`, the runner-up. It used to be the slowest over
+        // the fastest, which was the same number until ADR-0025 added compute as a third
+        // candidate: on a memory-bound matmul the compute ceiling is the fastest of the three
+        // by a mile, and quoting that ratio answers a question nobody asked.
+        assert!(text.contains("the next candidate is 2.24x faster"), "{ex}:\n{text}");
     }
 }
 

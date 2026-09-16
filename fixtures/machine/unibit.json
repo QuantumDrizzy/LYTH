@@ -1,0 +1,71 @@
+{
+  "schema": "lyth-machine/0.1",
+  "id": "unibit",
+  "time_unit": "cycle",
+  "notes": [
+    "EVERY NUMBER HERE IS MEASURED ON THIS MACHINE, NOT A DATASHEET. Produced by tools/unibit_probe.py against the emulator's own counters.",
+    "This machine has no clock. src/cpu.rs charges one cycle per instruction, three more for a division and three for a mispredicted branch, and there is no frequency anywhere in it. So rates are per CYCLE and `bandwidth_gbs` is left at 0.0 -- inventing a megahertz to make the existing field fit would be a datasheet with extra steps. Same shape as ADR-0022 finding that the shared pipe wanted accesses per second rather than bytes per second.",
+    "There is no cache hierarchy and no shared memory, so `mem` and `reg` are the only levels. A kernel that declares `dram -> smem -> reg` should be REFUSED here rather than quietly lowered: ADR-0022 made the ceiling a minimum over the levels a machine names, and a machine that names no shared level cannot stage.",
+    "Unibit is an emulator. These are its counters, not silicon."
+  ],
+  "levels": [
+    {
+      "name": "mem",
+      "capacity": "flat, sized at boot",
+      "bandwidth_gbs": 0.0,
+      "bytes_per_cycle": 28.4259,
+      "latency_cyc": 1
+    },
+    {
+      "name": "reg",
+      "capacity": "32 x 256-bit",
+      "bandwidth_gbs": 0.0,
+      "latency_cyc": 0
+    }
+  ],
+  "flops_per_cycle": 14.2099,
+  "ridge_flop_per_byte": {
+    "fp32": 0.4999,
+    "note": "flops_per_cycle / bytes_per_cycle, both measured on this emulator. Unlike sm_120's, both terms are exact rather than achieved: an emulator that charges one cycle per instruction has no variance to average out."
+  },
+  "ops": [
+    {
+      "name": "vfma.f32",
+      "status": "present",
+      "at": "reg"
+    },
+    {
+      "name": "vfadd.f32",
+      "status": "present",
+      "at": "reg"
+    },
+    {
+      "name": "vfmul.f32",
+      "status": "present",
+      "at": "reg"
+    },
+    {
+      "name": "vreduce",
+      "status": "present",
+      "at": "reg"
+    },
+    {
+      "name": "smem",
+      "status": "absent",
+      "at": "mem"
+    },
+    {
+      "name": "fma.f64",
+      "status": "absent",
+      "at": "reg"
+    }
+  ],
+  "measurement": {
+    "method": "tools/unibit_probe.py: LQ and VFMA in loops unrolled 16x over 512 iterations, read from the emulator's counters",
+    "memory_loads": 8192,
+    "memory_cycles": 9222,
+    "vfma_count": 8192,
+    "vfma_cycles": 9224,
+    "loop_overhead": "2 instructions per unrolled body (addi, bne); the unroll is what makes that a small fraction, and the loop-free limits are printed beside the measured rate so the gap is visible"
+  }
+}
