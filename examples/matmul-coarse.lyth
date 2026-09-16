@@ -1,0 +1,35 @@
+machine sm_120
+
+# The same matmul as matmul.lyth, with two declared lines changed.
+#
+# `tile 32, 32` puts one thread on each of the tile's 1024 elements, which is exactly the block
+# cap, and caps the intensity at T/4 = 8 flop/byte. A tile of 64 would derive 16 -- and asks for
+# 4096 threads, which no block can be (ADR-0021).
+#
+# `coarsen 2, 2` decouples the two. The tile stays 64 x 64, which is what the traffic is derived
+# from; the block is 32 x 32 = 1024 threads, and each thread owns four of the tile's outputs.
+# The four accumulators live in registers across the whole `p` loop, so the register file
+# becomes a third level of reuse under shared memory: two operands feed one multiply-add at
+# `tile 32`, and four operands feed four here.
+#
+# The traffic derivation does not know any of this and does not need to. Reuse is a property of
+# the tile -- how many threads want one staged element -- and coarsening changes which thread
+# computes what, not what is staged.
+#
+# What it does NOT do is make this compute-bound. 16 flop/byte against a ridge of 36.9 is still
+# memory-bound, at 43% of peak FLOPS instead of 22%. The ridge needs a tile of about 148, which
+# would want 176 KB of shared memory against a maximum of 101. ADR-0021.
+kernel matmul_coarse(m: u32, n: u32, k: u32,
+                     a: [f32; m, k], b: [f32; k, n], c: [f32; m, n])
+    space i, j : m, n
+    contract sum p : k
+    tile 64, 64
+    coarsen 2, 2
+    intensity asymptotic 16.0
+
+    stream a : dram -> smem -> reg
+    stream b : dram -> smem -> reg
+    stream c : dram -> reg, drain
+
+    at reg:
+        c[i, j] = a[i, p] * b[p, j]

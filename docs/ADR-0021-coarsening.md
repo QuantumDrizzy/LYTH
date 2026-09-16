@@ -1,6 +1,6 @@
 # ADR-0021 — Thread coarsening, and the limit that was argued but never checked
 
-**Status:** Proposed — steps 1 and 2 built
+**Status:** Proposed — steps 1, 2 and 3 built
 **Date:** 2026-09-16
 **Depends on:** ADR-0018 (contraction), ADR-0017 (the tile), ADR-0000 (why)
 
@@ -175,13 +175,106 @@ is not a power of two — so the parser refused it first and the test never reac
 named. It needs a factor that is a power of two *and* does not divide: 64 against a tile edge of
 32. The original version asserted the parser twice and the divisibility check never.
 
+## Step 3, as built
+
+**One emitter, not two.** `contracted_body` was generalised rather than forked, with the absent
+declaration meaning `(1, 1)`:
+
+```rust
+let (ci, cj) = match &ir.coarsen { Some(c) => (c[0], c[1]), None => (1, 1) };
+let bi = t / ci;
+let bj = t / cj;
+let log2_bj = bj.trailing_zeros();
+```
+
+That choice is the reason the uncoarsened path is still covered: every contraction test written
+for ADR-0018 exercises this code with both factors at one. A second emitter would have left them
+testing a path that no longer runs.
+
+The one substantive edit to an existing line is the third of those: **a thread's position in the
+tile now masks and shifts by the block's width `bj`, not the tile's `t`.** Those were the same
+number until this ADR, which is exactly the kind of coincidence that hides in an emitter.
+
+What the body became, per thread:
+
+| | uncoarsened | `coarsen 2, 2` |
+|---|---|---|
+| elements staged per operand | 1 | `ci·cj` = 4 |
+| accumulators alive across the whole `p` loop | 1 | 4 |
+| shared loads per term | 2 | `ci + cj` = 4 |
+| bodies run per term | 1 | `ci·cj` = 4 |
+| guarded global stores | 1 | 4 |
+
+**The fourth row over the third is the register-level reuse**, and it is what makes the larger
+tile affordable: two shared loads feeding one multiply-add becomes four feeding four. The
+DRAM-side traffic this ADR derives is a property of the tile and does not see any of it; what
+coarsening buys at the shared-memory interface is a separate halving, and neither is claimed by
+the other.
+
+### Verified
+
+* **The uncoarsened matmul is unchanged** — seven shapes, still bit-exact against the host.
+* **The coarsened matmul is bit-exact** on those same seven, chosen so that 64 divides none of
+  `m`, `n` or `k` (`97×131×67`, `65×33×129`, `256×256×31`, `31×31×256`, `7×5×3`, `1×1×1`, and
+  `64³` as the one that does divide). A thread owning four outputs on a ragged edge holds some
+  that are inside the matrix and some that are not, which is the case a divisible shape cannot
+  reach.
+* **`coarsen 2, 4` is bit-exact on the same seven**, at 512 threads per block. `2, 2` cannot
+  catch an emitter that confused `ci` with `cj`; the asymmetric one can, and it is in the suite
+  rather than in a shell history.
+* **Structure asserted on the PTX**: 4 `ld.shared.f32`, 4 `mul.rn.f32`, 4 `add.rn.f32`, 4
+  `st.global.f32`, 8 `st.shared.f32`, exactly 2 `bar.sync` and still no `fma.rn.f32` (ADR-0010).
+  The cost model does not see the coarsening, so the ratio it is supposed to buy is asserted on
+  the emitted code instead of taken on trust.
+* **Three controls**: `racecheck` reports 0 hazards, `memcheck` 0 errors, and
+  `--shared-bytes 0` fails with `ILLEGAL_ADDRESS` — ADR-0017's bypass check, which for a
+  coarsened tile *is* the claim, since the staged tile is the whole reason the larger tile has
+  any reuse to sell.
+* **Refused**: `coarsen` on a tile that does not contract. A tiled transpose moves one element
+  per thread and holds nothing across a loop, so there is nothing for a thread to own several
+  of — and the cost model would derive identical traffic either way, which is precisely why the
+  emitter has to be the one to say so.
+
+Seven tests in `crates/lyth/tests/coarsen_emitter.rs`; full suite **240 tests green**, clippy
+clean.
+
+### And the traffic it was built for
+
+`ncu --metrics lts__t_bytes.sum`, at `m = n = k = 2048`, same source both rows with two
+declarations changed:
+
+| source | block | L2 bytes | per output | derived | |
+|---|---|---|---|---|---|
+| `tile 32, 32` | 1024 | 2,176,532,096 | 518.93 | 516 | **+0.57%** |
+| `tile 64, 64` + `coarsen 2, 2` | 1024 | 1,091,252,448 | 260.17 | 260 | **+0.07%** |
+
+**1.99× less traffic for the same answer, same block width, from one extra line.** The derived
+ratio is `516 / 260 = 1.985`; the measured one is 1.995.
+
+The second row is the closest this cost model has come to a measurement at any point in
+ADR-0018 or here. That is not a claim about coarsening — the derivation it is being checked
+against is the tile's, and ADR-0021's whole design argument is that coarsening does not enter
+it. It is the tile of 64 that the compiler could not previously launch, now launched and moving
+what it was derived to move.
+
+Both figures sit **above** the derivation, so this is not the L1 effect ADR-0018 isolated, which
+is signed the other way (`lts__t_bytes` is what the L1 asks the L2 for, so an L1 hit shows up as
+the measurement falling *below* what the kernel asked for). The `tile 32` excess continues a
+sequence already in ADR-0018's table — +0.16% at 512, +0.35% at 1024, +0.57% here — and **has
+no explanation yet**. It cannot get one from this run, which collected a single metric and not
+the L1 hit rate the ADR-0018 adjustment needs. That is step 4's job, and this is a spot check,
+not step 4.
+
+It joins the honest open list next to the bank-conflict excess from ADR-0018: small, consistent,
+inside the 2% tolerance, and not understood.
+
 ## Build sequence
 
 | step | | testable on its own |
 |---|---|---|
 | **1** | **the block limits as machine-file facts, checked before emission** | **done — 5 tests, no GPU needed** |
 | **2** | **`coarsen` in the AST, parser and IR, with its refusals** | **done — 9 tests, no GPU needed** |
-| 3 | the emitter: register accumulators, the staging loop, the term loop | bit-exact against the host at non-divisible `m`, `n`, `k` |
+| **3** | **the emitter: register accumulators, the staging loop, the term loop** | **done — 7 tests, bit-exact on 7 non-divisible shapes at `2,2` and `2,4`** |
 | 4 | `--ncu` | the derived `0.125 * k + 4` at `tile 64, 64`, against measurement |
 | 5 | against a hand-written coarsened matmul | the ADR-0020 comparison, on a kernel where instructions might finally matter |
 
@@ -197,3 +290,6 @@ coarsened matmul at 16 flop/byte is the first kernel where that debt could come 
 | `crates/lyth-probe/src/machine.rs` | the three limits, `Option` so an old file checks nothing |
 | `fixtures/machine/sm_120.json` | the values, from the driver |
 | `crates/lyth/tests/block_limits.rs` | including the shared-memory branch, reached through a machine file describing a smaller device |
+| `crates/lyth-ptx/src/contracted.rs` | the emitter, generalised so `coarsen 1, 1` is the path ADR-0018 already tested |
+| `examples/matmul-coarse.lyth` | `tile 64, 64` + `coarsen 2, 2`, the tile step 1 refused |
+| `crates/lyth/tests/coarsen_emitter.rs` | bit-exactness, the PTX structure, the bypass control, the refusal |

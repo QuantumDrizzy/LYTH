@@ -171,6 +171,9 @@ impl<'a> ContractPlan<'a> {
 }
 
 impl Emitter {
+    /// Emit the contracted body. `coarsen 1, 1` -- the absent declaration -- is the case every
+    /// test before ADR-0021 exercises, and it is this code with both factors set to one rather
+    /// than a separate path, so those tests keep covering it.
     pub(crate) fn contracted_body(
         &mut self,
         ir: &KernelIr,
@@ -188,6 +191,20 @@ impl Emitter {
         // derivation is right, neither variant conflicts -- so the padding is 256 bytes of
         // shared memory this kernel does not need. Measured rather than argued.
         let stride = if skewed { p.stride } else { p.t };
+
+        // How many outputs of the tile one thread owns, and therefore how wide the block is.
+        //
+        // The tile stays the tile: `t` is still the working set the traffic was derived from,
+        // and every address below is still an address into a `t x t` patch. What changes is
+        // how many threads cover it -- `bi x bj` instead of `t x t` -- and so how many of its
+        // elements each one is responsible for.
+        let (ci, cj) = match &ir.coarsen {
+            Some(c) => (c[0], c[1]),
+            None => (1, 1),
+        };
+        let bi = t / ci;
+        let bj = t / cj;
+        let log2_bj = bj.trailing_zeros();
 
         // --- parameters -------------------------------------------------------------
         let mut u32s: Vec<(String, String)> = Vec::new();
@@ -235,12 +252,15 @@ impl Emitter {
         line(out, &format!("shr.u32 {tiles_n}, {tiles_n}, {log2_t};"));
         line(out, &format!("mul.lo.u32 {total}, {tiles_m}, {tiles_n};"));
 
+        // The block is `bi x bj`, so the thread's place in it is a mask and a shift by the
+        // block's width -- not the tile's. Both are powers of two, which is what `coarsen`
+        // refuses a factor for not preserving.
         let tid = self.b32();
         let tx = self.b32();
         let ty = self.b32();
         line(out, &format!("mov.u32 {tid}, %tid.x;"));
-        line(out, &format!("and.b32 {tx}, {tid}, {};", t - 1));
-        line(out, &format!("shr.u32 {ty}, {tid}, {log2_t};"));
+        line(out, &format!("and.b32 {tx}, {tid}, {};", bj - 1));
+        line(out, &format!("shr.u32 {ty}, {tid}, {log2_bj};"));
 
         // Two tiles, back to back. The second starts where the first ends, and the first is
         // `T` rows of the padded stride -- the padding is inside the tile, so the offset is
@@ -280,23 +300,42 @@ impl Emitter {
         line(out, &format!("div.u32 {trow}, {tile}, {tiles_n};"));
         line(out, &format!("rem.u32 {tcol}, {tile}, {tiles_n};"));
 
-        // This thread's output element: row `gi` of C, column `gj`.
-        let gi = self.b32();
-        let gj = self.b32();
-        line(out, &format!("mad.lo.u32 {gi}, {trow}, {t}, {ty};"));
-        line(out, &format!("mad.lo.u32 {gj}, {tcol}, {t}, {tx};"));
+        // This thread's outputs. It owns `ci x cj` of them, spread across the tile by the
+        // block's width rather than packed together: thread `tx` takes columns `tx`,
+        // `tx + bj`, `tx + 2bj`, so a warp still covers `bj` consecutive columns and the
+        // global store stays coalesced.
+        let mut gi = Vec::new();
+        for u in 0..ci {
+            let r = self.b32();
+            line(out, &format!("mad.lo.u32 {r}, {trow}, {t}, {ty};"));
+            if u > 0 {
+                line(out, &format!("add.u32 {r}, {r}, {};", u * bi));
+            }
+            gi.push(r);
+        }
+        let mut gj = Vec::new();
+        for v in 0..cj {
+            let r = self.b32();
+            line(out, &format!("mad.lo.u32 {r}, {tcol}, {t}, {tx};"));
+            if v > 0 {
+                line(out, &format!("add.u32 {r}, {r}, {};", v * bj));
+            }
+            gj.push(r);
+        }
 
-        // The accumulator, and the identity it starts from. `ReduceOp::identity` is the same
-        // value the block tree uses, so a thread with no terms produces what a reduction's
-        // empty block produces rather than a second convention.
-        let acc = self.f32();
-        line(
-            out,
-            &format!(
-                "mov.f32 {acc}, {};",
-                crate::hex_f32(p.op.identity())
-            ),
-        );
+        // One accumulator per output, alive across the whole `p` loop. This is where the
+        // arithmetic intensity comes from: the register file is a third level of reuse under
+        // shared memory, and `ci + cj` operands feed `ci * cj` multiply-adds.
+        let mut acc = Vec::new();
+        for _ in 0..ci {
+            let mut row = Vec::new();
+            for _ in 0..cj {
+                let r = self.f32();
+                line(out, &format!("mov.f32 {r}, {};", crate::hex_f32(p.op.identity())));
+                row.push(r);
+            }
+            acc.push(row);
+        }
 
         // --- the loop along the contracted axis -------------------------------------
         let s = self.b32();
@@ -308,66 +347,87 @@ impl Emitter {
         line(out, &format!("@{step_done} bra $L_step_end_{k};"));
         line(out, &format!("shl.b32 {pbase}, {s}, {log2_t};"));
 
-        // Phase 1: each thread stages one element of each operand tile, coalesced along the
-        // fast axis, predicated rather than branched so the block stays together.
+        // Phase 1: stage both tiles. The tile is `t x t` and the block is `bi x bj`, so each
+        // thread brings `ci * cj` elements of each operand -- one for each of the places it
+        // owns. Predicated rather than branched, so the block stays together for the barrier.
         for (idx, op) in p.operands.iter().enumerate() {
-            // The two axes of this operand's own index, in its own order: one is a free axis
-            // of the output, the other is the contracted one. `contracted_at` says which.
-            let (row_idx, col_idx) = if op.contracted_at == 1 {
-                // `a[i, p]`: rows are the output's first free axis, columns are `k`.
-                (
-                    format!("mad.lo.u32 {{}}, {trow}, {t}, {ty};"),
-                    format!("add.u32 {{}}, {pbase}, {tx};"),
-                )
-            } else {
-                // `b[p, j]`: rows are `k`, columns are the output's second free axis.
-                (
-                    format!("add.u32 {{}}, {pbase}, {ty};"),
-                    format!("mad.lo.u32 {{}}, {tcol}, {t}, {tx};"),
-                )
-            };
-            let gy = self.b32();
-            let gx = self.b32();
-            line(out, &row_idx.replace("{}", &gy));
-            line(out, &col_idx.replace("{}", &gx));
+            for u in 0..ci {
+                for v in 0..cj {
+                    let gy = self.b32();
+                    let gx = self.b32();
+                    // The operand's own two axes, in its own order: one is a free axis of the
+                    // output, the other is the contracted one. `contracted_at` says which, and
+                    // the coarsening offsets ride along with whichever is which.
+                    if op.contracted_at == 1 {
+                        // `a[i, p]`: rows are the output's first free axis, columns are `k`.
+                        line(out, &format!("mad.lo.u32 {gy}, {trow}, {t}, {ty};"));
+                        if u > 0 {
+                            line(out, &format!("add.u32 {gy}, {gy}, {};", u * bi));
+                        }
+                        line(out, &format!("add.u32 {gx}, {pbase}, {tx};"));
+                        if v > 0 {
+                            line(out, &format!("add.u32 {gx}, {gx}, {};", v * bj));
+                        }
+                    } else {
+                        // `b[p, j]`: rows are `k`, columns are the output's second free axis.
+                        line(out, &format!("add.u32 {gy}, {pbase}, {ty};"));
+                        if u > 0 {
+                            line(out, &format!("add.u32 {gy}, {gy}, {};", u * bi));
+                        }
+                        line(out, &format!("mad.lo.u32 {gx}, {tcol}, {t}, {tx};"));
+                        if v > 0 {
+                            line(out, &format!("add.u32 {gx}, {gx}, {};", v * bj));
+                        }
+                    }
 
-            let (row_bound, col_bound) = if op.contracted_at == 1 {
-                (m.clone(), kk.clone())
-            } else {
-                (kk.clone(), n.clone())
-            };
-            let in_y = self.pred();
-            let in_x = self.pred();
-            let in_both = self.pred();
-            line(out, &format!("setp.lt.u32 {in_y}, {gy}, {row_bound};"));
-            line(out, &format!("setp.lt.u32 {in_x}, {gx}, {col_bound};"));
-            line(out, &format!("and.pred {in_both}, {in_y}, {in_x};"));
+                    let (row_bound, col_bound) = if op.contracted_at == 1 {
+                        (m.clone(), kk.clone())
+                    } else {
+                        (kk.clone(), n.clone())
+                    };
+                    let in_y = self.pred();
+                    let in_x = self.pred();
+                    let in_both = self.pred();
+                    line(out, &format!("setp.lt.u32 {in_y}, {gy}, {row_bound};"));
+                    line(out, &format!("setp.lt.u32 {in_x}, {gx}, {col_bound};"));
+                    line(out, &format!("and.pred {in_both}, {in_y}, {in_x};"));
 
-            let lin = self.b32();
-            let off = self.b64();
-            let addr = self.b64();
-            let val = self.f32();
-            line(
-                out,
-                &format!("mad.lo.u32 {lin}, {gy}, {}, {gx};", u32_of(op.row)),
-            );
-            line(out, &format!("mul.wide.u32 {off}, {lin}, 4;"));
-            line(out, &format!("add.s64 {addr}, {}, {off};", buf_of(op.buffer)));
-            line(out, &format!("mov.f32 {val}, 0f00000000;"));
-            line(out, &format!("@{in_both} ld.global.f32 {val}, [{addr}];"));
+                    let lin = self.b32();
+                    let off = self.b64();
+                    let addr = self.b64();
+                    let val = self.f32();
+                    line(
+                        out,
+                        &format!("mad.lo.u32 {lin}, {gy}, {}, {gx};", u32_of(op.row)),
+                    );
+                    line(out, &format!("mul.wide.u32 {off}, {lin}, 4;"));
+                    line(out, &format!("add.s64 {addr}, {}, {off};", buf_of(op.buffer)));
+                    line(out, &format!("mov.f32 {val}, 0f00000000;"));
+                    line(out, &format!("@{in_both} ld.global.f32 {val}, [{addr}];"));
 
-            // Into shared at the thread's own place in the tile, both operands row-major.
-            // The skew is in the stride, so the column reads below land on 32 distinct banks.
-            let s_at = self.b32();
-            let s_off = self.b64();
-            let s_addr = self.b64();
-            line(out, &format!("mad.lo.u32 {s_at}, {ty}, {stride}, {tx};"));
-            line(out, &format!("mul.wide.u32 {s_off}, {s_at}, 4;"));
-            line(
-                out,
-                &format!("add.s64 {s_addr}, {}, {s_off};", tile_base[idx]),
-            );
-            line(out, &format!("st.shared.f32 [{s_addr}], {val};"));
+                    // Into shared at the thread's own place in the tile, both operands
+                    // row-major. The skew is in the stride, so the column reads below land on
+                    // 32 distinct banks.
+                    let s_at = self.b32();
+                    let s_off = self.b64();
+                    let s_addr = self.b64();
+                    line(out, &format!("mov.u32 {s_at}, {ty};"));
+                    if u > 0 {
+                        line(out, &format!("add.u32 {s_at}, {s_at}, {};", u * bi));
+                    }
+                    line(out, &format!("mul.lo.u32 {s_at}, {s_at}, {stride};"));
+                    line(out, &format!("add.u32 {s_at}, {s_at}, {tx};"));
+                    if v > 0 {
+                        line(out, &format!("add.u32 {s_at}, {s_at}, {};", v * bj));
+                    }
+                    line(out, &format!("mul.wide.u32 {s_off}, {s_at}, 4;"));
+                    line(
+                        out,
+                        &format!("add.s64 {s_addr}, {}, {s_off};", tile_base[idx]),
+                    );
+                    line(out, &format!("st.shared.f32 [{s_addr}], {val};"));
+                }
+            }
         }
 
         // Barrier 1: read-after-write. Nobody walks a tile before it is whole.
@@ -391,44 +451,77 @@ impl Emitter {
         line(out, &format!("setp.ge.u32 {term_done}, {tt}, {inner};"));
         line(out, &format!("@{term_done} bra $L_term_end_{k};"));
 
-        // Each operand is read out of its tile at the position the contracted index occupies.
-        // `a[i, p]` walks its row: `As[ty][tt]`. `b[p, j]` walks its column: `Bs[tt][tx]`.
-        // Both come from `contracted_at`, so the two are not two cases of a rule -- they are
-        // the same rule read at different positions.
-        let mut regs: Vec<(RegId, String)> = Vec::new();
-        for (idx, op) in p.operands.iter().enumerate() {
-            let (row, col) = if op.contracted_at == 1 {
-                (ty.clone(), tt.clone())
-            } else {
-                (tt.clone(), tx.clone())
-            };
+        // `ci` values of one operand and `cj` of the other, read once and used `ci * cj`
+        // times. At `coarsen 1, 1` that is two loads for one multiply-add, which is the ratio
+        // ADR-0018 was stuck at; at `2, 2` it is four loads for four.
+        //
+        // Which operand is walked along which axis comes from `contracted_at`, so the two are
+        // not two cases of a rule -- they are the same rule read at different positions.
+        let (a_idx, b_idx) = if p.operands[0].contracted_at == 1 {
+            (0usize, 1usize)
+        } else {
+            (1usize, 0usize)
+        };
+        let mut a_val = Vec::new();
+        for u in 0..ci {
             let at = self.b32();
             let off = self.b64();
             let addr = self.b64();
             let got = self.f32();
-            line(out, &format!("mad.lo.u32 {at}, {row}, {stride}, {col};"));
+            line(out, &format!("mov.u32 {at}, {ty};"));
+            if u > 0 {
+                line(out, &format!("add.u32 {at}, {at}, {};", u * bi));
+            }
+            line(out, &format!("mul.lo.u32 {at}, {at}, {stride};"));
+            line(out, &format!("add.u32 {at}, {at}, {tt};"));
             line(out, &format!("mul.wide.u32 {off}, {at}, 4;"));
-            line(out, &format!("add.s64 {addr}, {}, {off};", tile_base[idx]));
+            line(out, &format!("add.s64 {addr}, {}, {off};", tile_base[a_idx]));
             line(out, &format!("ld.shared.f32 {got}, [{addr}];"));
-            regs.push((op.reg, got));
+            a_val.push(got);
+        }
+        let mut b_val = Vec::new();
+        for v in 0..cj {
+            let at = self.b32();
+            let off = self.b64();
+            let addr = self.b64();
+            let got = self.f32();
+            line(out, &format!("mad.lo.u32 {at}, {tt}, {stride}, {tx};"));
+            if v > 0 {
+                line(out, &format!("add.u32 {at}, {at}, {};", v * bj));
+            }
+            line(out, &format!("mul.wide.u32 {off}, {at}, 4;"));
+            line(out, &format!("add.s64 {addr}, {}, {off};", tile_base[b_idx]));
+            line(out, &format!("ld.shared.f32 {got}, [{addr}];"));
+            b_val.push(got);
         }
 
-        for op in &ir.ops {
-            self.op(op, &mut regs, &u32s, out)?;
+        for u in 0..ci as usize {
+            for v in 0..cj as usize {
+                // The body, run once per output this thread owns, on that output's pair of
+                // operands. Same `ir.ops`, same `self.op` -- the body is the body wherever the
+                // schedule puts it.
+                let mut regs: Vec<(RegId, String)> = vec![
+                    (p.operands[a_idx].reg, a_val[u].clone()),
+                    (p.operands[b_idx].reg, b_val[v].clone()),
+                ];
+                for op in &ir.ops {
+                    self.op(op, &mut regs, &u32s, out)?;
+                }
+                let term = regs
+                    .iter()
+                    .find(|(i, _)| *i == p.drain_reg)
+                    .map(|(_, r)| r.clone())
+                    .ok_or_else(|| {
+                        EmitError::Message("the contracted term was never computed".into())
+                    })?;
+                // Two instructions, not one. See the note at the top of this file.
+                let a = &acc[u][v];
+                line(
+                    out,
+                    &format!("{} {a}, {a}, {term};", crate::reduce_mnemonic(p.op)),
+                );
+            }
         }
-        let term = regs
-            .iter()
-            .find(|(i, _)| *i == p.drain_reg)
-            .map(|(_, r)| r.clone())
-            .ok_or_else(|| {
-                EmitError::Message("the contracted term was never computed".into())
-            })?;
-
-        // Two instructions, not one. See the note at the top of this file.
-        line(
-            out,
-            &format!("{} {acc}, {acc}, {term};", crate::reduce_mnemonic(p.op)),
-        );
 
         line(out, &format!("add.u32 {tt}, {tt}, 1;"));
         line(out, &format!("bra $L_term_{k};"));
@@ -440,27 +533,39 @@ impl Emitter {
         line(out, &format!("bra $L_step_{k};"));
         let _ = writeln!(out, "$L_step_end_{k}:");
 
-        // --- the output, once -------------------------------------------------------
-        let out_y = self.pred();
-        let out_x = self.pred();
-        let out_both = self.pred();
-        line(out, &format!("setp.lt.u32 {out_y}, {gi}, {m};"));
-        line(out, &format!("setp.lt.u32 {out_x}, {gj}, {n};"));
-        line(out, &format!("and.pred {out_both}, {out_y}, {out_x};"));
+        // --- the outputs, once each --------------------------------------------------
+        for u in 0..ci as usize {
+            for v in 0..cj as usize {
+                let out_y = self.pred();
+                let out_x = self.pred();
+                let out_both = self.pred();
+                line(out, &format!("setp.lt.u32 {out_y}, {}, {m};", gi[u]));
+                line(out, &format!("setp.lt.u32 {out_x}, {}, {n};", gj[v]));
+                line(out, &format!("and.pred {out_both}, {out_y}, {out_x};"));
 
-        let olin = self.b32();
-        let o_off = self.b64();
-        let o_addr = self.b64();
-        line(
-            out,
-            &format!("mad.lo.u32 {olin}, {gi}, {}, {gj};", u32_of(p.drain_row)),
-        );
-        line(out, &format!("mul.wide.u32 {o_off}, {olin}, 4;"));
-        line(
-            out,
-            &format!("add.s64 {o_addr}, {}, {o_off};", buf_of(p.drain)),
-        );
-        line(out, &format!("@{out_both} st.global.f32 [{o_addr}], {acc};"));
+                let olin = self.b32();
+                let o_off = self.b64();
+                let o_addr = self.b64();
+                line(
+                    out,
+                    &format!(
+                        "mad.lo.u32 {olin}, {}, {}, {};",
+                        gi[u],
+                        u32_of(p.drain_row),
+                        gj[v]
+                    ),
+                );
+                line(out, &format!("mul.wide.u32 {o_off}, {olin}, 4;"));
+                line(
+                    out,
+                    &format!("add.s64 {o_addr}, {}, {o_off};", buf_of(p.drain)),
+                );
+                line(
+                    out,
+                    &format!("@{out_both} st.global.f32 [{o_addr}], {};", acc[u][v]),
+                );
+            }
+        }
 
         line(out, &format!("add.u32 {tile}, {tile}, {gstep};"));
         line(out, &format!("bra $L_tile_{k};"));

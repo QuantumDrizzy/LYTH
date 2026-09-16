@@ -130,14 +130,12 @@ pub fn emit_with_skew(ir: &KernelIr, arch: &str, skewed: bool) -> Result<Module,
     // expression and checks a declared limit against it, and none of that puts an accumulator
     // in a register or a `p` loop around two staged tiles. The refusal moves here rather than
     // disappearing, because the alternative is a `.ptx` file that computes one term of a sum.
-    // Costing is not emitting, again. `coarsen` changes which thread owns which outputs, so
-    // every emitter here would need register accumulators and a staging loop that is not one
-    // element per thread. ADR-0021 step 3.
-    if let Some(c) = &ir.coarsen {
+    // `coarsen` is emitted for a contraction (ADR-0021 step 3) and not for a transpose: the
+    // tiled body stages one element per thread and has no accumulator to spread.
+    if ir.coarsen.is_some() && ir.contract.is_none() {
         return Err(EmitError::Message(format!(
-            "kernel `{}` declares `coarsen {}` and there is no emitter for a coarsened tile yet. Its block width and its traffic are both derived and checked (ADR-0021 step 2); the register accumulators and the staging loop that make a thread own several outputs are step 3.",
-            ir.name,
-            c.iter().map(|d| d.to_string()).collect::<Vec<_>>().join(", ")
+            "kernel `{}` coarsens a tile that does not contract. A transpose's tiled body moves one element per thread and holds nothing across a loop, so there is nothing for a thread to own several of.",
+            ir.name
         )));
     }
 
