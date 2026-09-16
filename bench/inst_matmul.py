@@ -46,19 +46,24 @@ METRICS = [
     "lts__t_bytes.sum",
 ]
 
-# The launch order `vs_handwritten_matmul.py` produces: per tile, LYTH then nvrtc --fmad=false
-# then nvrtc default.
-ORDER = [
-    "LYTH tile 16",
-    "nvrtc tile 16",
-    "nvrtc tile 16 [fmad]",
-    "LYTH tile 32",
-    "nvrtc tile 32",
-    "nvrtc tile 32 [fmad]",
-    "LYTH tile 64 c2",
-    "nvrtc tile 64 c2",
-    "nvrtc tile 64 c2 [fmad]",
-]
+# The launch order `vs_handwritten_matmul.py` produces, derived from its own list rather than
+# copied. It was copied once and drifted the moment ADR-0022 added two variants: nine labels
+# against fifteen launches, and the run aborted. ADR-0019 cost this project a measurement for
+# exactly this shape of mistake -- the reduction grid rule living in two places -- and the fix
+# is the same one. One definition.
+#
+# Position is the only way to tell the rows apart: the two nvrtc builds of a tile share an entry
+# point name, and every LYTH kernel is called `matmul` because they are all generated from
+# `examples/matmul.lyth`.
+def order() -> list[str]:
+    sys.path.insert(0, str(HERE))
+    from vs_handwritten_matmul import VARIANTS
+
+    out = []
+    for *_, label in VARIANTS:
+        short = label.replace("tile 64 + coarsen ", "t64c").replace("tile ", "t")
+        out += [f"LYTH {short}", f"nvrtc {short}", f"nvrtc {short} [fmad]"]
+    return out
 
 
 def find_ncu() -> pathlib.Path:
@@ -72,6 +77,7 @@ def find_ncu() -> pathlib.Path:
 
 def main() -> int:
     ncu = find_ncu()
+    ORDER = order()
     cmd = [
         str(ncu), "--metrics", ",".join(METRICS), "-k", "regex:matmul", "--csv",
         sys.executable, str(HERE / "vs_handwritten_matmul.py"), "--once",
@@ -113,11 +119,20 @@ def main() -> int:
               f"{g['lts__t_bytes.sum'] / outputs:>9.2f}")
 
     print()
-    for tile in ("tile 16", "tile 32", "tile 64 c2"):
-        l, h = f"LYTH {tile}", f"nvrtc {tile}"
-        print(f"  {tile:<12} LYTH / nvrtc instructions = {inst[l] / inst[h]:.1%}")
-    print(f"  {'across tiles':<12} coarsening changes LYTH's instructions by "
-          f"{inst['LYTH tile 64 c2'] / inst['LYTH tile 32']:.1%}")
+    base = None
+    for label in ORDER:
+        if not label.startswith("LYTH "):
+            continue
+        tile = label[len("LYTH "):]
+        print(f"  {tile:<8} LYTH / nvrtc instructions = "
+              f"{inst[label] / inst['nvrtc ' + tile]:.1%}")
+        if tile == "t32":
+            base = inst[label]
+    if base:
+        for label in ORDER:
+            if label.startswith("LYTH t64"):
+                print(f"  {label[5:]:<8} instructions against `tile 32`: "
+                      f"{inst[label] / base:.1%}")
     return 0
 
 

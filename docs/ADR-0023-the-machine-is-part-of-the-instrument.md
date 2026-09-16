@@ -1,6 +1,6 @@
 # ADR-0023 — The machine is part of the instrument
 
-**Status:** Accepted — the harness change is built; two decisions are the operator's
+**Status:** Accepted — the guard is built, one suspect falsified, `TdrDelay` pending a reboot
 **Date:** 2026-09-16
 **Depends on:** ADR-0004 (the probe that measured a host round trip), ADR-0022 (what was running)
 
@@ -119,6 +119,43 @@ separated them:
 The second one is **ours**, and it is the cheapest to test: run that single test with the GPU
 otherwise idle and see whether a 4101 appears. It costs one deliberate driver fault to find out,
 on a machine that just needed its power cut, so it is asked rather than assumed.
+
+## The suspect was mine, and it was wrong
+
+The section above named three candidates and said the second was ours and the cheapest to test.
+It was tested. The TDR count was **37 before and 37 after**, each time:
+
+| | result |
+|---|---|
+| the single `--shared-bytes 0` test, GPU otherwise idle | **no reset** |
+| the **whole suite** — 247 tests, every GPU test and every deliberate fault | **no reset** |
+| `ncu` over fifteen kernels, ~40 s | **no reset** |
+
+**A deliberate `ILLEGAL_ADDRESS` does not trip the watchdog.** The driver catches it as a
+context error, which is a different thing from a hang, and the reasoning that made it a suspect
+— "an illegal access on a WDDM adapter is a textbook TDR trigger" — was a plausible sentence
+about somebody else's failure mode. The clustering in pairs a minute apart, which looked like a
+test binary, is unexplained by this and stays unexplained.
+
+`cargo test` is therefore cleared, which matters practically: it runs constantly and now runs
+without a question mark over it.
+
+What is left, untested:
+
+* **long `ncu` sessions.** The traffic sweep holds the device with the profiler attached for
+  roughly fifteen minutes per point at 2048³, and ran for over an hour. The forty-second run
+  above is not that.
+* **long interleaved timing runs.** The one that ended with the card gone was fifteen kernels,
+  nine rounds.
+
+Both are the workloads the guard now brackets, so the next occurrence names itself.
+
+### And the test found a different bug
+
+`inst_matmul.py` aborted with `expected 9 launches, profiled 15`. Its `ORDER` was a second copy
+of the variant list, and it drifted the moment ADR-0022 added two schedules. That is the exact
+shape of ADR-0019's defect — the reduction grid rule living in two places, corrected in one —
+and it cost that ADR a measurement. `ORDER` is now derived from `VARIANTS`. One definition.
 
 ## What this does not say
 
