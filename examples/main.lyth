@@ -1,0 +1,35 @@
+machine unibit
+
+# A LYTH file that is a program.
+#
+# Every other example in this directory is a kernel: something a host in another language has
+# to allocate for, launch and collect from. That is not a limit of LYTH -- a `.cu` file is not
+# a program either, and neither is a `.cl` or a Triton kernel, because a GPU has no entry
+# point. It is a limit of the target.
+#
+# Unibit has an entry point, so this file compiles to something that runs on its own:
+#
+#     lyth build examples/main.lyth --machine fixtures/machine/unibit.json -o main.ubo
+#     unibit run main.ubo
+#
+# No host language anywhere in those two lines.
+
+kernel saxpy(n: u32, a: f32, x: [f32; n], y: [f32; n])
+    intensity 0.1667
+
+    stream x : dram -> reg
+    stream y : dram -> reg, drain
+
+    at reg:
+        y = a * x + y
+
+# What runs, and what leaves the machine. Not a function body: there is no loop here, no
+# condition and no arithmetic, because a `main` that could branch would take back at the top of
+# the file the refusal every kernel body is held to.
+#
+# What it cannot say is where `x` and `y` come from, and that is a real limit rather than an
+# omission -- this language has no way to read data. Their contents are the deterministic
+# generator the host oracle uses, so the program and the oracle start from the same numbers.
+main:
+    run saxpy(n = 4096, a = 2.0)
+    print y[0:8]

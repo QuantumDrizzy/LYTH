@@ -13,6 +13,41 @@ pub struct Unit {
     pub machine: String,
     pub machine_span: Span,
     pub kernels: Vec<Kernel>,
+    /// The entry point, when this file is a program rather than a library of kernels.
+    ///
+    /// `None` for every file written before ADR-0025 step 4, and for every file that only
+    /// defines kernels — which stays the normal case. A GPU kernel has no entry point to
+    /// declare, so requiring one would be requiring a fiction.
+    pub main: Option<Main>,
+}
+
+/// `main:` — what to run, and what leaves the machine.
+///
+/// Deliberately **not** a function body. LYTH refuses data-dependent branching, allocation and
+/// recursion inside a kernel, and a `main` that could do those would take the refusal back at
+/// the top of the file. So this is a declaration: one kernel, the values of its non-buffer
+/// parameters, and which elements to print.
+///
+/// What it cannot say is where the input data comes from, because this language has no way to
+/// read any. Buffer contents are the deterministic generator in [`crate::inputs`], the same
+/// one the host oracle uses, and that is a real limit rather than a convenience.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Main {
+    pub span: Span,
+    pub kernel: String,
+    pub kernel_span: Span,
+    /// `n = 4096, a = 2.0` — every `u32` and `f32` parameter, by name.
+    pub args: Vec<(String, f64, Span)>,
+    pub prints: Vec<Print>,
+}
+
+/// `print y`, `print y[3]`, `print y[0:8]`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Print {
+    pub span: Span,
+    pub buffer: String,
+    /// `None` is the whole buffer. Half-open, so `y[0:8]` is eight elements.
+    pub range: Option<(u32, u32)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

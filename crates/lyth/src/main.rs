@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
 
 use clap::{Parser, Subcommand};
 
@@ -102,6 +102,11 @@ enum Cmd {
         /// Elements the profiled launch will process, recorded in the evidence.
         #[arg(long, default_value_t = 1 << 20)]
         elements: u32,
+        /// The machine's own assembler, used when the target is not a GPU and `-o` names a
+        /// `.ubo`. Defaults to `unibit` on the path. Not reimplemented here: an object format
+        /// with two implementations is a format with two opinions.
+        #[arg(long, value_name = "PATH")]
+        assembler: Option<PathBuf>,
         #[arg(long, default_value_t = 0.05)]
         tol: f64,
     },
@@ -184,6 +189,11 @@ fn wide_from(ty: Ty) -> Option<fn(u16) -> f32> {
 #[derive(Debug, Deserialize)]
 struct Machine {
     id: String,
+    /// Which back end compiles for this machine. "ptx" when absent, which is every file
+    /// written before there was a second one -- a default that names the only thing that
+    /// existed is a default that cannot surprise anyone.
+    #[serde(default)]
+    isa: Option<String>,
     levels: Vec<MachineLevel>,
     #[serde(default)]
     peak_tflops: Option<f64>,
@@ -299,6 +309,7 @@ fn main() -> ExitCode {
             bind_c,
             bind_py,
             elements,
+            assembler,
             tol,
         } => cmd_build(
             &file,
@@ -310,6 +321,7 @@ fn main() -> ExitCode {
             bind_c.as_deref(),
             bind_py.as_deref(),
             elements,
+            assembler.as_deref(),
             tol,
         ),
         Cmd::Run {
@@ -345,6 +357,9 @@ fn main() -> ExitCode {
 /// Everything the front end produces for one file.
 struct Front {
     ir: KernelIr,
+    /// Kept whole, because `main` is a property of the file rather than of the kernel: it
+    /// names which kernel runs, which is a question only the file can answer.
+    unit: lyth_lang::ast::Unit,
     machine: Option<Machine>,
     /// What the source declared, if anything. The derived figure is in `ir.cost`; a manifest
     /// carries both, because "the author claimed X and the compiler computed X" and "the
@@ -479,10 +494,12 @@ fn front(file: &Path, machine_path: Option<&Path>, tol: f64) -> Result<Front, Ex
         ExitCode::from(EXIT_REFUSED)
     })?;
     print_cost(&ir, &report);
+    let declared = kernel.declared_intensity;
     Ok(Front {
         ir,
+        unit,
         machine,
-        declared: kernel.declared_intensity,
+        declared,
     })
 }
 
@@ -673,6 +690,105 @@ fn cmd_check(file: &Path, machine: Option<&Path>, tol: f64) -> ExitCode {
     }
 }
 
+/// `lyth build main.lyth -o main.ubo` — a program, not a kernel.
+///
+/// This is what ADR-0025 exists to be able to write. Everything above this line compiles a
+/// kernel that something else has to launch; below it, the output is a file the machine runs
+/// on its own, and the whole workflow is two commands in one language.
+///
+/// The assembler is invoked rather than reimplemented. Unibit's two-pass assembler is that
+/// machine's toolchain, the way `ptxas` is the GPU's, and a second implementation of an object
+/// format is a second thing to disagree about. When `-o` does not end in `.ubo`, or the
+/// assembler is not on the path, the `.uasm` is written and the remaining command is printed —
+/// a missing tool should not lose the compile.
+fn build_unibit(
+    file: &Path,
+    f: &Front,
+    out: Option<&Path>,
+    assembler: Option<&Path>,
+) -> ExitCode {
+    let Some(main) = f.unit.main.as_ref() else {
+        eprintln!(
+            "error: `unibit` builds a program, and {} declares no `main`.\n  A kernel compiled \
+             for a GPU is launched by a host that supplies the element count and collects the \
+             result;\n  here there is no host, so the file has to say. Add:\n\n\
+             main:\n      run {}(n = 4096, ...)\n      print <buffer>[0:8]",
+            file.display(),
+            f.ir.name
+        );
+        return ExitCode::from(EXIT_REFUSED);
+    };
+    let program = match lyth_lang::program::resolve(&f.unit, main, &f.ir) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{}:{e}", file.display());
+            return ExitCode::from(EXIT_REFUSED);
+        }
+    };
+    let asm = match lyth_uasm::emit(&f.ir, &program) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("error[codegen]: {e}");
+            return ExitCode::from(EXIT_REFUSED);
+        }
+    };
+
+    let Some(out) = out else {
+        print!("{asm}");
+        return ExitCode::SUCCESS;
+    };
+    let wants_object = out.extension().is_some_and(|e| e == "ubo");
+    let asm_path = if wants_object {
+        out.with_extension("uasm")
+    } else {
+        out.to_path_buf()
+    };
+    if let Err(e) = std::fs::write(&asm_path, &asm) {
+        eprintln!("error: write {}: {e}", asm_path.display());
+        return ExitCode::from(EXIT_UNUSABLE);
+    }
+    println!("  wrote    {} ({} bytes)", asm_path.display(), asm.len());
+    if !wants_object {
+        return ExitCode::SUCCESS;
+    }
+
+    let tool = assembler.map(Path::to_path_buf).unwrap_or_else(|| "unibit".into());
+    let run = Command::new(&tool)
+        .args(["build", &asm_path.to_string_lossy(), "-o"])
+        .arg(out)
+        .output();
+    match run {
+        Ok(o) if o.status.success() => {
+            let bytes = std::fs::metadata(out).map(|m| m.len()).unwrap_or(0);
+            println!("  wrote    {} ({bytes} bytes)", out.display());
+            println!("  run      unibit run {}", out.display());
+            ExitCode::SUCCESS
+        }
+        Ok(o) => {
+            eprintln!(
+                "error: {} could not assemble {}:\n{}{}",
+                tool.display(),
+                asm_path.display(),
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            );
+            ExitCode::from(EXIT_UNUSABLE)
+        }
+        Err(e) => {
+            // Not a failure of the compile. The assembly is on disk and correct; what is
+            // missing is the machine's own toolchain, so say which command finishes the job.
+            println!(
+                "  note     `{}` is not on the path ({e}), so no object was written.\n  \
+                 Finish with:  unibit build {} -o {}",
+                tool.display(),
+                asm_path.display(),
+                out.display()
+            );
+            ExitCode::SUCCESS
+        }
+    }
+}
+
 fn arch_of(f: &Front) -> String {
     f.machine
         .as_ref()
@@ -691,12 +807,19 @@ fn cmd_build(
     bind_c: Option<&Path>,
     bind_py: Option<&Path>,
     elements: u32,
+    assembler: Option<&Path>,
     tol: f64,
 ) -> ExitCode {
     let f = match front(file, machine, tol) {
         Ok(f) => f,
         Err(code) => return code,
     };
+    // Which back end runs is the **machine file's** answer, not a flag. It is the same rule
+    // ADR-0001 applied to the ridge: the machine is a value the source names, so everything
+    // that follows from it follows from the file rather than from the invocation.
+    if f.machine.as_ref().and_then(|m| m.isa.as_deref()) == Some("unibit") {
+        return build_unibit(file, &f, out, assembler);
+    }
     let module = match emit(&f.ir, &arch_of(&f)) {
         Ok(m) => m,
         Err(e) => {

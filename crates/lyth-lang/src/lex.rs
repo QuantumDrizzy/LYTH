@@ -218,16 +218,22 @@ impl Lexer {
             }
         }
         // Blank and comment-only lines carry no layout meaning.
+        //
+        // The newline is **left in place** rather than consumed, and that is the fix for a
+        // defect that survived until a file had something after its last kernel. `run` calls
+        // `start_of_line` and then `rest_of_line`, once each per pass; a blank line that ate
+        // its own newline therefore handed the *following* line to `rest_of_line`, whose
+        // space arm swallowed that line's indentation as ordinary whitespace -- so no `Dedent`
+        // was emitted and the block never closed.
+        //
+        // Nothing noticed, because until ADR-0025 step 4 every file ended with a kernel body
+        // and `run`'s epilogue pops the open levels at end of file. `main:` at column 0 after
+        // a blank line was the first construct that needed a block to close *before* then, and
+        // it parsed only in files that happened to have a comment in the gap: a comment already
+        // left its newline behind, so it already went round the loop again.
         match self.peek() {
             None => return Ok(()),
-            Some('\n') => {
-                self.bump();
-                return Ok(());
-            }
-            Some('#') => {
-                self.skip_comment();
-                return Ok(());
-            }
+            Some('\n' | '#') => return Ok(()),
             _ => {}
         }
         let span = self.span();
@@ -387,6 +393,42 @@ mod tests {
         let i = t.iter().position(|x| *x == Tok::Indent).expect("an indent");
         let d = t.iter().position(|x| *x == Tok::Dedent).expect("a dedent");
         assert!(i < d, "indent must come before its dedent: {t:?}");
+    }
+
+    #[test]
+    fn a_blank_line_does_not_swallow_the_next_line_s_indentation() {
+        // The defect ADR-0025 step 4 uncovered, and it had been there since the lexer was
+        // written. `run` calls `start_of_line` then `rest_of_line` once each; a blank line
+        // that consumed its own newline handed the *next* line to `rest_of_line`, which ate
+        // the leading spaces as ordinary whitespace. No `Dedent`, and the block stayed open.
+        //
+        // It was invisible because every file ended with a kernel body, and the levels are
+        // popped at end of file anyway. `main:` at column 0 was the first thing that needed a
+        // block closed before then.
+        let t = kinds("at reg:\n y = x\n\nmain:\n");
+        let d = t.iter().position(|x| *x == Tok::Dedent);
+        let m = t
+            .iter()
+            .position(|x| matches!(x, Tok::Word(w) if w == "main"))
+            .expect("main is lexed");
+        assert!(
+            d.is_some_and(|d| d < m),
+            "`main` must arrive after the block closes, not inside it: {t:?}"
+        );
+    }
+
+    #[test]
+    fn a_blank_line_and_a_comment_line_close_a_block_the_same_way() {
+        // They differed, and the difference is why `examples/main.lyth` parsed while the same
+        // file without its comments did not. A comment already left its newline behind and so
+        // already went round the loop again; a blank line did not. Two spellings of "nothing
+        // on this line" must not mean two things.
+        let blank = kinds("at reg:\n y = x\n\nmain:\n");
+        let comment = kinds("at reg:\n y = x\n# nothing here\nmain:\n");
+        let strip = |t: Vec<Tok>| -> Vec<Tok> {
+            t.into_iter().filter(|x| *x != Tok::Newline).collect()
+        };
+        assert_eq!(strip(blank), strip(comment));
     }
 
     #[test]

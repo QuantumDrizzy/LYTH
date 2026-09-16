@@ -1,4 +1,4 @@
-//! A `.lyth` file becomes a program, and the program is right. ADR-0025 steps 2 and 3.
+//! A `.lyth` file becomes a program, and the program is right. ADR-0025 steps 2 to 4.
 //!
 //! Every test here assembles the emitted text with the real `unibit` binary, runs it on the
 //! real emulator, reads back the lanes it printed, and compares them against `lyth_lang::eval`
@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use lyth_lang::ast::Ty;
+use lyth_lang::program::{PrintRange, Program};
 use lyth_lang::{eval, ir, parse};
 
 fn unibit() -> PathBuf {
@@ -51,37 +52,25 @@ fn run_on_emulator(asm: &str, dir: &Path) -> Option<Vec<f32>> {
         .output()
         .ok()?;
     let text = String::from_utf8_lossy(&out.stdout).to_string();
-    if !text.contains("x5") {
+
+    // One value per line, printed by `PRINT_F32` — the shortest string that parses back to the
+    // same bits, so reading them here loses nothing and the comparison stays bit-exact.
+    //
+    // This used to decode `PRINT_REG256`'s hex lane dump, and that decoder was where the only
+    // real defect of step 2 lived: the syscall emits no newline, so eight registers arrived
+    // concatenated on one line and a scan over `text.lines()` found one of them. Step 4
+    // replaced the dump with output a person can read, which removed the format that needed
+    // decoding at all.
+    let vals: Vec<f32> = text
+        .lines()
+        .filter_map(|l| l.trim().parse::<f32>().ok())
+        .collect();
+    if vals.is_empty() {
         eprintln!(
-            "the emulator printed no register:\n{text}\n{}",
+            "the emulator printed no value:\n{text}\n{}",
             String::from_utf8_lossy(&out.stderr)
         );
         return None;
-    }
-
-    // `PRINT_REG256` writes `[x5  = [lane3 | lane2 | lane1 | lane0]]`, four 64-bit lanes, most
-    // significant first, each holding two f32 with the low half the earlier element.
-    //
-    // **It emits no newline**, so eight prints arrive concatenated on one line. Scanning
-    // `text.lines()` and taking one match each found the first of the eight and reported that
-    // the program had computed 8 elements instead of 64 -- which looked like a loop that ran
-    // once, and was a parser that stopped once.
-    let mut vals = Vec::new();
-    for chunk in text.split("x5  = [").skip(1) {
-        let Some(inner) = chunk.split(']').next() else {
-            continue;
-        };
-        let lanes: Vec<u64> = inner
-            .split('|')
-            .filter_map(|p| u64::from_str_radix(p.trim().trim_start_matches("0x"), 16).ok())
-            .collect();
-        if lanes.len() != 4 {
-            continue;
-        }
-        for l in lanes.iter().rev() {
-            vals.push(f32::from_bits(*l as u32));
-            vals.push(f32::from_bits((*l >> 32) as u32));
-        }
     }
     Some(vals)
 }
@@ -243,7 +232,20 @@ fn reduction_oracle(k: &ir::KernelIr, n: u32) -> Vec<f32> {
 fn a_reduction_folds_the_lanes_and_the_result_leaves_the_machine() {
     let n = 4096;
     let k = lower(SUM);
-    let asm = lyth_uasm::emit_program(&k, n).expect("emits");
+    let asm = lyth_uasm::emit(
+        &k,
+        &Program {
+            n,
+            extents: Default::default(),
+            scalars: Default::default(),
+            prints: vec![PrintRange {
+                buffer: "partial".into(),
+                lo: 0,
+                hi: 8,
+            }],
+        },
+    )
+    .expect("emits");
     let dir = tempfile::tempdir().unwrap();
     let Some(got) = run_on_emulator(&asm, dir.path()) else {
         eprintln!("skipped: no Unibit emulator");
@@ -251,10 +253,15 @@ fn a_reduction_folds_the_lanes_and_the_result_leaves_the_machine() {
     };
     let want = reduction_oracle(&k, n);
 
-    // Eight lanes, not one. Lane 0 is the result; lanes 1 to 7 are the target buffer's own
+    // Eight elements, not one. Element 0 is the result; 1 to 7 are the target buffer's own
     // untouched data on both sides, so an `SQ` where the emitter meant `SW` fails here rather
-    // than being invisible in a test that only looked at lane 0.
-    assert_eq!(got.len(), 8, "one register was printed");
+    // than being invisible in a check that only looked at the result.
+    //
+    // The `Program` is built here rather than resolved from a `main`, because `main` would not
+    // be allowed to ask for this: `partial` is declared `[f32; blocks]` and holds one value per
+    // block, so `print partial[0:8]` runs off the end and `resolve` says so. The emitter is
+    // what is under test, and the emitter takes a `Program`.
+    assert_eq!(got.len(), 8, "{} values were printed", got.len());
     for i in 0..8 {
         assert_eq!(
             got[i].to_bits(),

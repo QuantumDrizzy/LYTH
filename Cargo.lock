@@ -342,6 +342,7 @@ dependencies = [
  "lyth-cuda",
  "lyth-lang",
  "lyth-ptx",
+ "lyth-uasm",
  "serde",
  "serde_json",
  "tempfile",

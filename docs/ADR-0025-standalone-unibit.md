@@ -1,6 +1,6 @@
 # ADR-0025 — Standalone: a second target, and the instruction that is missing
 
-**Status:** Proposed — steps 0 to 3 built
+**Status:** Accepted — steps 0 to 4 built; the claim it was written for is now a command
 **Date:** 2026-09-16
 **Depends on:** ADR-0022 (the level that binds), ADR-0019 (the dogfood), ADR-0000 (why)
 
@@ -315,6 +315,105 @@ list, so their encoding had no test at all. An opcode typo in `decode` would hav
 LYTH program failing to verify rather than as the table that exists to catch it. All seven are
 in it now.
 
+## Step 4, built — the sentence this ADR was written to be able to say
+
+```
+$ lyth build examples/main.lyth --machine fixtures/machine/unibit.json -o main.ubo
+kernel saxpy on machine unibit
+  derived  0.1667 flop/byte  (2 flop / 12 byte per element)
+  declared 0.1667 - matches
+  ceiling  dram binds - 4.738 flop/cycle, 33.34% of peak FLOPS
+  wrote    main.uasm (99488 bytes)
+  wrote    main.ubo (33336 bytes)
+  run      unibit run main.ubo
+
+$ unibit run main.ubo
+y[0:8]
+-1.2549801
+2.1394424
+-6.199203
+...
+```
+
+No host language in either line. The complaint at the top of this file was that a `.lyth` file
+is never a program; it is one now, for one machine, and the eight numbers above are checked
+**bit for bit** against `lyth_lang::eval` in `crates/lyth/tests/a_program.rs`. A program that
+runs and prints plausible floats is not evidence of anything.
+
+### `main` is a declaration, not a function body
+
+```
+main:
+    run saxpy(n = 4096, a = 2.0)
+    print y[0:8]
+```
+
+Two statements and no third. No loop, no condition, no arithmetic — because a `main` that could
+branch would take back at the top of the file the refusal every kernel body is held to, and the
+refusals are the product. What it says is which kernel runs, the value of every non-buffer
+parameter, and which elements leave.
+
+Everything it does not say is a refusal rather than a default, and the one that matters most is
+the scalar: a `main` that omits `a` and a compiler that supplies 2.0 produce a program whose
+output no reader of the file can predict, and an oracle that agrees with it only by guessing the
+same number. `lyth build` on a file with no `main` at all is refused too — on a machine with no
+host, the element count and the choice of what to print have nowhere else to come from.
+
+What `main` **cannot** say is where the data comes from, and that is a limit rather than an
+omission: this language has no way to read any. Buffer contents are the deterministic generator
+in `lyth_lang::inputs`, which is the same one the oracle uses, and the file says so in a comment
+because a reader will ask.
+
+### Which back end runs is the machine file's answer
+
+`fixtures/machine/unibit.json` gained `"isa": "unibit"`; `sm_120.json` says `"ptx"`, and a file
+that says nothing means `ptx`, which is every file written before there were two. `lyth build`
+reads it. That is ADR-0001's rule applied one level further out — the machine is a value the
+source names, so the choice of back end follows from the file rather than from the invocation.
+
+The assembler is **invoked, not reimplemented**. Unibit's two-pass assembler is that machine's
+toolchain the way `ptxas` is the GPU's, and a second implementation of an object format is a
+second thing to disagree about. When it is not on the path the `.uasm` is still written and the
+remaining command is printed: a missing tool should not lose the compile.
+
+### A third gap of the same shape: the machine could not print a float
+
+`PRINT_F64` takes f64 bits and there is no conversion instruction to make them from an f32, so
+a program that computed a float could only dump the register as hex. That is the same finding as
+step 0's and step 3's, for the third time: **`Width::B32` is where this ISA's types run out.**
+
+Unibit gained `PRINT_F32`, and its *formatting* is part of the syscall. `PRINT_F64` beside it
+prints to six decimal places, which cannot be read back — `-1.2549801` and `-1.2549802` are the
+same eight characters there, so a check against a host oracle would pass on a kernel that was
+one ulp wrong in every element. `PRINT_F32` prints the shortest string that parses back to the
+same bits. A test asserts that at least one of the eight values really does lose something at six
+places, so the distinction is not hypothetical.
+
+That also retired `PRINT_REG256` from the emitted programs, and with it the hex lane decoder in
+the test harness — which is where step 2's only real defect had lived.
+
+### And the defect `main` exposed, which was older than any of this
+
+`examples/main.lyth` parsed. The same file with its comments stripped did not:
+
+```
+10:5: expected `=`, found `:`
+```
+
+The lexer's `run` calls `start_of_line` and then `rest_of_line`, once each per pass. A blank line
+consumed its own newline and returned, so the **following** line went straight to `rest_of_line`,
+whose space arm ate that line's indentation as ordinary whitespace. No `Dedent` was emitted and
+the block never closed. A comment line left its newline behind and so went round the loop again,
+which is the entire reason `main.lyth` worked and its comment-free twin did not.
+
+It had been there since the lexer was written and nothing could see it, because every file until
+now **ended** with a kernel body and `run` pops the open levels at end of file anyway. `main:` at
+column 0 was the first construct that needed a block to close before then.
+
+Two tests now hold it: one that `main` arrives after the dedent, and one that a blank line and a
+comment line close a block **the same way** — two spellings of "nothing on this line" must not
+mean two things.
+
 ## What this does not give you
 
 Stated plainly, because the complaint deserves an honest answer rather than a hopeful one.
@@ -339,7 +438,7 @@ then `unibit run main.ubo`, with no other language anywhere in the workflow.**
 | **1** | **LYTH** | **done — 28.43 B/cycle, 14.21 flop/cycle, ridge 0.4999; and it found the missing compute ceiling** |
 | **2** | **LYTH** | **done — `lyth-uasm`, bit-exact against the emulator on two kernels, nine refusals by name** |
 | **3** | **both** | **done — `VFREDUCE` in Unibit; rank 2 and `reduce` in `lyth-uasm`; the reduction path opened to two shapes** |
-| 4 | LYTH | a program: `_start`, declared buffers, `ecall` I/O, and `main.lyth` -> `main.ubo` |
+| **4** | **both** | **done — `main`, `PRINT_F32`, `lyth build -o main.ubo`; and a lexer defect older than the ADR** |
 | 5 | both | the contract measured on Unibit, against its counters, the way ADR-0009 did on PTX |
 
 Step 0 is in another repository and is the precondition for all of it. Steps 1–3 are a backend,

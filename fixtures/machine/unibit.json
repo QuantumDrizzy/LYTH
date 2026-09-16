@@ -1,6 +1,7 @@
 {
   "schema": "lyth-machine/0.1",
   "id": "unibit",
+  "isa": "unibit",
   "time_unit": "cycle",
   "notes": [
     "EVERY NUMBER HERE IS MEASURED ON THIS MACHINE, NOT A DATASHEET. Produced by tools/unibit_probe.py against the emulator's own counters.",

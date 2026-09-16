@@ -1,6 +1,7 @@
 {
   "schema": "lyth-machine/0.1",
   "id": "sm_120",
+  "isa": "ptx",
   "peak_tflops": 15.3,
   "peak_tflops_fp16": 46.07,
   "max_threads_per_block": 1024,

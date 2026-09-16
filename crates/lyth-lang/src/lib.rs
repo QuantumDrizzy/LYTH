@@ -11,6 +11,7 @@ pub mod eval;
 pub mod ir;
 pub mod lex;
 pub mod parse;
+pub mod program;
 
 pub use ast::{BinOp, Kernel, Level, Param, Ty, Unit};
 pub use check::{check_intensity, IntensityMismatch, IntensityReport, Regime, Ridge};

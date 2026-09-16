@@ -134,12 +134,23 @@ impl Parser {
         self.skip_newlines();
 
         let mut kernels = Vec::new();
+        let mut main = None;
         loop {
             self.skip_newlines();
             match self.peek() {
                 Tok::Eof => break,
                 Tok::Word(w) if w == "kernel" => kernels.push(self.kernel()?),
-                _ => return self.expected("`kernel` or the end of the file"),
+                Tok::Word(w) if w == "main" => {
+                    if main.is_some() {
+                        return self.msg(
+                            "a file has one `main` or none. Two entry points is a question \
+                             about which one runs, and the answer would have to come from \
+                             outside the file — which is the thing `main` exists to stop",
+                        );
+                    }
+                    main = Some(self.main_block()?);
+                }
+                _ => return self.expected("`kernel`, `main` or the end of the file"),
             }
         }
         if kernels.is_empty() {
@@ -152,6 +163,118 @@ impl Parser {
             machine,
             machine_span,
             kernels,
+            main,
+        })
+    }
+
+    /// ```text
+    /// main:
+    ///     run saxpy(n = 4096, a = 2.0)
+    ///     print y[0:8]
+    /// ```
+    ///
+    /// Two statements and no third. There is no loop here, no condition and no arithmetic,
+    /// because a `main` that could branch would take back at the top of the file the refusal
+    /// every kernel body is held to. It says what runs and what leaves.
+    fn main_block(&mut self) -> Result<Main, ParseError> {
+        let span = self.span();
+        self.expect(Tok::Word("main".into()))?;
+        self.expect(Tok::Colon)?;
+        self.expect(Tok::Newline)?;
+        self.expect(Tok::Indent)?;
+
+        let mut kernel = None;
+        let mut prints = Vec::new();
+        let mut args = Vec::new();
+        loop {
+            self.skip_newlines();
+            if self.eat(&Tok::Dedent) || matches!(self.peek(), Tok::Eof) {
+                break;
+            }
+            if self.eat_word("run") {
+                if kernel.is_some() {
+                    return self.msg(
+                        "one `run` per `main`. A second one would be a program with two \
+                         entry points that happen to be in order, and the order is not \
+                         something this language can express",
+                    );
+                }
+                let (name, kernel_span) = self.word()?;
+                self.expect(Tok::LParen)?;
+                if !self.eat(&Tok::RParen) {
+                    loop {
+                        let (arg, arg_span) = self.word()?;
+                        self.expect(Tok::Equals)?;
+                        let (v, _) = self.number()?;
+                        args.push((arg, v, arg_span));
+                        if self.eat(&Tok::Comma) {
+                            continue;
+                        }
+                        self.expect(Tok::RParen)?;
+                        break;
+                    }
+                }
+                kernel = Some((name, kernel_span));
+            } else if self.at_word("print") {
+                prints.push(self.print_stmt()?);
+            } else {
+                return self.expected("`run` or `print`");
+            }
+        }
+
+        let Some((kernel, kernel_span)) = kernel else {
+            return Err(ParseError::Message {
+                span,
+                msg: "this `main` runs nothing. A program that starts and computes nothing is \
+                      a program whose cost model has nothing to be checked against"
+                    .into(),
+            });
+        };
+        if prints.is_empty() {
+            return Err(ParseError::Message {
+                span,
+                msg: "this `main` prints nothing, so nothing it computes leaves the machine. \
+                      A result that is never observed is one no oracle can be compared against"
+                    .into(),
+            });
+        }
+        Ok(Main {
+            span,
+            kernel,
+            kernel_span,
+            args,
+            prints,
+        })
+    }
+
+    fn print_stmt(&mut self) -> Result<Print, ParseError> {
+        let span = self.span();
+        self.expect(Tok::Word("print".into()))?;
+        let (buffer, _) = self.word()?;
+        let range = if self.eat(&Tok::LBracket) {
+            let (lo, lo_span) = self.number()?;
+            // `[3]` is one element; `[0:8]` is eight. Half-open, so the two forms never
+            // disagree about whether the upper bound is included.
+            let hi = if self.eat(&Tok::Colon) {
+                self.number()?.0
+            } else {
+                lo + 1.0
+            };
+            self.expect(Tok::RBracket)?;
+            if lo < 0.0 || hi < lo {
+                return Err(ParseError::Message {
+                    span: lo_span,
+                    msg: format!("`{buffer}[{lo}:{hi}]` is empty or runs backwards"),
+                });
+            }
+            Some((lo as u32, hi as u32))
+        } else {
+            None
+        };
+        Ok(Print {
+            span,
+            buffer,
+            range,
         })
     }
 
