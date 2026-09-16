@@ -49,6 +49,7 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "bench"))
 
 from nvrtc import compile_ptx  # noqa: E402
+from gpu_health import Watch  # noqa: E402
 from vs_handwritten import Module, driver, timed  # noqa: E402
 
 LOADS_PER_ITER = 8
@@ -141,6 +142,9 @@ def main() -> int:
     print(f"  {'block':>6} {'pattern':<11} {'Gaccess/s':>11} {'min':>8} {'max':>8} {'scaling':>9}")
 
     rates: dict[tuple[int, str], float] = {}
+    # ADR-0023: a probe that ran across a display-driver reset measured something else.
+    watch = Watch()
+    watch.__enter__()
     for block in (256, 1024):
         grid = sms * args.blocks_per_sm
         for pattern, mask in (("coalesced", 31), ("broadcast", 0)):
@@ -191,7 +195,9 @@ def main() -> int:
           f"{med / 32 * 4 / 1e3:.2f} TB/s broadcast -- a 32x difference at the same rate")
     print(f"\n  ADR-0021's matmuls paced at 39.4-43.4 G wavefronts/s, "
           f"{39.4 / (med / 32):.0%}-{43.4 / (med / 32):.0%} of this.")
-    return 0
+    print()
+    watch.report()
+    return 0 if watch.clean is not False else 1
 
 
 if __name__ == "__main__":

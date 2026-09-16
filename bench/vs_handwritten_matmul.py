@@ -52,6 +52,7 @@ sys.path.insert(0, str(HERE / "gen"))
 sys.path.insert(0, str(HERE))
 
 from nvrtc import compile_ptx  # noqa: E402
+from gpu_health import Watch  # noqa: E402
 from vs_handwritten import Module, driver, timed  # noqa: E402
 
 # (tile, per-axis coarsening, generated binding, hand-written entry point, label)
@@ -208,6 +209,11 @@ def main() -> int:
     names = list(calls)
     rows = {k: [] for k in names}
     flops = 2.0 * sz * sz * sz
+    # ADR-0023. Sixteen display-driver resets happened during this project's benchmarking on
+    # one day and not one of them reached a benchmark's output. A run that spans a reset keeps
+    # timing and keeps printing.
+    watch = Watch()
+    watch.__enter__()
     for r in range(args.rounds):
         # Rotating the order matters: a fixed one biased the last kernel by 56% in ADR-0019's
         # bandwidth run, on traffic that was identical by construction.
@@ -234,7 +240,11 @@ def main() -> int:
         f = f"nvrtc {label} [fmad]"
         print(f"  {'':<22} and against the fused build, {med[l] / med[f]:.1%} "
               f"-- ADR-0010's price, not a code-generation result")
-    return 0
+    print()
+    watch.report()
+    # A run that crossed a driver reset is not a failed run to be retried quietly: it is a run
+    # whose numbers are not about what they claim, and the exit code says so.
+    return 0 if watch.clean is not False else 1
 
 
 if __name__ == "__main__":
