@@ -1,6 +1,6 @@
 # ADR-0024 — Half the element, and the two predictions that disagree
 
-**Status:** Proposed — steps 1 and 2 built
+**Status:** Accepted — steps 1-3 built and measured
 **Date:** 2026-09-16
 **Depends on:** ADR-0022 (the level that binds), ADR-0009 (measured traffic), ADR-0000 (why)
 
@@ -178,7 +178,7 @@ subnormals, overflow, and the values either side of each — and only then compi
 |---|---|---|
 | **1** | **`Ty::BufF16` / `BufBF16` in the AST, parser and IR; `elem` per stream** | **done — 7 tests, no GPU; a `f16` saxpy derives 6 bytes and the compiler refuses the stale declaration** |
 | **2** | **the emitter, and the oracle that has to agree with it** | **done — 4 tests; bit-exact at f32/f16/bf16 on five elementwise and reduction kernels, a staged tile, and one kernel reading narrow and writing wide** |
-| 3 | measurement: the two predictions above, guarded | `saxpy` ~2x, `matmul` ~1x, on the same instrument as ADR-0022 |
+| **3** | **measurement: the two predictions above, guarded** | **done — `saxpy` 1.96x, `matmul` 1.010x, and two rows that missed the band and sharpened the model** |
 | 4 | `bf16` beside `f16` | identical time, different error — the traffic model's blind spot, confirmed as blind |
 
 Step 3 is the one this ADR exists for. Steps 1 and 2 are the price of admission.
@@ -205,6 +205,77 @@ Three precisions on how that is read, because each one is a way to get a false r
   measured run-to-run reproducibility of the ADR-0022 timing harness is **1.6%** across two
   guarded nine-round runs. ±5% covers that with room for thermal drift. Using a traffic
   tolerance on a timing prediction would manufacture a falsification out of ordinary noise.
+
+## Step 3, as measured
+
+`bench/narrow_vs_wide.py`. Every kernel verified bit-exact at the size it is timed at, sizes
+chosen to exceed the 34 MB L2, guarded by ADR-0023's watch — **no display-driver reset during
+the run**.
+
+| kernel | binds at | f32 | f16 | f32/f16 | predicted | |
+|---|---|---|---|---|---|---|
+| `saxpy` | dram | 2.0178 ms | 1.0296 | **1.960** | 2.0 | ✅ |
+| `axpby` | dram | 2.0168 | 1.0307 | **1.957** | 2.0 | ✅ |
+| `sum` | dram | 0.6501 | 0.4829 | 1.346 | 2.0 | ❌ |
+| `transpose-tiled` | dram | 0.4601 | 0.3736 | 1.232 | 2.0 | ❌ |
+| **`matmul`** | **smem** | 1.7065 | 1.6901 | **1.010** | 1.0 | ✅ |
+| **`matmul` + `coarsen 2,2`** | **smem** | 0.8377 | 0.8317 | **1.007** | 1.0 | ✅ |
+
+### The row that could have killed ADR-0022 did not
+
+**1.010 and 1.007, against a pre-registered band of ±5%.** Halving every byte the matmul moves
+bought **nothing**, on the kernel this language works hardest on. That is the sentence ADR-0022
+needed and had never been given: the shared pipe is priced in *accesses*, and the access count
+does not know how wide an element is.
+
+It survived a second way, too. Narrowing **adds** a `cvt.f32.f16` per shared load — registered
+before the run as the interesting way for this to go wrong — and it cost nothing either. A
+kernel with room for two extra instructions per term is a kernel that is not waiting on
+instructions, which is the same thing ADR-0022 concluded from LYTH executing 35% more of them
+than nvcc and finishing first.
+
+### Two rows missed the band, and they are the result
+
+`sum` and `transpose-tiled` are declared DRAM-bound by the compiler and did not halve. The
+reason is measurable and it is not noise:
+
+| | f32, % of the 414.51 GB/s this device was measured at | f16 | |
+|---|---|---|---|
+| `saxpy` | **96%** | 94% | halved: 1.96x |
+| `axpby` | **96%** | 94% | halved: 1.96x |
+| `sum` | **99.6%** | **67%** | 1.35x |
+| `transpose-tiled` | **70%** | 43% | 1.23x |
+
+> **`binds at dram` says which ceiling is lowest. It does not say the kernel reaches it.**
+
+`saxpy` and `axpby` were at 96% of the achievable bandwidth, so halving their bytes halved their
+time and they stayed at 94%. `sum` was at **99.6%** — as saturated as this device gets — and at
+half the bytes it fell to 67%: the bytes halved and the time did not, because something else
+became the constraint on the way down. `transpose-tiled` began at 70% and had headroom the
+narrowing could not use.
+
+So the honest statement of the result is not four hits and two misses. It is a **continuum the
+model has no term for**:
+
+> Halving the element halves the **bytes** and leaves the **work** alone. A kernel's time halves
+> exactly to the extent that bytes were what it was waiting for — 1.96x at 96% of bandwidth,
+> 1.35x for a kernel that was saturated at four bytes and was not at two, 1.23x for one that
+> never was, and **1.01x for one that was never waiting on bytes at all**.
+
+That last entry is the matmul, and it puts the two "failures" and the two successes on one axis
+with it. ADR-0022 made the ceiling a per-level minimum; this says the ceiling is an upper bound
+whose **achieved fraction is not a constant**, and nothing in the compiler models that fraction.
+ADR-0022 already had the same gap in smaller print — its five kernels reached 79–86% of their
+shared ceilings — and it was easy to read that as a fixed efficiency. It is not: 96%, 99.6%,
+70%, and 43% are all in this one table.
+
+### What the model would need
+
+Not attempted here, and named so the next ADR does not have to rediscover it: the compiler
+derives traffic and a ceiling, and **has no notion of how close a kernel gets**. That gap is
+invisible while every kernel is f32, because the fraction is roughly stable across a set of
+kernels that move the same kind of bytes. Halving the element is what pulled the fraction apart
+— the same kernel, at 99.6% and then at 67%.
 
 ## What this does not claim
 

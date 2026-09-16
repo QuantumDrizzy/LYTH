@@ -238,6 +238,25 @@ impl Emitter {
                 .expect("every buffer parameter was loaded")
         };
 
+        // Widths per buffer, never once per kernel. A contraction has three -- two operands and
+        // a drain -- and nothing says they share a type; a mixed-precision GEMM reading half
+        // and writing single is the ordinary case rather than the exotic one (ADR-0024).
+        let width_of = |name: &str| -> u32 {
+            ir.params
+                .iter()
+                .find(|q| q.name == name)
+                .expect("a streamed buffer is a parameter")
+                .ty
+                .bytes()
+        };
+        let narrow_of = |name: &str| -> Option<&'static str> {
+            match ir.params.iter().find(|q| q.name == name).map(|q| q.ty) {
+                Some(lyth_lang::ast::Ty::BufF16) => Some("f16"),
+                Some(lyth_lang::ast::Ty::BufBF16) => Some("bf16"),
+                _ => None,
+            }
+        };
+
         let m = u32_of(&p.free[0]);
         let n = u32_of(&p.free[1]);
         let kk = u32_of(p.k);
@@ -270,7 +289,15 @@ impl Emitter {
         line(out, &format!("mov.u64 {smem}, lyth_smem;"));
         line(
             out,
-            &format!("add.s64 {smem_b}, {smem}, {};", t * stride * 4),
+            // The second tile starts where the first ends, and the first is `T` rows of the
+            // padded stride at **the first operand's own width**. This was a literal 4 until
+            // ADR-0024, which pointed the second tile past the end of a half-precision
+            // allocation and produced ILLEGAL_ADDRESS -- loudly, for once, rather than
+            // plausible numbers.
+            &format!(
+                "add.s64 {smem_b}, {smem}, {};",
+                t * stride * width_of(p.operands[0].buffer)
+            ),
         );
         let tile_base = [smem.clone(), smem_b.clone()];
 
@@ -400,10 +427,23 @@ impl Emitter {
                         out,
                         &format!("mad.lo.u32 {lin}, {gy}, {}, {gx};", u32_of(op.row)),
                     );
-                    line(out, &format!("mul.wide.u32 {off}, {lin}, 4;"));
+                    line(
+                        out,
+                        &format!("mul.wide.u32 {off}, {lin}, {};", width_of(op.buffer)),
+                    );
                     line(out, &format!("add.s64 {addr}, {}, {off};", buf_of(op.buffer)));
                     line(out, &format!("mov.f32 {val}, 0f00000000;"));
-                    line(out, &format!("@{in_both} ld.global.f32 {val}, [{addr}];"));
+                    match narrow_of(op.buffer) {
+                        Some(k) => {
+                            let h = self.b16();
+                            line(out, &format!("mov.b16 {h}, 0;"));
+                            line(out, &format!("@{in_both} ld.global.b16 {h}, [{addr}];"));
+                            line(out, &format!("cvt.f32.{k} {val}, {h};"));
+                        }
+                        None => {
+                            line(out, &format!("@{in_both} ld.global.f32 {val}, [{addr}];"))
+                        }
+                    }
 
                     // Into shared at the thread's own place in the tile, both operands
                     // row-major. The skew is in the stride, so the column reads below land on
@@ -420,12 +460,25 @@ impl Emitter {
                     if v > 0 {
                         line(out, &format!("add.u32 {s_at}, {s_at}, {};", v * bj));
                     }
-                    line(out, &format!("mul.wide.u32 {s_off}, {s_at}, 4;"));
+                    line(
+                        out,
+                        &format!("mul.wide.u32 {s_off}, {s_at}, {};", width_of(op.buffer)),
+                    );
                     line(
                         out,
                         &format!("add.s64 {s_addr}, {}, {s_off};", tile_base[idx]),
                     );
-                    line(out, &format!("st.shared.f32 [{s_addr}], {val};"));
+                    // The tile holds the operand's own width. `SharedLayout::bytes` sizes it
+                    // that way and `walk_is_conflict_free` has already derived that the skew
+                    // still touches all 32 banks at two bytes.
+                    match narrow_of(op.buffer) {
+                        Some(k) => {
+                            let h = self.b16();
+                            line(out, &format!("cvt.rn.{k}.f32 {h}, {val};"));
+                            line(out, &format!("st.shared.b16 [{s_addr}], {h};"));
+                        }
+                        None => line(out, &format!("st.shared.f32 [{s_addr}], {val};")),
+                    }
                 }
             }
         }
@@ -474,9 +527,22 @@ impl Emitter {
             }
             line(out, &format!("mul.lo.u32 {at}, {at}, {stride};"));
             line(out, &format!("add.u32 {at}, {at}, {tt};"));
-            line(out, &format!("mul.wide.u32 {off}, {at}, 4;"));
+            let aw = width_of(p.operands[a_idx].buffer);
+            line(out, &format!("mul.wide.u32 {off}, {at}, {aw};"));
             line(out, &format!("add.s64 {addr}, {}, {off};", tile_base[a_idx]));
-            line(out, &format!("ld.shared.f32 {got}, [{addr}];"));
+            // **This is where the ADR-0024 prediction lives.** The shared *access* count does
+            // not change with the width -- one load per operand per term either way -- so if
+            // the shared pipe is what paces this kernel (ADR-0022), halving the bytes buys
+            // nothing here. What narrowing does add is one `cvt` per load, so the honest
+            // prediction is "not faster, and possibly slower by exactly that".
+            match narrow_of(p.operands[a_idx].buffer) {
+                Some(k) => {
+                    let h = self.b16();
+                    line(out, &format!("ld.shared.b16 {h}, [{addr}];"));
+                    line(out, &format!("cvt.f32.{k} {got}, {h};"));
+                }
+                None => line(out, &format!("ld.shared.f32 {got}, [{addr}];")),
+            }
             a_val.push(got);
         }
         let mut b_val = Vec::new();
@@ -489,9 +555,17 @@ impl Emitter {
             if v > 0 {
                 line(out, &format!("add.u32 {at}, {at}, {};", v * bj));
             }
-            line(out, &format!("mul.wide.u32 {off}, {at}, 4;"));
+            let bw = width_of(p.operands[b_idx].buffer);
+            line(out, &format!("mul.wide.u32 {off}, {at}, {bw};"));
             line(out, &format!("add.s64 {addr}, {}, {off};", tile_base[b_idx]));
-            line(out, &format!("ld.shared.f32 {got}, [{addr}];"));
+            match narrow_of(p.operands[b_idx].buffer) {
+                Some(k) => {
+                    let h = self.b16();
+                    line(out, &format!("ld.shared.b16 {h}, [{addr}];"));
+                    line(out, &format!("cvt.f32.{k} {got}, {h};"));
+                }
+                None => line(out, &format!("ld.shared.f32 {got}, [{addr}];")),
+            }
             b_val.push(got);
         }
 
@@ -555,15 +629,29 @@ impl Emitter {
                         gj[v]
                     ),
                 );
-                line(out, &format!("mul.wide.u32 {o_off}, {olin}, 4;"));
+                line(
+                    out,
+                    &format!("mul.wide.u32 {o_off}, {olin}, {};", width_of(p.drain)),
+                );
                 line(
                     out,
                     &format!("add.s64 {o_addr}, {}, {o_off};", buf_of(p.drain)),
                 );
-                line(
-                    out,
-                    &format!("@{out_both} st.global.f32 [{o_addr}], {};", acc[u][v]),
-                );
+                // The accumulator is f32 and narrows **only here**, at the store (ADR-0024
+                // decision 2). Accumulating `k` terms in half precision is a different
+                // function and a far worse one; the width declared on the buffer is a
+                // statement about the bus, not about the arithmetic.
+                match narrow_of(p.drain) {
+                    Some(kk) => {
+                        let h = self.b16();
+                        line(out, &format!("cvt.rn.{kk}.f32 {h}, {};", acc[u][v]));
+                        line(out, &format!("@{out_both} st.global.b16 [{o_addr}], {h};"));
+                    }
+                    None => line(
+                        out,
+                        &format!("@{out_both} st.global.f32 [{o_addr}], {};", acc[u][v]),
+                    ),
+                }
             }
         }
 
