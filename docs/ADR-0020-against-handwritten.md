@@ -1,4 +1,4 @@
-# ADR-0020 — Against a hand-written kernel: 17% more instructions, the same bandwidth
+# ADR-0020 — Against hand-written CUDA: 17% more instructions, the same time
 
 **Status:** Accepted
 **Date:** 2026-09-16
@@ -107,11 +107,75 @@ Third impossible number this project has produced from a launch that did not do 
 3.85 TB/s from a mismatched block, 1646 GB/s from a byte count multiplied twice, 3924 GB/s from
 freed arguments. Each was caught by being physically impossible rather than by a test.
 
+## The hard kernel: a tiled transpose
+
+`saxpy` is the easiest kernel either compiler will ever emit. A tiled transpose is the hard one
+— shared memory, two barriers, a skewed row stride, guards on two axes, and a permutation that
+has to happen in the right place — and it is the kernel this project's central claim is about.
+
+`bench/vs_handwritten_transpose.py` runs four: LYTH tiled, nvcc tiled, LYTH naive, nvcc naive.
+**The naive pair is not filler.** Without it, "the tiled one is faster" is a claim about tiling
+that neither compiler is responsible for.
+
+| `8192²` | LYTH / nvcc |
+|---|---|
+| tiled | **100.8%** [97–101%] |
+| naive | **99.7%** [99–101%] |
+
+Both ranges cross parity. Same at 2048². **On the hardest kernel this language can express,
+generated and hand-written are not distinguishable.**
+
+And the control does what a control should:
+
+| what the tile buys | LYTH | nvcc |
+|---|---|---|
+| at 2048² | 1.79× | 1.77× |
+| at 8192² | 1.076× | 1.064× |
+
+The tile gives the same speedup to both compilers, which is what makes it a property of the
+**schedule** rather than of either code generator.
+
+### The tile's value depends on the size, and the reason is the L2
+
+1.79× at 2048² and 1.07× at 8192², for the same two declared lines and the same 4.5× reduction
+in L2 traffic. That is not noise and it is worth stating as a limit.
+
+At 8192² the naive transpose's DRAM traffic, measured: **4.01 bytes read and 3.88 written per
+element** — against a payload of 8. Its 36 bytes per element of sector waste never reach the
+memory controller, because the L2 absorbs it. The tile removes traffic the L2 was already
+removing, and what is left to gain is small.
+
+At 2048² both matrices fit in a 34 MB L2, so the tiled kernel runs at L2 speed — 540 GB/s of
+payload, above what DRAM can deliver — while the naive one is held back by the sector traffic
+it generates *inside* the L2.
+
+So ADR-0017's "36 bytes per element becomes 8" is exact and remains exact; this is what it is
+worth in time, and the answer is "it depends on whether the L2 was already doing the job".
+ADR-0015 said the L2 figure is not a DRAM figure. This is the same sentence with a stopwatch.
+
+## A third fault in the instrument: interleaving introduced its own bias
+
+The first run of the transpose comparison reported **LYTH's naive transpose 56% faster than the
+hand-written one**. Both move byte-for-byte identical traffic — 36.00 against 36.10 at L2, 4.01
+against 4.10 at DRAM, measured back to back. A 56% gap between two kernels that move the same
+bytes is not a result, it is a bug.
+
+Run alone, or in either order with nothing else between them, the two are **100.2% and 100.7%**
+apart. The gap was the harness: four kernels writing 268 MB each, in a **fixed order**, so
+whichever ran last always inherited the worst cache and DRAM state — and in a fixed order that
+is the same kernel every round.
+
+Interleaving was introduced to remove a confound (clocks drifting between processes) and it
+quietly added another. The order now rotates each round. The general lesson is narrower than
+"interleave": **a comparison is fair when every arm sees the same conditions, and putting them
+in one loop is not by itself that.**
+
 ## Files
 
 | | |
 |---|---|
 | `bench/cuda/handwritten.cu` | the hand-written kernels, written to LYTH's schedule |
 | `bench/nvrtc.py` | CUDA C++ to PTX with no host compiler |
-| `bench/vs_handwritten.py` | the interleaved comparison, correctness first |
+| `bench/vs_handwritten.py` | the saxpy comparison, correctness first |
+| `bench/vs_handwritten_transpose.py` | the tiled transpose, with the naive pair as control |
 | `docs/ADR-0014-loop-cost.md` | the 28.00 this reproduces, measured another way |
