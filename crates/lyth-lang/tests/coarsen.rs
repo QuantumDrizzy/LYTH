@@ -157,3 +157,35 @@ fn a_second_coarsen_is_refused() {
     let e = parse(&src).expect_err("two coarsen lines");
     assert!(e.to_string().contains("declared twice"), "{e}");
 }
+
+#[test]
+fn known_limit_the_shared_traffic_does_not_see_the_coarsening() {
+    // [KNOWN_LIMIT] ADR-0021 step 5. The compiler derives the same `8 * k` shared read per
+    // output element with and without `coarsen 2, 2`, and the profiler says the coarsened
+    // kernel issues **exactly half** the shared loads: 268,435,456 against 536,870,912 at
+    // 2048 cubed, where `8 * k` per element is 68.7 GB and the measurement is 34.4.
+    //
+    // The right figure is `4k * (ci + cj) / (ci * cj)` -- `ci + cj` operands are loaded to
+    // feed `ci * cj` bodies, which is the entire mechanism this ADR raises the intensity
+    // with. `8 * k` is that expression at `coarsen 1, 1`.
+    //
+    // This is not cosmetic. Step 5 measured that the shared-load count, not the derived
+    // global traffic, is what paces a tiled contraction on this device: `tile 16` moves twice
+    // the global bytes of `tile 32`, issues the same shared loads, and takes the same time.
+    // So this is the wrong value of the quantity that decides the time, sitting beside the
+    // right value of one that does not.
+    //
+    // Pinned rather than fixed, because fixing it means the shared level has to enter the
+    // roofline instead of being printed beside it -- the ceiling would be computed against
+    // whichever level binds. That is the next ADR, not this one.
+    let plain = ir(&matmul("64, 64", None)).expect("lowers");
+    let coarse = ir(&matmul("64, 64", Some("2, 2"))).expect("lowers");
+    let (plain_r, _) = plain.cost.traffic_words(lyth_lang::ast::Level::Smem);
+    let (coarse_r, _) = coarse.cost.traffic_words(lyth_lang::ast::Level::Smem);
+    assert_eq!(plain_r, "8 * k", "the uncoarsened figure is right");
+    assert_eq!(
+        coarse_r, "8 * k",
+        "[KNOWN_LIMIT] this should be `4 * k`; the emitter halves the loads and the model \
+         does not know"
+    );
+}

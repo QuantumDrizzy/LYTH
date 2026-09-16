@@ -54,23 +54,47 @@ sys.path.insert(0, str(HERE))
 from nvrtc import compile_ptx  # noqa: E402
 from vs_handwritten import Module, driver, timed  # noqa: E402
 
-# (LYTH example, generated binding, hand-written entry point, label)
+# (tile, per-axis coarsening, generated binding, hand-written entry point, label)
+#
+# `tile 16` is not decoration. Coarsening halves the global traffic and the shared-load count by
+# the same factor of two, so the 32-vs-64 pair cannot say which of them paces the kernel.
+# `tile 16` doubles the traffic per output and leaves the shared-load count per output
+# *unchanged* -- one thread per tile element either way, two loads per term -- so the two
+# hypotheses predict times a factor of two apart.
 VARIANTS = [
-    ("matmul.lyth", "matmul32", "matmul_t32", "tile 32"),
-    ("matmul-coarse.lyth", "matmul64c2", "matmul_t64c2", "tile 64 + coarsen 2,2"),
+    (16, 1, "matmul16", "matmul_t16", "tile 16"),
+    (32, 1, "matmul32", "matmul_t32", "tile 32"),
+    (64, 2, "matmul64c2", "matmul_t64c2", "tile 64 + coarsen 2,2"),
 ]
 
 
-def build_binding(binary: pathlib.Path, machine: pathlib.Path, example: str, mod: str):
+def build_binding(binary: pathlib.Path, machine: pathlib.Path, tile: int, c: int, mod: str):
+    """Generate the source for one tile, compile it, and import its binding.
+
+    The source is `examples/matmul.lyth` with three declarations rewritten, exactly as
+    `tools/contraction_traffic.py` does it -- the declared asymptote has to move with the tile
+    (`T/4`) or the compiler refuses the file, which is the compiler doing its job.
+    """
     gen = HERE / "gen"
     gen.mkdir(parents=True, exist_ok=True)
     path = gen / f"{mod}.py"
     if not path.exists():
         if not binary.exists():
             sys.exit(f"{binary} is not built. Run `cargo build --release`.")
+        src = (REPO / "examples/matmul.lyth").read_text(encoding="utf-8")
+        nl = chr(10)
+        tile_line = f"    tile {tile}, {tile}{nl}"
+        if c > 1:
+            tile_line += f"    coarsen {c}, {c}{nl}"
+        src = src.replace(f"    tile 32, 32{nl}", tile_line)
+        src = src.replace(
+            f"    intensity asymptotic 8.0{nl}",
+            f"    intensity asymptotic {tile / 4}{nl}",
+        )
+        lyth_src = gen / f"{mod}.lyth"
+        lyth_src.write_text(src, encoding="utf-8")
         subprocess.run(
-            [str(binary), "build", str(REPO / "examples" / example),
-             "--machine", str(machine),
+            [str(binary), "build", str(lyth_src), "--machine", str(machine),
              "-o", "nul" if sys.platform == "win32" else "/dev/null",
              "--bind-py", str(path)],
             check=True, capture_output=True,
@@ -113,8 +137,8 @@ def main() -> int:
     calls: dict[str, callable] = {}
     outs: dict[str, torch.Tensor] = {}
 
-    for example, mod, entry, label in VARIANTS:
-        lyth = build_binding(args.binary, args.machine, example, mod)
+    for tile, c, mod, entry, label in VARIANTS:
+        lyth = build_binding(args.binary, args.machine, tile, c, mod)
         grid, block, shared = lyth.grid(sz, sz, sz), lyth.BLOCK, lyth.SHARED_BYTES
 
         cl = torch.zeros(sz, sz, device="cuda", dtype=torch.float32)
@@ -162,7 +186,7 @@ def main() -> int:
     # rule, identical bits. If this fails, one of the two is not following the other's
     # schedule and the timing below would be about two different kernels.
     print()
-    for _, _, _, label in VARIANTS:
+    for *_, label in VARIANTS:
         pair = (f"LYTH {label}", f"nvrtc {label}")
         same = torch.equal(outs[pair[0]], outs[pair[1]])
         print(f"  {label:<22} LYTH == nvrtc --fmad=false : "
@@ -196,7 +220,7 @@ def main() -> int:
         print(f"  {name:<32} {med[name]:>15.2f} {v[0]:>8.2f} {v[-1]:>8.2f}")
 
     print()
-    for _, _, _, label in VARIANTS:
+    for *_, label in VARIANTS:
         l, h = f"LYTH {label}", f"nvrtc {label}"
         lo = min(rows[l]) / max(rows[h])
         hi = max(rows[l]) / min(rows[h])

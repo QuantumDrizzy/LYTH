@@ -120,6 +120,16 @@ __device__ __forceinline__ void matmul_tiled(unsigned int m, unsigned int n, uns
     }
 }
 
+// `tile 16, 16` -- half the tile, so twice the global traffic per output and *the same* number
+// of shared-load instructions per output as `tile 32`. That asymmetry is what makes it the
+// discriminator ADR-0021 step 5 needed: coarsening halves both quantities and cannot tell them
+// apart, and this tells them apart.
+extern "C" __global__ void matmul_t16(unsigned int m, unsigned int n, unsigned int k,
+                                      const float* a, const float* b, float* c)
+{
+    matmul_tiled<16, 1>(m, n, k, a, b, c);
+}
+
 // `tile 32, 32` -- one thread per tile element, 1024 threads, 8 flop/byte. What LYTH could
 // already emit before ADR-0021.
 extern "C" __global__ void matmul_t32(unsigned int m, unsigned int n, unsigned int k,

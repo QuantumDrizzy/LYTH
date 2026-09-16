@@ -1,6 +1,6 @@
 # ADR-0021 — Thread coarsening, and the limit that was argued but never checked
 
-**Status:** Proposed — steps 1, 2 and 3 built
+**Status:** Accepted — all five steps built and measured
 **Date:** 2026-09-16
 **Depends on:** ADR-0018 (contraction), ADR-0017 (the tile), ADR-0000 (why)
 
@@ -268,6 +268,170 @@ not step 4.
 It joins the honest open list next to the bank-conflict excess from ADR-0018: small, consistent,
 inside the 2% tolerance, and not understood.
 
+## Step 4, as measured
+
+`tools/contraction_traffic.py`, taught to derive the coarsening each tile needs — the smallest
+power of two that brings `T x T` threads under the block cap, which is determined by the tile
+and the cap and is not a schedule search. Nine points, three tiles spanning a factor of **four**
+in derived traffic. The derived figure is read out of the manifest the compiler emitted, so no
+human writes the model being checked.
+
+| tile | block | derived | `m=n=k` | L2/output | vs model | L1 hit | DRAM vs A+B |
+|---|---|---|---|---|---|---|---|
+| **64 + `coarsen 2, 2`** | 1024 | `0.125k + 4` | 512 | 68.43 | **+0.63%** | 0.00% | 1.00x |
+| | | | 1024 | 132.03 | **+0.03%** | 0.00% | 1.00x |
+| | | | 2048 | 262.07 | **+0.80%** | 0.00% | 1.54x |
+| 32 | 1024 | `0.25k + 4` | 512 | 131.31 | −0.52% | 0.62% | 1.00x |
+| | | | 1024 | 260.03 | +0.01% | 0.00% | 1.00x |
+| | | | 2048 | 519.03 | +0.59% | 0.00% | 1.62x |
+| 16 | 256 | `0.5k + 4` | 512 | 253.83 | −2.37% | 2.60% | 1.46x |
+| | | | 1024 | 488.84 | −5.26% | 5.46% | 1.01x |
+| | | | 2048 | 1025.02 | −0.29% | 0.53% | 1.57x |
+
+**HOLDS: the largest disagreement is +0.80% once the L1 hit rate is credited**, against the 2%
+tolerance ADR-0017 earned. The `tile 16` rows reproduce ADR-0018's finding exactly — the gap
+follows the L1 hit rate up and back down — and the two new rows carry it to a third tile.
+
+**The coarsened kernel moves what the tile derives.** That is the claim ADR-0021 made before the
+emitter existed, on the argument that reuse is a property of the tile and coarsening changes
+which thread computes what rather than what is staged. It is now a measurement at three sizes.
+
+### One thing the sweep got wrong about itself
+
+Each 2048 point spends **about fifteen minutes verifying on the host** — `lyth run` evaluates
+the IR on the CPU to prove the kernel bit-exact, which for a matmul is `O(n³)` in an
+interpreter, and that is most of the sweep's wall time rather than `ncu`. The gate is right and
+`sector_check.py` learned the hard way why it exists. It is the instrument that is slow, and
+this is written down so the next person does not go looking for it in the profiler.
+
+## Step 5, as measured — and the pre-registration was wrong
+
+`bench/cuda/handwritten_matmul.cu`, written to the emitter's schedule line by line: grid-stride
+over output tiles, `tx`/`ty` from the block's width, two skewed tiles in dynamic shared memory,
+`C x C` staged elements per operand, two `__syncthreads()` in the same two places, a term loop
+bounded by `min(T, k - p)` and not a zero fill, `C x C` register accumulators, `C x C` guarded
+stores. No `__restrict__`, 32-bit index arithmetic, and `--fmad=false` — because LYTH emits a
+multiply and an add as two instructions on purpose (ADR-0010), and an nvrtc left to contract
+them computes a different function.
+
+**The fairness claim is not argued, it is checked: LYTH and nvrtc are BIT-IDENTICAL at all three
+tiles**, over 4,194,304 outputs, before anything is timed. The default-`fmad` build differs in
+3,709,748 of them, which is what "a different rounding rule is a different answer" looks like as
+a number.
+
+### What each compiler emits
+
+nvrtc **unrolls the term loop** — 15x at `tile 32`, 7x at the coarsened tile — and LYTH does
+not. Per term the work is identical (4 shared loads and 8 multiply-adds at `coarsen 2, 2` on
+both sides); what nvrtc saves is the loop's own overhead, amortised.
+
+`smsp__thread_inst_executed.sum`, one launch each at 2048³:
+
+| | LYTH | nvrtc | LYTH / nvrtc |
+|---|---|---|---|
+| `tile 16` | 102.79 G | 80.81 G | **127.2%** |
+| `tile 32` | 89.10 G | 67.93 G | **131.2%** |
+| `tile 64` + `coarsen 2, 2` | 48.03 G | 35.57 G | **135.0%** |
+
+**ADR-0020's 17% did not transfer. It is 27 to 35% here**, and it grows with the tile. The saxpy
+number was about the saxpy.
+
+### And it still costs nothing
+
+Nine rounds of ten launches, interleaved, order rotated each round, CUDA events, no profiler
+attached:
+
+| | LYTH | nvrtc `--fmad=false` | LYTH / nvrtc | nvrtc default `fmad` |
+|---|---|---|---|---|
+| `tile 16` | 1.27 TFLOP/s | 1.39 | **91.4%** [91–102%] | 1.39 |
+| `tile 32` | 1.26 | 1.29 | **97.6%** [96–98%] | 1.29 |
+| `tile 64` + `coarsen 2, 2` | **2.63** | 2.56 | **102.7%** [92–105%] | 2.73 |
+
+**Prediction 3 is falsified.** LYTH executes 35% more instructions than nvcc at the coarsened
+tile and finishes in the same time — 102.7%, a range that crosses parity. ADR-0020's debt did
+not come due at 16 flop/byte. The only tile where LYTH loses measurably is `tile 16`, at 91.4%,
+which is the one with 256 threads per block and the least to hide behind.
+
+And **coarsening is worth 2.07x** — 1.26 to 2.63 TFLOP/s for the same flops, from one declared
+line. The derived traffic ratio is 1.985.
+
+### The 2.07x is right and the reason is not the one this ADR modelled
+
+`tile 16` was added to the harness for exactly this. Coarsening halves the global traffic and
+the shared-load count together, so the 32-vs-64 pair cannot say which of them paces the kernel.
+**`tile 16` doubles the traffic per output and leaves the shared-load count unchanged** — one
+thread per tile element either way, two loads per term — so the two hypotheses predict times a
+factor of two apart. Written down before it was run:
+
+> If L2 traffic paces it, `tile 16` takes 2x `tile 32`: **0.63 TFLOP/s**.
+> If shared loads pace it, `tile 16` takes the same time: **1.26 TFLOP/s**.
+
+Measured: **1.27 TFLOP/s.** `tile 16` moves 1024.94 bytes per output against `tile 32`'s 518.32
+— confirmed in the same profile — and takes 13.53 ms against 13.63.
+
+> **The quantity this compiler derives does not determine this kernel's time.** Twice the
+> derived traffic, the same time.
+
+What does track, across six kernels, two compilers, and a factor of two in time:
+
+| | LYTH t16 | nvrtc t16 | LYTH t32 | nvrtc t32 | LYTH t64c2 | nvrtc t64c2 | spread |
+|---|---|---|---|---|---|---|---|
+| **shared loads /s** | 39.7 G | 43.4 G | 39.4 G | 40.3 G | 41.1 G | 40.0 G | **10%** |
+| instructions /s | 237 G | 204 G | 204 G | 159 G | 230 G | 166 G | 49% |
+| L2 GB/s | 318 | 348 | 159 | 163 | 167 | 163 | **118%** |
+| DRAM GB/s | 3.9 | 4.3 | 3.9 | 4.0 | 7.0 | 6.8 | — |
+
+DRAM never exceeds **1.7% of the 414.51 GB/s** this device was measured at. The line `lyth run`
+prints — *"at this intensity the ceiling is 43.35% of peak FLOPS, with bandwidth saturated"* —
+has the wrong noun in it. Nothing is saturated. Every one of these kernels lands at **38–42% of
+its own printed ceiling**, which is prediction 2 holding for a reason prediction 1 only half
+had: DRAM is not the constraint, but not because the operands fit in L2 — at 2048 they no longer
+do, and DRAM moves 1.5 to 1.6x `A + B`, which step 4 measured. DRAM is not the constraint
+because *nothing about DRAM is close to a limit*.
+
+### The model already holds the quantity that predicts the time, and holds it wrong
+
+`lyth run` prints, for all three tiles:
+
+```
+shared   8 * k read + ... per element
+```
+
+Per output element that is `68.7 GB` at 2048, and the profiler agrees exactly at `tile 16` and
+`tile 32`: 536,870,912 shared-load instructions x 128 B = 68.7 GB. At `tile 64` +
+`coarsen 2, 2` the profiler counts **268,435,456 — exactly half** — and the compiler still says
+`8 * k`.
+
+**So the shared-level derivation is wrong by exactly the factor coarsening is for.** The right
+figure is `4k · (Cᵢ + Cⱼ) / (Cᵢ · Cⱼ)`, which is `8k` at `coarsen 1, 1` and `4k` at `2, 2`;
+`ci + cj` operands feed `ci · cj` bodies, and that ratio is the whole reason this ADR raises the
+intensity. The design section above says:
+
+> reuse is a property of the tile, and coarsening changes which thread computes what, not what
+> is staged.
+
+That is **true of global traffic and false of shared traffic**, and this ADR asserted it of
+both. No test caught it, and the reason is worth the sentence: `coarsen.rs` does assert that the
+two agree on the shared **allocation** — which is correct, the tile is the same size either way
+— and an assertion about shared memory that passes is the kind of thing that makes a reader stop
+looking. The shared **traffic** was never asserted for a coarsened kernel at all.
+
+It is asserted now, at the wrong value, as `[KNOWN_LIMIT]`.
+
+Not fixed here. Fixing it means the shared figure has to enter the roofline rather than sit
+beside it — the ceiling would be computed against whichever level binds, which is a different
+ADR and the obvious next one.
+
+### What step 5 concludes
+
+* ADR-0020's debt is **recorded larger and still unpaid**: 27–35% more instructions, 91–103% of
+  the time. On this device a hand-written matmul of the same schedule is not worth writing.
+* The 2.07x coarsening buys is **real, and is not the halved DRAM traffic**. It is the halved
+  shared-load count, which coarsening happens to halve by the same factor.
+* **The cost model is exact about a quantity that does not decide the time** (step 4: ±0.80%
+  over a 4x range) **and wrong about the one that does** (2x, at the only tile where they
+  differ). Both halves of that sentence are this ADR's result.
+
 ## Step 5, pre-registered before it was measured
 
 The first run of `bench/vs_handwritten_matmul.py` produced a number that looks like the ADR
@@ -329,8 +493,8 @@ way it falls, the losing half of this paragraph stays in the document.
 | **1** | **the block limits as machine-file facts, checked before emission** | **done — 5 tests, no GPU needed** |
 | **2** | **`coarsen` in the AST, parser and IR, with its refusals** | **done — 9 tests, no GPU needed** |
 | **3** | **the emitter: register accumulators, the staging loop, the term loop** | **done — 7 tests, bit-exact on 7 non-divisible shapes at `2,2` and `2,4`** |
-| 4 | `--ncu` | the derived `0.125 * k + 4` at `tile 64, 64`, against measurement |
-| 5 | against a hand-written coarsened matmul | the ADR-0020 comparison, on a kernel where instructions might finally matter |
+| **4** | **`--ncu`** | **done — 9 points, 3 tiles, worst +0.80%** |
+| **5** | **against a hand-written coarsened matmul** | **done — bit-identical, 35% more instructions, 102.7% of the time** |
 
 Step 5 is the interesting one. ADR-0020 measured LYTH emitting 17% more instructions than nvcc
 and losing nothing for it, because every kernel this language can write waits on memory. A
@@ -347,3 +511,7 @@ coarsened matmul at 16 flop/byte is the first kernel where that debt could come 
 | `crates/lyth-ptx/src/contracted.rs` | the emitter, generalised so `coarsen 1, 1` is the path ADR-0018 already tested |
 | `examples/matmul-coarse.lyth` | `tile 64, 64` + `coarsen 2, 2`, the tile step 1 refused |
 | `crates/lyth/tests/coarsen_emitter.rs` | bit-exactness, the PTX structure, the bypass control, the refusal |
+| `tools/contraction_traffic.py` | step 4: the coarsening a tile needs, derived from the block cap |
+| `bench/cuda/handwritten_matmul.cu` | step 5: the same schedule, by hand, at three tiles |
+| `bench/vs_handwritten_matmul.py` | bit-identity first, then time; `tile 16` is the discriminator |
+| `bench/inst_matmul.py` | the counters, through `ncu`, six then nine launches in a fixed order |
