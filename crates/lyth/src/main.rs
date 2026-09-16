@@ -1087,10 +1087,6 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
             // start from the same numbers (ADR-0024 step 2). Generating here in f32 and
             // rounding at the boundary keeps one generator rather than three.
             Ty::BufF32 | Ty::BufF16 | Ty::BufBF16 => {
-                let seed = p
-                    .name
-                    .bytes()
-                    .fold(1u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
                 // Sized by the buffer's **own** shape, not by the element count. They
                 // coincide for every kernel written before a contraction: `a` is `m x k` and
                 // `c` is `m x n`, and sizing both by `m * n` is over-allocation when `k < n`
@@ -1105,21 +1101,11 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
                         .product::<u64>()
                         .min(u32::MAX as u64) as u32
                 };
-                let data: Vec<f32> = (0..len)
-                    .map(|i| {
-                        let h = (i.wrapping_mul(2654435761).wrapping_add(seed)) >> 8;
-                        let v = (h % 2003) as f32 / 251.0 - 4.0;
-                        // Rounded **here**, once, so the host's copy and the device's are the
-                        // same numbers. If the oracle evaluated unrounded inputs it would be
-                        // computing on values the kernel never saw, and every comparison would
-                        // be against a function nobody ran.
-                        match p.ty {
-                            Ty::BufF16 => lyth_lang::half::round_f16(v),
-                            Ty::BufBF16 => lyth_lang::half::round_bf16(v),
-                            _ => v,
-                        }
-                    })
-                    .collect();
+                // `lyth_lang::inputs` is the one definition, because ADR-0025's second
+                // backend bakes the same numbers into a `.uasm` `.data` section and the two
+                // must agree. A generator copied into both is a generator that will drift,
+                // which is ADR-0019's lesson with the launch shape.
+                let data = lyth_lang::inputs::buffer(&p.name, p.ty, len);
                 inputs.buffers.insert(p.name.clone(), data);
             }
             Ty::U32 => {}
