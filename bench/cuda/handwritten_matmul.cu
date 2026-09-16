@@ -44,19 +44,23 @@
 
 // The tile's shared stride: skewed by one so a column walk lands on 32 distinct banks, which is
 // what LYTH derives rather than what a person would remember to do.
-template <unsigned T, unsigned C>
+template <unsigned T, unsigned CI, unsigned CJ>
 __device__ __forceinline__ void matmul_tiled(unsigned int m, unsigned int n, unsigned int k,
                                              const float* a, const float* b, float* c)
 {
     extern __shared__ float smem[];
 
     const unsigned int stride = T + 1;
-    const unsigned int bw = T / C;              // the block's width, not the tile's
+    // The block's two widths, not the tile's, and they are different once the coarsening is
+    // not square. The emitter takes the thread's column from `bj` and its row from what is
+    // left, so a template with one `C` would silently be a different schedule at `2, 4`.
+    const unsigned int bi = T / CI;
+    const unsigned int bj = T / CJ;
     float* as = smem;
     float* bs = smem + T * stride;
 
-    const unsigned int tx = threadIdx.x & (bw - 1);
-    const unsigned int ty = threadIdx.x / bw;
+    const unsigned int tx = threadIdx.x & (bj - 1);
+    const unsigned int ty = threadIdx.x / bj;
 
     const unsigned int tiles_n = (n + T - 1) / T;
     const unsigned int total = ((m + T - 1) / T) * tiles_n;
@@ -66,9 +70,9 @@ __device__ __forceinline__ void matmul_tiled(unsigned int m, unsigned int n, uns
         const unsigned int trow = t / tiles_n;
         const unsigned int tcol = t % tiles_n;
 
-        float acc[C][C];
-        for (unsigned int u = 0; u < C; ++u)
-            for (unsigned int v = 0; v < C; ++v)
+        float acc[CI][CJ];
+        for (unsigned int u = 0; u < CI; ++u)
+            for (unsigned int v = 0; v < CJ; ++v)
                 acc[u][v] = 0.0f;
 
         for (unsigned int s = 0; s < steps; ++s) {
@@ -76,19 +80,19 @@ __device__ __forceinline__ void matmul_tiled(unsigned int m, unsigned int n, uns
 
             // Phase 1: each thread stages C x C elements of each operand, at its own places in
             // the tile. Predicated rather than branched, so the block stays together.
-            for (unsigned int u = 0; u < C; ++u) {
-                for (unsigned int v = 0; v < C; ++v) {
-                    const unsigned int ay = trow * T + ty + u * bw;
-                    const unsigned int ax = pbase + tx + v * bw;
+            for (unsigned int u = 0; u < CI; ++u) {
+                for (unsigned int v = 0; v < CJ; ++v) {
+                    const unsigned int ay = trow * T + ty + u * bi;
+                    const unsigned int ax = pbase + tx + v * bj;
                     float va = 0.0f;
                     if (ay < m && ax < k) va = a[ay * k + ax];
-                    as[(ty + u * bw) * stride + tx + v * bw] = va;
+                    as[(ty + u * bi) * stride + tx + v * bj] = va;
 
-                    const unsigned int by = pbase + ty + u * bw;
-                    const unsigned int bx = tcol * T + tx + v * bw;
+                    const unsigned int by = pbase + ty + u * bi;
+                    const unsigned int bx = tcol * T + tx + v * bj;
                     float vb = 0.0f;
                     if (by < k && bx < n) vb = b[by * n + bx];
-                    bs[(ty + u * bw) * stride + tx + v * bw] = vb;
+                    bs[(ty + u * bi) * stride + tx + v * bj] = vb;
                 }
             }
 
@@ -99,21 +103,21 @@ __device__ __forceinline__ void matmul_tiled(unsigned int m, unsigned int n, uns
             // for both combinators.
             const unsigned int inner = (k - pbase) < T ? (k - pbase) : T;
             for (unsigned int tt = 0; tt < inner; ++tt) {
-                float av[C], bv[C];
-                for (unsigned int u = 0; u < C; ++u) av[u] = as[(ty + u * bw) * stride + tt];
-                for (unsigned int v = 0; v < C; ++v) bv[v] = bs[tt * stride + tx + v * bw];
-                for (unsigned int u = 0; u < C; ++u)
-                    for (unsigned int v = 0; v < C; ++v)
+                float av[CI], bv[CJ];
+                for (unsigned int u = 0; u < CI; ++u) av[u] = as[(ty + u * bi) * stride + tt];
+                for (unsigned int v = 0; v < CJ; ++v) bv[v] = bs[tt * stride + tx + v * bj];
+                for (unsigned int u = 0; u < CI; ++u)
+                    for (unsigned int v = 0; v < CJ; ++v)
                         acc[u][v] += av[u] * bv[v];
             }
 
             __syncthreads();
         }
 
-        for (unsigned int u = 0; u < C; ++u) {
-            for (unsigned int v = 0; v < C; ++v) {
-                const unsigned int gi = trow * T + ty + u * bw;
-                const unsigned int gj = tcol * T + tx + v * bw;
+        for (unsigned int u = 0; u < CI; ++u) {
+            for (unsigned int v = 0; v < CJ; ++v) {
+                const unsigned int gi = trow * T + ty + u * bi;
+                const unsigned int gj = tcol * T + tx + v * bj;
                 if (gi < m && gj < n) c[gi * n + gj] = acc[u][v];
             }
         }
@@ -127,7 +131,7 @@ __device__ __forceinline__ void matmul_tiled(unsigned int m, unsigned int n, uns
 extern "C" __global__ void matmul_t16(unsigned int m, unsigned int n, unsigned int k,
                                       const float* a, const float* b, float* c)
 {
-    matmul_tiled<16, 1>(m, n, k, a, b, c);
+    matmul_tiled<16, 1, 1>(m, n, k, a, b, c);
 }
 
 // `tile 32, 32` -- one thread per tile element, 1024 threads, 8 flop/byte. What LYTH could
@@ -135,7 +139,7 @@ extern "C" __global__ void matmul_t16(unsigned int m, unsigned int n, unsigned i
 extern "C" __global__ void matmul_t32(unsigned int m, unsigned int n, unsigned int k,
                                       const float* a, const float* b, float* c)
 {
-    matmul_tiled<32, 1>(m, n, k, a, b, c);
+    matmul_tiled<32, 1, 1>(m, n, k, a, b, c);
 }
 
 // `tile 64, 64` + `coarsen 2, 2` -- the same 1024 threads over four times the tile, four
@@ -143,5 +147,21 @@ extern "C" __global__ void matmul_t32(unsigned int m, unsigned int n, unsigned i
 extern "C" __global__ void matmul_t64c2(unsigned int m, unsigned int n, unsigned int k,
                                         const float* a, const float* b, float* c)
 {
-    matmul_tiled<64, 2>(m, n, k, a, b, c);
+    matmul_tiled<64, 2, 2>(m, n, k, a, b, c);
+}
+
+// The two schedules ADR-0022 predicted before anything ran them: 2.56 and 3.76 flop per shared
+// access against 1.94 at `coarsen 2, 2`, and 512 and 256 threads per block against 1024. The
+// block gets narrower as the coarsening grows, so if occupancy binds before the shared pipe
+// does, these are where the model finds its own limit.
+extern "C" __global__ void matmul_t64c24(unsigned int m, unsigned int n, unsigned int k,
+                                         const float* a, const float* b, float* c)
+{
+    matmul_tiled<64, 2, 4>(m, n, k, a, b, c);
+}
+
+extern "C" __global__ void matmul_t64c44(unsigned int m, unsigned int n, unsigned int k,
+                                         const float* a, const float* b, float* c)
+{
+    matmul_tiled<64, 4, 4>(m, n, k, a, b, c);
 }

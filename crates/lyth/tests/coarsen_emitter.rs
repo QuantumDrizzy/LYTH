@@ -39,7 +39,11 @@ fn run(example: &str, extents: &[(&str, u32)], extra: &[&str]) -> (String, bool)
 }
 
 fn has_device(text: &str) -> bool {
-    !text.contains("no CUDA device") && !text.contains("CUDA driver")
+    // Any `error[cuda]` before the kernel runs means there is no usable device, whatever
+    // the driver called it. The first version listed two phrasings and a GPU that fell
+    // off the bus produced a third -- `cuInit failed: INVALID_VALUE` -- so five tests
+    // reported a failure where the honest answer was "not measured here".
+    !text.contains("error[cuda]")
 }
 
 /// The shapes that divide nothing. 64 divides none of 97, 131 or 67, so the edge tile of `m`,

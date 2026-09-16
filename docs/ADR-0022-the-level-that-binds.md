@@ -1,6 +1,6 @@
 # ADR-0022 — The ceiling belongs to the level that binds, and it is not always DRAM
 
-**Status:** Proposed — steps 1, 2 and 3 built
+**Status:** Proposed — steps 1-3 built, step 4 built and awaiting a working GPU
 **Date:** 2026-09-16
 **Depends on:** ADR-0021 (coarsening, and the measurement that forced this), ADR-0015 (payload vs
 bus), ADR-0000 (why)
@@ -270,6 +270,51 @@ zero — the same failure mode the block limits have, and the reason those are `
 
 247 tests green, clippy clean.
 
+## Step 4, half measured — the correctness half
+
+The instrument is built and the two new schedules are in it. `bench/cuda/handwritten_matmul.cu`
+is now templated on `<T, CI, CJ>` rather than a single `C`, because at `coarsen 2, 4` the
+block's two widths differ and the emitter takes a thread's column from `bj` and its row from
+what is left — a template with one `C` would have been a different schedule wearing the same
+name.
+
+**All five are BIT-IDENTICAL between LYTH and nvrtc `--fmad=false`**, over 4,194,304 outputs
+each, and all five are bit-exact against the host evaluator at `97x131x67` where 64 divides
+nothing. The two new ones launch at **512 and 256 threads per block**.
+
+The compiler's predictions, printed by the compiler rather than written here:
+
+| | shared read | access/element/k | ceiling | block |
+|---|---|---|---|---|
+| `coarsen 2, 2` | `4 * k` | 1.0312 | **2.97 TFLOP/s** | 1024 |
+| `coarsen 2, 4` | `3 * k` | 0.7812 | **3.92** | 512 |
+| `coarsen 4, 4` | `2 * k` | 0.5312 | **5.76** | 256 |
+
+`coarsen 2, 2` was measured at 2.63, which is **89%** of its ceiling. If the other two land near
+that, they are ~3.5 and ~5.1 TFLOP/s. If they fall short, the narrowing block is the reason and
+the model has found its own limit, which is the outcome this step was written to allow.
+
+### Not measured: the GPU fell off the bus
+
+The timing run died partway through with `CUDA error: unknown error`, and `nvidia-smi` then
+reported:
+
+```
+Unable to determine the device handle for GPU0: 0000:03:00.0: GPU is lost.
+```
+
+A driver-level fall-off-the-bus, needing a reboot. **No throughput number for `2, 4` or `4, 4`
+is recorded here**, and none will be until the machine is back and the run repeats cleanly. The
+correctness results above completed before it and stand on their own; the predictions stand as
+written, unadjusted, which is the point of having committed them first.
+
+### One thing it did find
+
+Five tests **failed** rather than skipping, because the guard listed two phrasings of "no
+device" and a lost GPU produces a third: `cuInit failed: INVALID_VALUE`. The guard now treats
+any `error[cuda]` before the kernel runs as no usable device. A test that cannot tell "this is
+broken" from "this was not measured here" is a test that will eventually claim the wrong one.
+
 ## Build sequence
 
 | step | | testable on its own |
@@ -277,7 +322,7 @@ zero — the same failure mode the block limits have, and the reason those are `
 | **1** | **`tools/shared_probe.py` — the access rate, from a kernel that does nothing else** | **done — 1530.0 G accesses/s, 0.3% spread, two controls** |
 | **2** | **the derivation, with the coarsening in it** | **done — the `[KNOWN_LIMIT]` inverted; four coarsenings asserted** |
 | **3** | **the machine file gains the rate; a ceiling per level, and the binder named** | **done — 12 kernels still `dram`, the matmul `smem`, 4 tests** |
-| 4 | the falsification: `coarsen 2, 4` and `4, 4` against the predictions above | pre-registered here, measured there |
+| 4 | the falsification: `coarsen 2, 4` and `4, 4` | **built and bit-identical; the timing run is blocked on a lost GPU** |
 
 Step 3 has a regression risk worth naming in advance: **every kernel in this repository has its
 regime printed by this code path**, and nine of them are correctly DRAM-bound today. A change

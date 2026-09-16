@@ -62,13 +62,19 @@ from vs_handwritten import Module, driver, timed  # noqa: E402
 # *unchanged* -- one thread per tile element either way, two loads per term -- so the two
 # hypotheses predict times a factor of two apart.
 VARIANTS = [
-    (16, 1, "matmul16", "matmul_t16", "tile 16"),
-    (32, 1, "matmul32", "matmul_t32", "tile 32"),
-    (64, 2, "matmul64c2", "matmul_t64c2", "tile 64 + coarsen 2,2"),
+    (16, (1, 1), "matmul16", "matmul_t16", "tile 16"),
+    (32, (1, 1), "matmul32", "matmul_t32", "tile 32"),
+    (64, (2, 2), "matmul64c2", "matmul_t64c2", "tile 64 + coarsen 2,2"),
+    # ADR-0022 step 4: predicted at 3.92 and 5.76 TFLOP/s before either was run, at 512 and
+    # 256 threads per block.
+    (64, (2, 4), "matmul64c24", "matmul_t64c24", "tile 64 + coarsen 2,4"),
+    (64, (4, 4), "matmul64c44", "matmul_t64c44", "tile 64 + coarsen 4,4"),
 ]
 
 
-def build_binding(binary: pathlib.Path, machine: pathlib.Path, tile: int, c: int, mod: str):
+def build_binding(
+    binary: pathlib.Path, machine: pathlib.Path, tile: int, c: tuple[int, int], mod: str
+):
     """Generate the source for one tile, compile it, and import its binding.
 
     The source is `examples/matmul.lyth` with three declarations rewritten, exactly as
@@ -84,8 +90,8 @@ def build_binding(binary: pathlib.Path, machine: pathlib.Path, tile: int, c: int
         src = (REPO / "examples/matmul.lyth").read_text(encoding="utf-8")
         nl = chr(10)
         tile_line = f"    tile {tile}, {tile}{nl}"
-        if c > 1:
-            tile_line += f"    coarsen {c}, {c}{nl}"
+        if c != (1, 1):
+            tile_line += f"    coarsen {c[0]}, {c[1]}{nl}"
         src = src.replace(f"    tile 32, 32{nl}", tile_line)
         src = src.replace(
             f"    intensity asymptotic 8.0{nl}",

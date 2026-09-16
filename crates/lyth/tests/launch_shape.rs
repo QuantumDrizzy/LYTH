@@ -55,7 +55,9 @@ fn shape(text: &str) -> Option<(u32, u32)> {
 }
 
 fn skip_without_device(text: &str) -> bool {
-    let missing = text.contains("no CUDA device") || text.contains("CUDA driver");
+    // Any `error[cuda]` before the kernel runs means there is no usable device. A GPU
+    // that fell off the bus says `cuInit failed`, which the two-phrase version missed.
+    let missing = text.contains("error[cuda]");
     if missing {
         eprintln!("skipped: no CUDA device");
     }
