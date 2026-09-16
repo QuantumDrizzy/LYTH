@@ -3,6 +3,11 @@
 
     python bench/narrow_vs_wide.py
 
+**Do not pipe this into `tail`.** It exits 2 when a kernel misses its pre-registered band, and
+a shell pipeline reports the last command's status -- so `| tail` turns every failure into a
+zero. That is not hypothetical: it happened on the step-4 run and looked, for a minute, like a
+check whose failure state was unreachable.
+
 This is the measurement ADR-0024 exists for, and it is worth having because **the model
 predicts two different answers to one change**:
 
@@ -72,7 +77,11 @@ PLAN = [
      ["--set", "m=1024", "--set", "n=1024", "--set", "k=1024"], 50, "smem", 1.0),
 ]
 
-WIDTHS = ("f32", "f16")
+# ADR-0024 step 4. bf16 is here because the traffic model **cannot tell it from f16** -- two
+# bytes is two bytes -- which is a prediction rather than an oversight: same time, different
+# error. Measuring it in the same table as the time keeps the model's blind spot beside the
+# thing it gets right.
+WIDTHS = ("f32", "f16", "bf16")
 
 
 def measure(binary: pathlib.Path, machine: pathlib.Path, example: str, width: str,
@@ -115,8 +124,8 @@ def main() -> int:
     args = ap.parse_args()
 
     watch = Watch().start()
-    print(f"\n  {'kernel':<22} {'binds':<6} {'f32 ms':>9} {'f16 ms':>9} {'f32/f16':>9} "
-          f"{'predicted':>10} {'verdict':>9}", flush=True)
+    print(f"\n  {'kernel':<22} {'binds':<6} {'f32 ms':>9} {'f16 ms':>9} {'bf16 ms':>9} "
+          f"{'f32/f16':>8} {'bf16/f16':>9} {'time':>7} {'twin':>7}", flush=True)
 
     rows = []
     with tempfile.TemporaryDirectory() as td:
@@ -128,34 +137,38 @@ def main() -> int:
                 if r is None:
                     break
                 got[w] = r
-            if len(got) != 2:
+            if len(got) != len(WIDTHS):
                 continue
-            a, b = got["f32"]["ms_median"], got["f16"]["ms_median"]
+            a = got["f32"]["ms_median"]
+            b, c = got["f16"]["ms_median"], got["bf16"]["ms_median"]
             ratio = a / b
             # "About 2x" and "about 1x" are the same +/-5% band, applied to different centres.
             ok = abs(ratio / predicted - 1.0) <= 0.05
-            rows.append((example, binds, a, b, ratio, predicted, ok))
-            print(f"  {example:<22} {binds:<6} {a:>9.4f} {b:>9.4f} {ratio:>9.3f} "
-                  f"{predicted:>10.1f} {'as predicted' if ok else '*** NOT ***':>9}",
+            # Step 4's claim: the traffic model derives the same bytes for both two-byte types,
+            # so it predicts the same time. Same band, because it is the same instrument.
+            twin = abs(c / b - 1.0) <= 0.05
+            rows.append((example, binds, a, b, c, ratio, predicted, ok, twin))
+            print(f"  {example:<22} {binds:<6} {a:>9.4f} {b:>9.4f} {c:>9.4f} {ratio:>8.3f} "
+                  f"{c / b:>9.3f} {'ok' if ok else 'MISSED':>7} {'ok' if twin else 'MISSED':>7}",
                   flush=True)
 
     print(flush=True)
-    dram = [r for r in rows if r[1] == "dram"]
-    smem = [r for r in rows if r[1] == "smem"]
-    if dram:
-        v = [r[4] for r in dram]
-        print(f"  dram-bound kernels: {len(dram)}, speedup {min(v):.2f}-{max(v):.2f}x "
-              f"(predicted 2.0)", flush=True)
-    if smem:
-        v = [r[4] for r in smem]
-        print(f"  smem-bound kernels: {len(smem)}, speedup {min(v):.2f}-{max(v):.2f}x "
-              f"(predicted 1.0)", flush=True)
+    for label, want in (("dram", 2.0), ("smem", 1.0)):
+        sel = [r for r in rows if r[1] == label]
+        if sel:
+            v = [r[5] for r in sel]
+            print(f"  {label}-bound: {len(sel)} kernels, f32/f16 {min(v):.2f}-{max(v):.2f}x "
+                  f"(predicted {want})", flush=True)
+    if rows:
+        t = [r[4] / r[3] for r in rows]
+        print(f"  bf16 against f16, all {len(rows)}: {min(t):.3f}-{max(t):.3f}x -- the traffic "
+              f"model derives the same bytes for both, so it predicts 1.0", flush=True)
 
     print(flush=True)
     watch.report()
     if watch.clean is False:
         return 1
-    return 0 if all(r[6] for r in rows) else 2
+    return 0 if all(r[7] and r[8] for r in rows) else 2
 
 
 if __name__ == "__main__":

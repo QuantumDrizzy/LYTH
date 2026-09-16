@@ -1,6 +1,6 @@
 # ADR-0024 — Half the element, and the two predictions that disagree
 
-**Status:** Accepted — steps 1-3 built and measured
+**Status:** Accepted — all four steps built and measured
 **Date:** 2026-09-16
 **Depends on:** ADR-0022 (the level that binds), ADR-0009 (measured traffic), ADR-0000 (why)
 
@@ -179,7 +179,7 @@ subnormals, overflow, and the values either side of each — and only then compi
 | **1** | **`Ty::BufF16` / `BufBF16` in the AST, parser and IR; `elem` per stream** | **done — 7 tests, no GPU; a `f16` saxpy derives 6 bytes and the compiler refuses the stale declaration** |
 | **2** | **the emitter, and the oracle that has to agree with it** | **done — 4 tests; bit-exact at f32/f16/bf16 on five elementwise and reduction kernels, a staged tile, and one kernel reading narrow and writing wide** |
 | **3** | **measurement: the two predictions above, guarded** | **done — `saxpy` 1.96x, `matmul` 1.010x, and two rows that missed the band and sharpened the model** |
-| 4 | `bf16` beside `f16` | identical time, different error — the traffic model's blind spot, confirmed as blind |
+| **4** | **`bf16` beside `f16`** | **done — 0.999-1.009x across six kernels, against a predicted 1.0** |
 
 Step 3 is the one this ADR exists for. Steps 1 and 2 are the price of admission.
 
@@ -276,6 +276,49 @@ derives traffic and a ceiling, and **has no notion of how close a kernel gets**.
 invisible while every kernel is f32, because the fraction is roughly stable across a set of
 kernels that move the same kind of bytes. Halving the element is what pulled the fraction apart
 — the same kernel, at 99.6% and then at 67%.
+
+## Step 4, as measured — the blind spot is blind
+
+`bf16` beside `f16`, same run, same instrument, guarded.
+
+| kernel | f32 | f16 | bf16 | f32/f16 | **bf16/f16** |
+|---|---|---|---|---|---|
+| `saxpy` | 2.0236 ms | 1.0302 | 1.0392 | 1.964 | **1.009** |
+| `sum` | 0.6534 | 0.4863 | 0.4871 | 1.344 | **1.002** |
+| `axpby` | 2.0217 | 1.0352 | 1.0343 | 1.953 | **0.999** |
+| `transpose-tiled` | 0.4456 | 0.3747 | 0.3750 | 1.189 | **1.001** |
+| `matmul` | 1.7064 | 1.6903 | 1.6897 | 1.010 | **1.000** |
+| `matmul` + `coarsen 2,2` | 0.8400 | 0.8389 | 0.8398 | 1.001 | **1.001** |
+
+**0.999 to 1.009 across all six**, against a pre-registered 1.0 ± 5%.
+
+The traffic model cannot tell `bf16` from `f16` — two bytes is two bytes, and `Ty::bytes()`
+answers 2 for both — so it predicts they take the same time. They do, to within 1%. That is a
+confirmation worth having precisely because it is boring: a model that says two things are
+identical and is right about it has had a real opportunity to be wrong, and
+
+> **boring equalities are where people stop pre-registering, and then cannot say afterwards
+> whether the tie was theory or accident.**
+
+What the model is blind to is everything that makes the two formats different. `bf16` keeps
+f32's exponent range with 8 fewer mantissa bits; `f16` keeps 10 mantissa bits and overflows at
+**65504** — the number `tools/half_probe.py` pins with 65520, which is the midpoint to a value
+that does not exist and therefore becomes infinity rather than saturating. A sum over enough
+terms finds that edge in one and not the other. **The compiler has nothing to say about it**,
+and the right response is to write that down rather than to add an accuracy model it cannot
+check against the silicon the way it checks traffic.
+
+So the honest one-line summary of the pair: **same bytes, same time, different failure mode.**
+
+### And a false alarm, recorded because it was mine
+
+The run was invoked as `python bench/narrow_vs_wide.py | tail`, reported exit code 0, and two
+rows said `MISSED`. That looked exactly like a check whose failure state is unreachable — the
+defect this project hunts hardest. It was not: a shell pipeline reports the **last** command's
+status, so the 0 was `tail`'s. The script's predicate was correct and would have returned 2.
+
+Worth a line because the reflex was right and the conclusion was wrong: suspecting the check is
+the correct instinct, and verifying before announcing is the rest of it.
 
 ## What this does not claim
 
