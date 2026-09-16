@@ -1365,15 +1365,16 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
         }
     };
 
-    let cost = derive_cost(
-        &streams,
-        &ops,
-        reduction.as_ref(),
-        contract.as_ref(),
-        space.as_ref(),
-        kernel.tile.as_ref().map(|t| t.dims.as_slice()),
-        coarsen.as_deref(),
-    );
+    let cost = derive_cost(CostInputs {
+        streams: &streams,
+        ops: &ops,
+        reduction: reduction.as_ref(),
+        contract: contract.as_ref(),
+        space: space.as_ref(),
+        tile: kernel.tile.as_ref().map(|t| t.dims.as_slice()),
+        coarsen: coarsen.as_deref(),
+        params: &kernel.params,
+    });
 
     // The word `asymptotic`, required exactly where the claim is a limit and refused
     // everywhere else.
@@ -1486,19 +1487,54 @@ fn gcd(a: u32, b: u32) -> u32 {
 /// operand staged and one not, a rectangular tile, no tile at all -- and wrong in the same
 /// confident shape as the constant step 1 refused to publish. So each stream is asked what it
 /// costs and the expression is the sum. `2K/T + 1` is a result here, never an input.
-fn derive_cost(
-    streams: &[StreamIr],
-    ops: &[Op],
-    reduction: Option<&ReductionIr>,
-    contract: Option<&ContractIr>,
-    space: Option<&SpaceIr>,
-    tile: Option<&[u32]>,
-    coarsen: Option<&[u32]>,
-) -> Cost {
+/// Everything `derive_cost` reads, gathered rather than passed one at a time.
+///
+/// It grew an eighth argument when ADR-0024 made the element width a property of the buffer
+/// instead of a module constant, and eight positional arguments of mostly-`Option` is a
+/// call site nobody can read. They all come from the same kernel; this says so.
+struct CostInputs<'a> {
+    streams: &'a [StreamIr],
+    ops: &'a [Op],
+    reduction: Option<&'a ReductionIr>,
+    contract: Option<&'a ContractIr>,
+    space: Option<&'a SpaceIr>,
+    tile: Option<&'a [u32]>,
+    coarsen: Option<&'a [u32]>,
+    params: &'a [crate::ast::Param],
+}
+
+fn derive_cost(input: CostInputs<'_>) -> Cost {
+    let CostInputs {
+        streams,
+        ops,
+        reduction,
+        contract,
+        space,
+        tile,
+        coarsen,
+        params,
+    } = input;
     // `levels` is built below; a staged stream adds one before the reduction's, and the sort
     // at the end puts the deepest first so `roofline()` still finds DRAM.
 
-    let elem = Ty::BufF32.bytes() as f64;
+    // How wide one element of a given buffer is. **Not a constant.**
+    //
+    // This was `Ty::BufF32.bytes()` -- the entire cost model's element size, written once, at
+    // module scope, because the language had one buffer type. ADR-0024 gave it three, and the
+    // model was already written in terms of *an* element size, so this is the whole change at
+    // this level: a lookup instead of a literal.
+    //
+    // A missing name cannot happen -- lowering resolves every stream against a parameter
+    // before this runs -- and 4.0 is the width that was assumed for the project's whole life,
+    // so falling back to it keeps a bug quiet rather than loud. It is asserted instead.
+    let elem_of = |buffer: &str| -> f64 {
+        params
+            .iter()
+            .find(|p| p.name == buffer)
+            .unwrap_or_else(|| panic!("stream `{buffer}` names no parameter"))
+            .ty
+            .bytes() as f64
+    };
     let mut dram = LevelCost::at(Level::Dram);
 
     // How many threads share one element of this buffer, once it is loaded.
@@ -1566,8 +1602,13 @@ fn derive_cost(
     let (mut sector_read_per_extent, mut sector_write_per_extent) = (0.0, 0.0);
     for s in streams {
         let walked = contract.map(|c| s.index.contains(&c.var)).unwrap_or(false);
+        let elem = elem_of(&s.buffer);
         let per = if walked { elem / reuse_of(s) as f64 } else { 0.0 };
         let fixed = if walked { 0.0 } else { elem };
+        // A narrow element does **not** narrow a strided access. The sector is 32 bytes
+        // whatever sits in it, so halving the element halves the payload and leaves the bus
+        // alone -- which is to say a strided f16 kernel wastes twice as much of what it
+        // fetches as a strided f32 one. ADR-0015's distinction, sharpened by ADR-0024.
         let bus = if s.coalesced { elem } else { SECTOR };
         let bus_per = if walked { bus / reuse_of(s) as f64 } else { 0.0 };
         let bus_fixed = if walked { 0.0 } else { bus };
@@ -1621,11 +1662,11 @@ fn derive_cost(
                 // over fewer threads doing more each. Only the reading changes, which is
                 // exactly what the emitter does -- `ci * cj` stores per operand per step, and
                 // `ci + cj` loads per term.
-                smem.read_per_extent += elem / register_reuse_of(st) as f64;
-                smem.write_per_extent += elem / reuse_of(st) as f64;
+                smem.read_per_extent += elem_of(&st.buffer) / register_reuse_of(st) as f64;
+                smem.write_per_extent += elem_of(&st.buffer) / reuse_of(st) as f64;
             } else {
-                smem.read += elem;
-                smem.write += elem;
+                smem.read += elem_of(&st.buffer);
+                smem.write += elem_of(&st.buffer);
             }
         }
         levels.push(smem);
@@ -1649,7 +1690,7 @@ fn derive_cost(
         flops += r.op.flops();
         // One partial per block, not per element, so it is reported separately rather than
         // divided by a block size the compiler would have to invent.
-        dram_bytes_per_block = elem;
+        dram_bytes_per_block = elem_of(&r.into);
     }
 
     // Deepest first, so `roofline()` finds DRAM before shared memory.

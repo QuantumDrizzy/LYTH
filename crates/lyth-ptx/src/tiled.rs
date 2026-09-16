@@ -146,7 +146,7 @@ impl Emitter {
         };
         let mut bufs: Vec<(String, String)> = Vec::new();
         for param in &ir.params {
-            if param.ty == lyth_lang::ast::Ty::BufF32 {
+            if param.ty.is_buffer() {
                 let raw = self.b64();
                 let glob = self.b64();
                 line(out, &format!("ld.param.u64 {raw}, [{k}_{}];", param.name));

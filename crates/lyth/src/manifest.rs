@@ -328,6 +328,8 @@ impl Manifest {
                         Ty::U32 => "u32",
                         Ty::F32 => "f32",
                         Ty::BufF32 => "buf_f32",
+                        Ty::BufF16 => "buf_f16",
+                        Ty::BufBF16 => "buf_bf16",
                     }
                     .to_string(),
                     shape: p.shape.clone(),

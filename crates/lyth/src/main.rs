@@ -977,7 +977,11 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
                 let v = *scalars.get(&p.name).unwrap_or(&2.0);
                 inputs.scalars.insert(p.name.clone(), v);
             }
-            Ty::BufF32 => {
+            // Input generation is the same for every width: the host holds f32, and a narrow
+            // buffer's values are rounded to its width before upload so that host and device
+            // start from the same numbers (ADR-0024 step 2). Generating here in f32 and
+            // rounding at the boundary keeps one generator rather than three.
+            Ty::BufF32 | Ty::BufF16 | Ty::BufBF16 => {
                 let seed = p
                     .name
                     .bytes()
@@ -1046,7 +1050,7 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
     // Upload in parameter order and keep the buffers alive until after the launch.
     let mut buffers = Vec::new();
     for p in &ir.params {
-        if p.ty == Ty::BufF32 {
+        if p.ty.is_buffer() {
             let host = &inputs.buffers[&p.name];
             match ctx.upload(host) {
                 Ok(b) => buffers.push((p.name.clone(), b)),
@@ -1066,7 +1070,7 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
             // would otherwise receive the element count twice.
             Ty::U32 => Arg::U32(inputs.extents.get(&p.name).copied().unwrap_or(n)),
             Ty::F32 => Arg::F32(inputs.scalars[&p.name]),
-            Ty::BufF32 => Arg::Buf(
+            Ty::BufF32 | Ty::BufF16 | Ty::BufBF16 => Arg::Buf(
                 &buffers
                     .iter()
                     .find(|(name, _)| *name == p.name)
@@ -1114,7 +1118,7 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
                 payload / sectors,
                 ir.cost.sector_read_per_element + ir.cost.sector_write_per_element
             );
-            let buffers_touched = ir.params.iter().filter(|p| p.ty == Ty::BufF32).count() as u64;
+            let buffers_touched = ir.params.iter().filter(|p| p.ty.is_buffer()).count() as u64;
             let working = sp
                 .extents
                 .iter()

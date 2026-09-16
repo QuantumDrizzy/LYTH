@@ -335,9 +335,21 @@ impl Parser {
         let mut shape = Vec::new();
         let ty = if self.eat(&Tok::LBracket) {
             let (t, _) = self.word()?;
-            if t != "f32" {
-                return self.msg(format!("`[{t}; ..]` is not a buffer type in v1; only [f32]"));
-            }
+            // The element's width is a **storage** decision and nothing more (ADR-0024). A
+            // `[f16; n]` buffer moves two bytes per element and is loaded into an f32
+            // register; the arithmetic does not narrow, because accumulating a contraction in
+            // half precision is a different function and a much worse one. Same rule ADR-0010
+            // applied to fusing a multiply and an add.
+            let elem = match t.as_str() {
+                "f32" => Ty::BufF32,
+                "f16" => Ty::BufF16,
+                "bf16" => Ty::BufBF16,
+                _ => {
+                    return self.msg(format!(
+                        "`[{t}; ..]` is not a buffer type; [f32], [f16] and [bf16]"
+                    ))
+                }
+            };
             // The shape is not optional. A buffer whose length is not written down is a
             // buffer whose bounds the compiler has to guess, and guessing is the one thing
             // this language does not do.
@@ -355,7 +367,7 @@ impl Parser {
                 }
             }
             self.expect(Tok::RBracket)?;
-            Ty::BufF32
+            elem
         } else {
             let (t, _) = self.word()?;
             match t.as_str() {
@@ -363,7 +375,9 @@ impl Parser {
                 "f32" => Ty::F32,
                 other => {
                     return self
-                        .msg(format!("`{other}` is not a type in v1; u32, f32, [f32; n]"))
+                        .msg(format!(
+                            "`{other}` is not a type; u32, f32, [f32; n], [f16; n], [bf16; n]"
+                        ))
                 }
             }
         };

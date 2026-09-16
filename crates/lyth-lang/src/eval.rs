@@ -74,7 +74,10 @@ pub fn eval_with_launch(
 
     for p in &ir.params {
         match p.ty {
-            Ty::BufF32 => {
+            // Every buffer width validates the same way: this is about how many elements the
+            // caller supplied, not how wide one is. The rounding that a narrow buffer implies
+            // lives at the store, not here (ADR-0024 step 2).
+            Ty::BufF32 | Ty::BufF16 | Ty::BufBF16 => {
                 let b = inputs
                     .buffers
                     .get(&p.name)

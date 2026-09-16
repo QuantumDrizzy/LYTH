@@ -241,19 +241,44 @@ pub enum Ty {
     F32,
     /// A buffer of f32, passed as a device pointer. `[f32]` in source.
     BufF32,
+    /// A buffer of IEEE half, two bytes per element. `[f16]` in source.
+    ///
+    /// **A storage declaration, not an arithmetic one** (ADR-0024). It says what crosses the
+    /// bus; the accumulator stays f32, because accumulating 2048 terms in f16 is a different
+    /// function and a catastrophically worse one. The same distinction ADR-0010 drew when it
+    /// refused to fuse a multiply and an add.
+    BufF16,
+    /// A buffer of bfloat16. Two bytes, like `BufF16`, and **the traffic model cannot tell
+    /// them apart** -- which is a prediction rather than an oversight: same bytes, same time,
+    /// different error. bf16 keeps f32's exponent range and drops 8 mantissa bits; f16 keeps
+    /// 10 mantissa bits and overflows at 65504.
+    BufBF16,
 }
 
 impl Ty {
+    /// Bytes of **one element**, which for a buffer is not the pointer's width.
+    ///
+    /// This is the number `derive_cost` multiplies every stream by, so it is the single place
+    /// the whole cost model learns how wide a value is. It was a constant until ADR-0024.
     pub fn bytes(self) -> u32 {
         match self {
             Ty::U32 | Ty::F32 => 4,
             // The pointer is 8 bytes; the element it addresses is 4.
             Ty::BufF32 => 4,
+            Ty::BufF16 | Ty::BufBF16 => 2,
         }
     }
 
     pub fn is_buffer(self) -> bool {
-        matches!(self, Ty::BufF32)
+        matches!(self, Ty::BufF32 | Ty::BufF16 | Ty::BufBF16)
+    }
+
+    /// The PTX register type a loaded element is converted **into**.
+    ///
+    /// Always `f32`. A narrow buffer is a narrow bus and a wide register (ADR-0024), so every
+    /// buffer type answers the same thing here and that sameness is the decision.
+    pub fn compute_ty(self) -> Ty {
+        Ty::F32
     }
 
     pub fn name(self) -> &'static str {
@@ -261,6 +286,8 @@ impl Ty {
             Ty::U32 => "u32",
             Ty::F32 => "f32",
             Ty::BufF32 => "[f32]",
+            Ty::BufF16 => "[f16]",
+            Ty::BufBF16 => "[bf16]",
         }
     }
 }

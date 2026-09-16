@@ -199,7 +199,9 @@ pub fn emit_with_skew(ir: &KernelIr, arch: &str, skewed: bool) -> Result<Module,
             let kind = match p.ty {
                 Ty::U32 => ".u32",
                 Ty::F32 => ".f32",
-                Ty::BufF32 => ".u64",
+                // A pointer is eight bytes whatever it addresses. The element's width shows
+                // up at the load and the store, not in the signature.
+                Ty::BufF32 | Ty::BufF16 | Ty::BufBF16 => ".u64",
             };
             format!("    .param {kind} {}_{}", ir.name, p.name)
         })
@@ -334,7 +336,7 @@ impl Emitter {
         }
         let mut buffers: Vec<(String, String)> = Vec::new();
         for p in &ir.params {
-            if p.ty == Ty::BufF32 {
+            if p.ty.is_buffer() {
                 let raw = self.b64();
                 let glob = self.b64();
                 line(out, &format!("ld.param.u64 {raw}, [{k}_{}];", p.name));
