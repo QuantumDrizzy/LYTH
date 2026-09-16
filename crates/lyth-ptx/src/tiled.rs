@@ -224,21 +224,63 @@ impl Emitter {
         let lin = self.b32();
         let off = self.b64();
         let addr = self.b64();
+        // Narrow storage, wide arithmetic, at every interface a staged element crosses:
+        // global -> shared -> register and back out (ADR-0024). The shared tile holds the
+        // element's own width, which is what `SharedLayout::bytes` now sizes it at.
+        //
+        // The staged buffer and the drained one get their widths **separately**. A transpose
+        // reads `a` and writes `b`, and nothing says they are the same type -- assuming so
+        // would index one of them with the other's stride, which reads real memory and returns
+        // plausible numbers.
+        let width_of = |name: &str| -> u32 {
+            ir.params
+                .iter()
+                .find(|q| q.name == name)
+                .expect("a streamed buffer is a parameter")
+                .ty
+                .bytes()
+        };
+        let narrow_of = |name: &str| -> Option<&'static str> {
+            match ir.params.iter().find(|q| q.name == name).map(|q| q.ty) {
+                Some(lyth_lang::ast::Ty::BufF16) => Some("f16"),
+                Some(lyth_lang::ast::Ty::BufBF16) => Some("bf16"),
+                _ => None,
+            }
+        };
+        let w = width_of(p.staged);
+        let narrow = narrow_of(p.staged);
+        let w_out = width_of(p.drain);
+        let narrow_out = narrow_of(p.drain);
         let val = self.f32();
         line(out, &format!("mad.lo.u32 {lin}, {gy}, {}, {gx};", u32_of(p.staged_row)));
-        line(out, &format!("mul.wide.u32 {off}, {lin}, 4;"));
+        line(out, &format!("mul.wide.u32 {off}, {lin}, {w};"));
         line(out, &format!("add.s64 {addr}, {}, {off};", buf_of(p.staged)));
         // Predicated, never branched: the thread stays in step with its block.
         line(out, &format!("mov.f32 {val}, 0f00000000;"));
-        line(out, &format!("@{in_both} ld.global.f32 {val}, [{addr}];"));
+        match narrow {
+            Some(k) => {
+                let h = self.b16();
+                line(out, &format!("mov.b16 {h}, 0;"));
+                line(out, &format!("@{in_both} ld.global.b16 {h}, [{addr}];"));
+                line(out, &format!("cvt.f32.{k} {val}, {h};"));
+            }
+            None => line(out, &format!("@{in_both} ld.global.f32 {val}, [{addr}];")),
+        }
 
         let s_store = self.b32();
         let s_off = self.b64();
         let s_addr = self.b64();
         line(out, &format!("mad.lo.u32 {s_store}, {ty}, {stride}, {tx};"));
-        line(out, &format!("mul.wide.u32 {s_off}, {s_store}, 4;"));
+        line(out, &format!("mul.wide.u32 {s_off}, {s_store}, {w};"));
         line(out, &format!("add.s64 {s_addr}, {smem}, {s_off};"));
-        line(out, &format!("st.shared.f32 [{s_addr}], {val};"));
+        match narrow {
+            Some(k) => {
+                let h = self.b16();
+                line(out, &format!("cvt.rn.{k}.f32 {h}, {val};"));
+                line(out, &format!("st.shared.b16 [{s_addr}], {h};"));
+            }
+            None => line(out, &format!("st.shared.f32 [{s_addr}], {val};")),
+        }
 
         // Barrier 1: read-after-write. Nobody reads the tile before it is whole.
         line(out, "bar.sync 0;");
@@ -253,9 +295,16 @@ impl Emitter {
         let l_addr = self.b64();
         let got = self.f32();
         line(out, &format!("mad.lo.u32 {s_load}, {tx}, {stride}, {ty};"));
-        line(out, &format!("mul.wide.u32 {l_off}, {s_load}, 4;"));
+        line(out, &format!("mul.wide.u32 {l_off}, {s_load}, {w};"));
         line(out, &format!("add.s64 {l_addr}, {smem}, {l_off};"));
-        line(out, &format!("ld.shared.f32 {got}, [{l_addr}];"));
+        match narrow {
+            Some(k) => {
+                let h = self.b16();
+                line(out, &format!("ld.shared.b16 {h}, [{l_addr}];"));
+                line(out, &format!("cvt.f32.{k} {got}, {h};"));
+            }
+            None => line(out, &format!("ld.shared.f32 {got}, [{l_addr}];")),
+        }
 
         // The body runs on what came back from shared.
         let mut regs: Vec<(RegId, String)> = vec![(p.staged_reg, got.clone())];
@@ -284,9 +333,16 @@ impl Emitter {
         let o_off = self.b64();
         let o_addr = self.b64();
         line(out, &format!("mad.lo.u32 {olin}, {oy}, {}, {ox};", u32_of(p.drain_row)));
-        line(out, &format!("mul.wide.u32 {o_off}, {olin}, 4;"));
+        line(out, &format!("mul.wide.u32 {o_off}, {olin}, {w_out};"));
         line(out, &format!("add.s64 {o_addr}, {}, {o_off};", buf_of(p.drain)));
-        line(out, &format!("@{out_both} st.global.f32 [{o_addr}], {result};"));
+        match narrow_out {
+            Some(k) => {
+                let h = self.b16();
+                line(out, &format!("cvt.rn.{k}.f32 {h}, {result};"));
+                line(out, &format!("@{out_both} st.global.b16 [{o_addr}], {h};"));
+            }
+            None => line(out, &format!("@{out_both} st.global.f32 [{o_addr}], {result};")),
+        }
 
         // Barrier 2: write-after-read. The next tile's load must not overtake this read.
         line(out, "bar.sync 0;");

@@ -156,6 +156,29 @@ enum Cmd {
     },
 }
 
+/// The conversion a narrow buffer needs on the way to the device, or `None` for f32.
+///
+/// `lyth_lang::half` is the single implementation and it is the one checked against
+/// `cvt.rn.f16.f32` over 138 vectors (ADR-0024 decision 3). Writing a second conversion here
+/// would be a second place the rounding could differ, and the difference would show up as a
+/// bit-exactness failure blamed on the emitter.
+fn narrow_bits(ty: Ty) -> Option<fn(f32) -> u16> {
+    match ty {
+        Ty::BufF16 => Some(lyth_lang::half::f32_to_f16_bits),
+        Ty::BufBF16 => Some(lyth_lang::half::f32_to_bf16_bits),
+        _ => None,
+    }
+}
+
+/// The same conversion on the way back.
+fn wide_from(ty: Ty) -> Option<fn(u16) -> f32> {
+    match ty {
+        Ty::BufF16 => Some(lyth_lang::half::f16_bits_to_f32),
+        Ty::BufBF16 => Some(lyth_lang::half::bf16_bits_to_f32),
+        _ => None,
+    }
+}
+
 /// Just enough of `lyth-machine/0.1` to get the target and the ridge. The full schema lives in
 /// `lyth-probe`; depending on that crate here would drag evidence bundles into the compiler.
 #[derive(Debug, Deserialize)]
@@ -1003,7 +1026,16 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
                 let data: Vec<f32> = (0..len)
                     .map(|i| {
                         let h = (i.wrapping_mul(2654435761).wrapping_add(seed)) >> 8;
-                        (h % 2003) as f32 / 251.0 - 4.0
+                        let v = (h % 2003) as f32 / 251.0 - 4.0;
+                        // Rounded **here**, once, so the host's copy and the device's are the
+                        // same numbers. If the oracle evaluated unrounded inputs it would be
+                        // computing on values the kernel never saw, and every comparison would
+                        // be against a function nobody ran.
+                        match p.ty {
+                            Ty::BufF16 => lyth_lang::half::round_f16(v),
+                            Ty::BufBF16 => lyth_lang::half::round_bf16(v),
+                            _ => v,
+                        }
                     })
                     .collect();
                 inputs.buffers.insert(p.name.clone(), data);
@@ -1048,11 +1080,25 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
     };
 
     // Upload in parameter order and keep the buffers alive until after the launch.
+    //
+    // A narrow buffer is converted **here**, on the way to the device, and the host's copy is
+    // rounded to match (ADR-0024). Both halves matter. Uploading f32 bytes into a `[f16; n]`
+    // allocation would have the kernel read pairs of halves out of single floats -- which runs,
+    // and returns numbers. And leaving the host's inputs unrounded would make every comparison
+    // a comparison against values the device never saw.
     let mut buffers = Vec::new();
     for p in &ir.params {
         if p.ty.is_buffer() {
             let host = &inputs.buffers[&p.name];
-            match ctx.upload(host) {
+            let narrow = narrow_bits(p.ty);
+            let uploaded = match narrow {
+                Some(to_bits) => {
+                    let bits: Vec<u16> = host.iter().map(|&v| to_bits(v)).collect();
+                    ctx.upload_u16(&bits)
+                }
+                None => ctx.upload(host),
+            };
+            match uploaded {
                 Ok(b) => buffers.push((p.name.clone(), b)),
                 Err(e) => {
                     eprintln!("error[cuda]: uploading {}: {e}", p.name);
@@ -1178,12 +1224,27 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
         } else {
             n as usize
         };
-        let got = match buf.download() {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("error[cuda]: downloading {name}: {e}");
-                return ExitCode::from(EXIT_UNUSABLE);
-            }
+        let ty = ir
+            .params
+            .iter()
+            .find(|p| p.name == *name)
+            .expect("a verified buffer is a parameter")
+            .ty;
+        let got = match wide_from(ty) {
+            Some(from_bits) => match buf.download_u16() {
+                Ok(v) => v.into_iter().map(from_bits).collect::<Vec<f32>>(),
+                Err(e) => {
+                    eprintln!("error[cuda]: downloading {name}: {e}");
+                    return ExitCode::from(EXIT_UNUSABLE);
+                }
+            },
+            None => match buf.download() {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("error[cuda]: downloading {name}: {e}");
+                    return ExitCode::from(EXIT_UNUSABLE);
+                }
+            },
         };
         let want = &expected.buffers[name];
         for i in 0..count {

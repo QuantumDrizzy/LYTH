@@ -1268,12 +1268,50 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
             .iter()
             .map(|s| (s.buffer.clone(), rows, stride))
             .collect();
-        let bytes = tiles.len() as u32 * rows * stride * SMEM_BANK_WIDTH;
+        // **The element's width, not the bank's.** These were the same number for the whole of
+        // this project's life -- `SMEM_BANK_WIDTH` is 4 and so was every element -- and using
+        // one for the other is the same mistake as borrowing a figure across contexts
+        // (ADR-0000). A narrow type separates them: the bank is still 4 bytes wide and the
+        // element is 2, so the tile is half the size and the bank arithmetic is unchanged.
+        //
+        // The skew survives, and it is worth writing down why rather than hoping. A column
+        // walk of a `T x (T+1)` tile of 2-byte elements steps `(T+1) * 2` bytes; at `T = 32`
+        // that is 66 bytes, so thread `i` lands on bank `floor(i * 16.5) mod 32`, which runs
+        // 0, 16, 1, 17, 2, 18, ... -- a permutation of all 32. Conflict-free for the same
+        // coprimality reason as at four bytes, reached by a different route.
+        let bytes: u32 = staged
+            .iter()
+            .map(|s| {
+                let w = kernel
+                    .params
+                    .iter()
+                    .find(|p| p.name == s.buffer)
+                    .expect("a staged stream is a parameter")
+                    .ty
+                    .bytes();
+                rows * stride * w
+            })
+            .sum();
+        // Derived rather than asserted. At four bytes the skew makes the stride coprime with
+        // 32 and the walk is a permutation; at two it is a different permutation and the
+        // check is the same. If a future width broke it, this would say so instead of
+        // publishing a zero the silicon disagrees with.
+        let elem = staged
+            .first()
+            .map(|s| {
+                kernel
+                    .params
+                    .iter()
+                    .find(|p| p.name == s.buffer)
+                    .expect("a staged stream is a parameter")
+                    .ty
+                    .bytes()
+            })
+            .unwrap_or(4);
         Some(SharedLayout {
             tiles,
             bytes,
-            // Zero, by the coprimality above. This is the claim, not an observation.
-            predicted_bank_conflicts: 0,
+            predicted_bank_conflicts: u32::from(!walk_is_conflict_free(stride, elem)),
         })
     });
 
@@ -1436,7 +1474,34 @@ const SECTOR: f64 = 32.0;
 /// and `l1tex__data_bank_conflicts_pipe_lsu.sum` is what checks the consequence -- the same
 /// shape as every other claim in this compiler: derive it, then let the silicon answer.
 const SMEM_BANKS: u32 = 32;
+/// Bytes per shared-memory bank. **Not the element's width**, and the distinction only became
+/// visible when ADR-0024 gave the language a 2-byte element: for the project's whole life
+/// before that, both numbers were 4 and the shared tile was sized with this one.
+///
+/// It is kept, and used where it actually belongs -- deciding whether a column walk of narrow
+/// elements still lands on distinct banks. A `T x (T+1)` tile of `w`-byte elements steps
+/// `(T+1) * w` bytes per row, so thread `i` lands on bank `(i * (T+1) * w / 4) mod 32`. At
+/// `T = 32, w = 4` that is `i * 33 mod 32 = i`; at `w = 2` it is `floor(i * 16.5) mod 32`,
+/// which runs 0, 16, 1, 17, 2, 18, ... -- also a permutation of all 32. Conflict-free at both
+/// widths, reached by different arithmetic, which is why it is derived rather than assumed.
 const SMEM_BANK_WIDTH: u32 = 4;
+
+/// Whether a column walk of a skewed tile touches every bank exactly once.
+///
+/// Derived, and then `predicted_bank_conflicts` is what the profiler is asked about
+/// (ADR-0017). A tile that conflicts still computes the right answer, so nothing but a counter
+/// can tell -- which is why ADR-0017's fixture builds the unpadded variant on purpose.
+fn walk_is_conflict_free(stride_elems: u32, elem_bytes: u32) -> bool {
+    let mut seen = vec![false; SMEM_BANKS as usize];
+    for i in 0..SMEM_BANKS {
+        let bank = (i * stride_elems * elem_bytes / SMEM_BANK_WIDTH) % SMEM_BANKS;
+        if seen[bank as usize] {
+            return false;
+        }
+        seen[bank as usize] = true;
+    }
+    true
+}
 
 /// How a tile is laid out in shared memory, and what that costs.
 ///

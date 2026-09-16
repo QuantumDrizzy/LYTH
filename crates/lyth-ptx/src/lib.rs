@@ -125,6 +125,7 @@ pub fn emit_with_skew(ir: &KernelIr, arch: &str, skewed: bool) -> Result<Module,
         n_f32: 0,
         n_b32: 0,
         n_b64: 0,
+        n_b16: 0,
     };
     // Costing is not emitting. The front end now derives a contraction's traffic as an
     // expression and checks a declared limit against it, and none of that puts an accumulator
@@ -221,6 +222,9 @@ pub fn emit_with_skew(ir: &KernelIr, arch: &str, skewed: bool) -> Result<Module,
     if e.n_b64 > 0 {
         let _ = writeln!(ptx, "    .reg .b64   %rd<{}>;", e.n_b64 + 1);
     }
+    if e.n_b16 > 0 {
+        let _ = writeln!(ptx, "    .reg .b16   %rs<{}>;", e.n_b16 + 1);
+    }
     let _ = writeln!(ptx);
     ptx.push_str(&body);
     let _ = writeln!(ptx, "}}");
@@ -239,6 +243,13 @@ pub(crate) struct Emitter {
     n_f32: u32,
     n_b32: u32,
     n_b64: u32,
+    /// Sixteen-bit registers, for narrow buffers only.
+    ///
+    /// A narrow element is loaded **into a 16-bit register** and converted from there
+    /// (ADR-0024). Loading it into a 32-bit register first and converting that would be a
+    /// conversion of sign- or zero-extended bits, which is silently a different number -- and
+    /// silently is the word that matters, because it would still produce plausible output.
+    n_b16: u32,
 }
 
 pub(crate) fn line(o: &mut String, s: &str) {
@@ -264,6 +275,11 @@ impl Emitter {
     pub(crate) fn b64(&mut self) -> String {
         self.n_b64 += 1;
         format!("%rd{}", self.n_b64)
+    }
+
+    pub(crate) fn b16(&mut self) -> String {
+        self.n_b16 += 1;
+        format!("%rs{}", self.n_b16)
     }
 
     fn body(&mut self, ir: &KernelIr, bound: &str, out: &mut String) -> Result<(), EmitError> {
@@ -413,15 +429,36 @@ impl Emitter {
 
         // --- element addresses, recomputed each iteration -----------------------------
         let reduce_target = ir.reduction.as_ref().map(|r| r.into.as_str());
-        // At rank 1 every buffer sits at the same element, so the offset is computed once.
-        // At rank 2 each buffer has its own permutation and its own row length.
-        let shared_off = match &ir.space {
-            None => {
-                let off = self.b64();
-                line(out, &format!("mul.wide.u32 {off}, {idx}, 4;"));
-                Some(off)
+        // How wide one element of a buffer is. `Ty::bytes()` is the single definition and the
+        // emitter asks it rather than assuming 4, which it did until ADR-0024.
+        let width_of = |name: &str| -> u32 {
+            ir.params
+                .iter()
+                .find(|p| p.name == name)
+                .expect("a streamed buffer is a parameter")
+                .ty
+                .bytes()
+        };
+
+        // At rank 1 every buffer sits at the same *element*, but not at the same *byte* once
+        // they can be different widths. So the offset is memoised **by width** rather than
+        // computed once and shared.
+        //
+        // Sharing it was correct while every buffer was f32 and would be silently wrong for
+        // `x: [f16; n], y: [f32; n]` -- one of the two would be indexed with the other's
+        // stride, which reads real memory and produces plausible numbers. Memoising by width
+        // keeps a uniform kernel at exactly one `mul.wide.u32`, so the instruction counts
+        // ADR-0014 and ADR-0020 measured do not move, and gives a mixed kernel the two it
+        // needs.
+        let mut offs_by_width: Vec<(u32, String)> = Vec::new();
+        let mut rank1_off = |e: &mut Self, out: &mut String, w: u32| -> String {
+            if let Some((_, r)) = offs_by_width.iter().find(|(x, _)| *x == w) {
+                return r.clone();
             }
-            Some(_) => None,
+            let off = e.b64();
+            line(out, &format!("mul.wide.u32 {off}, {idx}, {w};"));
+            offs_by_width.push((w, off.clone()));
+            off
         };
         let mut addrs: Vec<(String, String)> = Vec::new();
         for (name, base) in &buffers {
@@ -430,9 +467,9 @@ impl Emitter {
             if Some(name.as_str()) == reduce_target {
                 continue;
             }
-            let off = match &shared_off {
-                Some(o) => o.clone(),
-                None => {
+            let off = match &ir.space {
+                None => rank1_off(self, out, width_of(name)),
+                Some(_) => {
                     let st = ir
                         .streams
                         .iter()
@@ -458,7 +495,10 @@ impl Emitter {
                         ),
                     );
                     let off = self.b64();
-                    line(out, &format!("mul.wide.u32 {off}, {lin}, 4;"));
+                    line(
+                        out,
+                        &format!("mul.wide.u32 {off}, {lin}, {};", width_of(name)),
+                    );
                     off
                 }
             };
@@ -466,6 +506,22 @@ impl Emitter {
             line(out, &format!("add.s64 {a}, {base}, {off};"));
             addrs.push((name.clone(), a));
         }
+        // `Some("f16")` or `Some("bf16")` for a narrow buffer, `None` for f32. The string is
+        // the PTX type suffix, so the conversion mnemonic is built from it rather than from a
+        // second `match` that could disagree with this one.
+        let narrow_of = |name: &str| -> Option<&'static str> {
+            match ir
+                .params
+                .iter()
+                .find(|p| p.name == name)
+                .expect("a streamed buffer is a parameter")
+                .ty
+            {
+                Ty::BufF16 => Some("f16"),
+                Ty::BufBF16 => Some("bf16"),
+                _ => None,
+            }
+        };
         let addr_of = |name: &str| -> String {
             addrs
                 .iter()
@@ -486,7 +542,20 @@ impl Emitter {
             match op {
                 Op::Load { dst, buffer } => {
                     let r = self.f32();
-                    line(out, &format!("ld.global.f32 {r}, [{}];", addr_of(buffer)));
+                    // Narrow storage, wide arithmetic (ADR-0024). The load lands in a **16-bit
+                    // register** and is converted from there; loading into a 32-bit register
+                    // first and converting that would convert extended bits, which is a
+                    // different number arrived at silently.
+                    match narrow_of(buffer) {
+                        Some(k) => {
+                            let h = self.b16();
+                            line(out, &format!("ld.global.b16 {h}, [{}];", addr_of(buffer)));
+                            line(out, &format!("cvt.f32.{k} {r}, {h};"));
+                        }
+                        None => {
+                            line(out, &format!("ld.global.f32 {r}, [{}];", addr_of(buffer)))
+                        }
+                    }
                     regs.push((*dst, r));
                 }
                 Op::Param { dst, name } => {
@@ -542,10 +611,23 @@ impl Emitter {
 
         // --- drains --------------------------------------------------------------------
         for (buffer, src) in &ir.drains {
-            line(
-                out,
-                &format!("st.global.f32 [{}], {};", addr_of(buffer), get(&regs, *src)),
-            );
+            // `.rn` is round-to-nearest-even, and `crates/lyth-lang/src/half.rs` reproduces it
+            // bit for bit -- checked against this exact instruction over 138 vectors before
+            // any of this was written (ADR-0024 decision 3). So a bit-exactness failure from
+            // here on can only be the emitter, which is where the ambiguity was budgeted.
+            let store = match narrow_of(buffer) {
+                Some(k) => {
+                    let h = self.b16();
+                    line(out, &format!("cvt.rn.{k}.f32 {h}, {};", get(&regs, *src)));
+                    format!("st.global.b16 [{}], {h};", addr_of(buffer))
+                }
+                None => format!(
+                    "st.global.f32 [{}], {};",
+                    addr_of(buffer),
+                    get(&regs, *src)
+                ),
+            };
+            line(out, &store);
         }
 
         // Fold this element into the accumulator before moving on.
@@ -665,11 +747,32 @@ impl Emitter {
             .find(|(n, _)| *n == r.into)
             .map(|(_, base)| base.clone())
             .ok_or_else(|| EmitError::Message(format!("no base address for `{}`", r.into)))?;
+        // The reduction's partial is one value per **block**, and it is stored at the
+        // target's own width like any other drain. This store was missed when ADR-0024 made
+        // the other two narrow, and the harness said so in the only way it can: `verify FAILED
+        // -- 2 of 4096 elements differ`, host -11.73 against device -0.195. Four bytes written
+        // where the host read two, so the second half of one float became the first half of
+        // the next -- a failure that produces numbers rather than a crash.
+        let into_ty = ir
+            .params
+            .iter()
+            .find(|p| p.name == r.into)
+            .expect("the reduction target is a parameter")
+            .ty;
+        let width = into_ty.bytes();
         let block_off = self.b64();
         let block_addr = self.b64();
-        line(out, &format!("mul.wide.u32 {block_off}, {ctaid}, 4;"));
+        line(out, &format!("mul.wide.u32 {block_off}, {ctaid}, {width};"));
         line(out, &format!("add.s64 {block_addr}, {into}, {block_off};"));
-        line(out, &format!("st.global.f32 [{block_addr}], {result};"));
+        match into_ty {
+            Ty::BufF16 | Ty::BufBF16 => {
+                let k16 = if into_ty == Ty::BufF16 { "f16" } else { "bf16" };
+                let h = self.b16();
+                line(out, &format!("cvt.rn.{k16}.f32 {h}, {result};"));
+                line(out, &format!("st.global.b16 [{block_addr}], {h};"));
+            }
+            _ => line(out, &format!("st.global.f32 [{block_addr}], {result};")),
+        }
         Ok(())
     }
 }

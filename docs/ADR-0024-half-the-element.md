@@ -1,6 +1,6 @@
 # ADR-0024 — Half the element, and the two predictions that disagree
 
-**Status:** Proposed — step 1 built
+**Status:** Proposed — steps 1 and 2 built
 **Date:** 2026-09-16
 **Depends on:** ADR-0022 (the level that binds), ADR-0009 (measured traffic), ADR-0000 (why)
 
@@ -177,7 +177,7 @@ subnormals, overflow, and the values either side of each — and only then compi
 | step | | testable on its own |
 |---|---|---|
 | **1** | **`Ty::BufF16` / `BufBF16` in the AST, parser and IR; `elem` per stream** | **done — 7 tests, no GPU; a `f16` saxpy derives 6 bytes and the compiler refuses the stale declaration** |
-| 2 | the emitter: `ld.global.b16` + `cvt.f32.f16`, arithmetic still `f32`, `st.global.b16` | bit-exact against a host oracle that converts the same way |
+| **2** | **the emitter, and the oracle that has to agree with it** | **done — 4 tests; bit-exact at f32/f16/bf16 on five elementwise and reduction kernels, a staged tile, and one kernel reading narrow and writing wide** |
 | 3 | measurement: the two predictions above, guarded | `saxpy` ~2x, `matmul` ~1x, on the same instrument as ADR-0022 |
 | 4 | `bf16` beside `f16` | identical time, different error — the traffic model's blind spot, confirmed as blind |
 

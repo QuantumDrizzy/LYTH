@@ -276,6 +276,34 @@ impl Context {
         })
     }
 
+    /// Allocate `len` **16-bit** elements and fill them from `host`.
+    ///
+    /// This crate deliberately does not know what a `u16` element *means* (ADR-0024). Whether
+    /// those bits are binary16 or bfloat16 is a question for `lyth_lang::half`, which converts
+    /// on the way in and on the way out; here they are two bytes that have to reach the device
+    /// unchanged. A driver wrapper that started interpreting floats would be a second place
+    /// rounding could happen.
+    pub fn upload_u16(&self, host: &[u16]) -> Result<Buffer<'_>, CudaError> {
+        let bytes = std::mem::size_of_val(host);
+        let mut ptr: CUdeviceptr = 0;
+        // SAFETY: `ptr` is a live out-parameter; the allocation is freed in Buffer::drop.
+        unsafe { check("cuMemAlloc", cuMemAlloc_v2(&mut ptr, bytes.max(1)))? };
+        let buf = Buffer {
+            ptr,
+            len: host.len(),
+            elem_bytes: 2,
+            _ctx: PhantomData,
+        };
+        // SAFETY: the allocation is exactly `bytes` long and `host` is a live slice of that.
+        unsafe {
+            check(
+                "cuMemcpyHtoD",
+                cuMemcpyHtoD_v2(buf.ptr, host.as_ptr() as *const c_void, bytes),
+            )?
+        };
+        Ok(buf)
+    }
+
     /// Allocate `len` f32 on the device and fill it from `host`.
     pub fn upload(&self, host: &[f32]) -> Result<Buffer<'_>, CudaError> {
         let buf = self.alloc(host.len())?;
@@ -300,6 +328,7 @@ impl Context {
         Ok(Buffer {
             ptr,
             len,
+            elem_bytes: 4,
             _ctx: PhantomData,
         })
     }
@@ -328,6 +357,9 @@ impl Drop for Context {
 pub struct Buffer<'ctx> {
     ptr: CUdeviceptr,
     len: usize,
+    /// Bytes per element: 4 for f32, 2 for a narrow buffer. Carried so `download` cannot read
+    /// back at the wrong width, which would succeed and return plausible numbers.
+    elem_bytes: usize,
     _ctx: PhantomData<&'ctx Context>,
 }
 
@@ -340,8 +372,24 @@ impl Buffer<'_> {
         self.len == 0
     }
 
+    /// Copy the whole buffer back as raw 16-bit elements.
+    pub fn download_u16(&self) -> Result<Vec<u16>, CudaError> {
+        assert_eq!(self.elem_bytes, 2, "this buffer holds 4-byte elements");
+        let mut out = vec![0u16; self.len];
+        let bytes = std::mem::size_of_val(out.as_slice());
+        // SAFETY: `out` is exactly `bytes` long and the device allocation is at least that.
+        unsafe {
+            check(
+                "cuMemcpyDtoH",
+                cuMemcpyDtoH_v2(out.as_mut_ptr() as *mut c_void, self.ptr, bytes),
+            )?
+        };
+        Ok(out)
+    }
+
     /// Copy the whole buffer back into a fresh Vec.
     pub fn download(&self) -> Result<Vec<f32>, CudaError> {
+        assert_eq!(self.elem_bytes, 4, "this buffer holds 2-byte elements");
         let mut out = vec![0.0f32; self.len];
         let bytes = std::mem::size_of_val(out.as_slice());
         // SAFETY: `out` is exactly `bytes` long and the device allocation is at least that.

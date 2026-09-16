@@ -298,6 +298,7 @@ pub fn eval_with_launch(
             *slot = tree_reduce(&mut slots, r.op);
         }
     }
+    round_narrow_outputs(ir, &mut out);
     Ok(out)
 }
 
@@ -469,6 +470,7 @@ fn eval_contraction(ir: &KernelIr, inputs: &Inputs) -> Result<Inputs, EvalError>
             target[i * drain_row + j] = result[i * cols + j];
         }
     }
+    round_narrow_outputs(ir, &mut out);
     Ok(out)
 }
 
@@ -490,6 +492,30 @@ fn tree_reduce(slots: &mut [f32], op: ReduceOp) -> f32 {
         stride /= 2;
     }
     slots.first().copied().unwrap_or(op.identity())
+}
+
+/// Round every narrow buffer to the width the device will store it at.
+///
+/// One pass at the end rather than a rounding at each write site, because there are several
+/// write sites -- the elementwise drains, the reduction target, the contraction's own path --
+/// and a rounding that lives in three places is a rounding that will eventually live in two.
+///
+/// `crates/lyth-lang/src/half.rs` is the implementation, and it is the one checked bit for bit
+/// against `cvt.rn.f16.f32` on this device (ADR-0024 decision 3). The oracle rounds where the
+/// device rounds -- at the store, never at the arithmetic, which stays f32 throughout.
+fn round_narrow_outputs(ir: &KernelIr, out: &mut Inputs) {
+    for p in &ir.params {
+        let f: fn(f32) -> f32 = match p.ty {
+            Ty::BufF16 => crate::half::round_f16,
+            Ty::BufBF16 => crate::half::round_bf16,
+            _ => continue,
+        };
+        if let Some(b) = out.buffers.get_mut(&p.name) {
+            for v in b.iter_mut() {
+                *v = f(*v);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
