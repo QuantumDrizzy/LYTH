@@ -102,7 +102,7 @@ do with the thing being tested — which is how a real result gets thrown out wi
 prediction. Both of these were caught by measuring rather than by review, and review is where
 they should have been caught, because the derivation was sitting in the same document.
 
-## The other rule, learned three times
+## The other rule, learned four times
 
 > **A conclusion has a domain, and the domain is the kernel it was measured on.**
 
@@ -129,6 +129,32 @@ minutes. It is the same shape a third time — two pieces of code stating one ru
 right — and the correction is in ADR-0019: **a fix belongs where the rule lives, not where the
 symptom appeared.** It was found by calling a binding from another repository, which is the
 only place any of this has ever been caught.
+
+**Postscript, a fourth time, and the sharpest version of it.** ADR-0024 pre-registers that a
+half-precision matmul will not speed up, and a reviewer proposed borrowing ADR-0022's **±0.80%**
+as the band for "will not". That figure is how closely the *traffic* model matched `ncu` —
+derived bytes against counted bytes, two counters of one event. The matmul row is a **wall-clock
+time**. The measured run-to-run reproducibility of that timing harness is **1.6%** across two
+guarded nine-round runs, so the band is ±5%.
+
+Importing a cheap quantity's uncertainty into an expensive measurement would have manufactured a
+falsification out of ordinary noise — and since step 3 exists *in order to be able to* kill
+ADR-0022, that was precisely the way to fail. So, generalised:
+
+> **A pre-registered band for a claim about X is the measured reproducibility of measuring X,
+> plus margin. Never a band borrowed from a claim about Y, even one in the same ADR.**
+
+The value and its uncertainty travel together or neither travels. `fixtures/machine/sm_120.json`
+already says the value half of this — *"mixing a datasheet peak with a measured bandwidth, or
+the reverse, produces a number that describes nothing"* — and this is the uncertainty half.
+
+**One thing this rule is not.** It is easy to file the grid-stride postscript above under the
+same heading, and it does not belong there. Two pieces of code stating one rule and one of them
+corrected is a **duplicated definition**, not a borrowed figure, and it has its own recurrence:
+it happened again on 2026-09-16 in `rse-hpc-lab`, where `inst_matmul.py` kept a second copy of a
+variant list and it drifted the moment two schedules were added. The two failures want different
+fixes — *one definition* for that one, *one provenance* for this one — and merging them would
+make both rules vaguer than either.
 
 ## Why this is written down late, and kept
 
