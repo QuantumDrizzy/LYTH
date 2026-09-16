@@ -106,6 +106,10 @@ def build_binding(
              "--bind-py", str(path)],
             check=True, capture_output=True,
         )
+        # `sys.path` was built before `gen/` existed, and Python caches a path entry that was
+        # missing at import time. Without this the freshly written module is not found, which
+        # is a confusing way to fail a benchmark whose generator just succeeded.
+        importlib.invalidate_caches()
     return importlib.import_module(mod)
 
 
@@ -212,8 +216,7 @@ def main() -> int:
     # ADR-0023. Sixteen display-driver resets happened during this project's benchmarking on
     # one day and not one of them reached a benchmark's output. A run that spans a reset keeps
     # timing and keeps printing.
-    watch = Watch()
-    watch.__enter__()
+    watch = Watch().start()
     for r in range(args.rounds):
         # Rotating the order matters: a fixed one biased the last kernel by 56% in ADR-0019's
         # bandwidth run, on traffic that was identical by construction.

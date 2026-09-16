@@ -348,7 +348,13 @@ attached:
 | `tile 64` + `coarsen 2, 2` | **2.63** | 2.56 | **102.7%** [92–105%] | 2.73 |
 
 **Prediction 3 is falsified.** LYTH executes 35% more instructions than nvcc at the coarsened
-tile and finishes in the same time — 102.7%, a range that crosses parity. ADR-0020's debt did
+tile and finishes in the same time — 102.7%, a range that crosses parity.
+
+> **Corrected by ADR-0022 step 4.** That 102.7% did not survive. It was measured unguarded, on a
+> day with sixteen display-driver resets (ADR-0023), and two guarded replicates after the reboot
+> give **94.5% and 95.9%**. Across five schedules the guarded figures are 91–102%, median ~96%.
+> The conclusion stands and the boast does not: 27–35% more instructions costs **0–9%** of the
+> time, rather than nothing at all, and LYTH does not beat nvcc here. ADR-0020's debt did
 not come due at 16 flop/byte. The only tile where LYTH loses measurably is `tile 16`, at 91.4%,
 which is the one with 256 threads per block and the least to hide behind.
 

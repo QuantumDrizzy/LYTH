@@ -72,24 +72,36 @@ def smi(fields: str) -> list[str] | None:
 class Watch:
     """Bracket a measurement and report what the driver did during it.
 
-        with Watch() as w:
-            ...
+        w = Watch().start()
+        ...
         w.report()
 
     `w.clean` is False if the driver reset while the block ran, and a caller that quotes a
     throughput without checking it is quoting a number it has no reason to trust.
+
+    **`report()` takes the closing reading itself.** The first version only took it in
+    `__exit__`, and both callers drove the object by hand -- `w.__enter__()` at the top,
+    `w.report()` at the bottom, no `with` and no `__exit__`. So `after` stayed `None`, `clean`
+    returned `None`, and the guard printed "not checked" through a whole nine-round benchmark.
+    A guard whose entire job is to notice a silent failure, failing silently, is the joke
+    writing itself; the API no longer has a half-used state to be left in.
     """
 
     def __init__(self) -> None:
         self.before: int | None = None
         self.after: int | None = None
 
-    def __enter__(self) -> Watch:
+    def start(self) -> Watch:
         self.before = tdr_count()
         t = smi("temperature.gpu,power.draw,clocks.sm")
         if t:
             print(f"  gpu      {t[0]}C, {float(t[1]):.0f} W, {t[2]} MHz at the start")
+        if self.before is None:
+            print("  driver   *** the TDR counter could not be read; this run is unguarded ***")
         return self
+
+    def __enter__(self) -> Watch:
+        return self.start()
 
     def __exit__(self, *_) -> None:
         self.after = tdr_count()
@@ -101,6 +113,8 @@ class Watch:
         return self.after == self.before
 
     def report(self) -> None:
+        if self.after is None:
+            self.after = tdr_count()
         t = smi("temperature.gpu,power.draw,clocks.sm,clocks_throttle_reasons.active")
         if t:
             print(f"  gpu      {t[0]}C, {float(t[1]):.0f} W, {t[2]} MHz at the end")

@@ -143,8 +143,7 @@ def main() -> int:
 
     rates: dict[tuple[int, str], float] = {}
     # ADR-0023: a probe that ran across a display-driver reset measured something else.
-    watch = Watch()
-    watch.__enter__()
+    watch = Watch().start()
     for block in (256, 1024):
         grid = sms * args.blocks_per_sm
         for pattern, mask in (("coalesced", 31), ("broadcast", 0)):

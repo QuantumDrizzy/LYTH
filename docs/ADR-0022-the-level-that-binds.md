@@ -1,6 +1,6 @@
 # ADR-0022 — The ceiling belongs to the level that binds, and it is not always DRAM
 
-**Status:** Proposed — steps 1-3 built, step 4 built and awaiting a working GPU
+**Status:** Accepted — all four steps built and measured
 **Date:** 2026-09-16
 **Depends on:** ADR-0021 (coarsening, and the measurement that forced this), ADR-0015 (payload vs
 bus), ADR-0000 (why)
@@ -294,7 +294,57 @@ The compiler's predictions, printed by the compiler rather than written here:
 that, they are ~3.5 and ~5.1 TFLOP/s. If they fall short, the narrowing block is the reason and
 the model has found its own limit, which is the outcome this step was written to allow.
 
-### Not measured: the GPU fell off the bus
+### Measured, after the machine came back
+
+`TdrDelay` at 10 seconds, a reboot, and the guard from ADR-0023 watching. **Two independent
+nine-round runs**, both reporting `no display-driver reset during this run`:
+
+| | ceiling, from the compiler | run A | run B | of ceiling |
+|---|---|---|---|---|
+| `tile 16` | 1.44 TFLOP/s | 1.22 | **1.21** | 84% |
+| `tile 32` | 1.48 | 1.21 | **1.22** | 82% |
+| `coarsen 2, 2` | 2.97 | 2.48 | **2.52** | 85% |
+| **`coarsen 2, 4`** | **3.92** | 3.34 | **3.34** | **85%** |
+| **`coarsen 4, 4`** | **5.76** | 4.52 | **4.55** | **79%** |
+
+The two runs agree with each other to **1.6%** at every point.
+
+**The model was not falsified.** The two bold rows are schedules nothing had ever run when the
+prediction was committed, and they land at 85% and 79% of their ceilings — inside the 82–85%
+band of the three points that built the model. The ordering is exact over a fourfold range:
+
+```
+predicted   1.44 < 1.48 < 2.97 < 3.92 < 5.76
+measured    1.21 < 1.22 < 2.52 < 3.34 < 4.55
+```
+
+And as speedups over `tile 32`, where the shared access rate cancels out entirely and what is
+left is `2·ci·cj/(ci+cj)` against a stopwatch:
+
+| | predicted | measured |
+|---|---|---|
+| `coarsen 2, 2` | 2.01x | **2.07x** |
+| `coarsen 2, 4` | 2.65x | **2.74x** |
+| `coarsen 4, 4` | 3.89x | **3.73x** |
+
+`coarsen 4, 4` is the one that comes in **under** its prediction rather than over, and it is the
+one the ADR said to watch: 256 threads per block, the narrowest of the five. That is the
+occupancy cost showing up exactly where it was expected to, at 79% instead of 85%, and it is a
+tenth of the effect a falsification would have been.
+
+### What this buys, stated plainly
+
+**3.73x on the same matmul, from two declared lines**, and the compiler predicted it to within
+4% before the kernel existed. The mechanism is `ci + cj` operands feeding `ci · cj` bodies —
+register-level reuse — and this project could not see it at all two ADRs ago, because it was
+measuring the wrong level.
+
+It still is not compute-bound. 4.55 TFLOP/s against a measured cuBLAS SGEMM of 15.30 is 30%. The
+ceiling moved by a factor of four; the category did not.
+
+### The run that was lost
+
+The first attempt at this ended with the GPU gone from the bus
 
 The timing run died partway through with `CUDA error: unknown error`, and `nvidia-smi` then
 reported:
@@ -303,10 +353,15 @@ reported:
 Unable to determine the device handle for GPU0: 0000:03:00.0: GPU is lost.
 ```
 
-A driver-level fall-off-the-bus, needing a reboot. **No throughput number for `2, 4` or `4, 4`
-is recorded here**, and none will be until the machine is back and the run repeats cleanly. The
-correctness results above completed before it and stand on their own; the predictions stand as
-written, unadjusted, which is the point of having committed them first.
+A driver-level fall-off-the-bus, needing a reboot — sixteen display-driver timeouts that day,
+none of which reached any benchmark's output. That is ADR-0023, and it is why the table above
+says which runs were guarded.
+
+**It also moved the numbers.** The unguarded pre-crash run had `tile 32` at 1.26 and
+`coarsen 2, 2` at 2.63; the two guarded runs give 1.21/1.22 and 2.48/2.52 — **3 to 4% lower, and
+agreeing with each other.** The cause is not established: a reboot changes clock state as well
+as removing driver resets. What is established is which figures were taken with the instrument
+watching, and those are the ones in the table.
 
 ### One thing it did find
 
@@ -322,7 +377,7 @@ broken" from "this was not measured here" is a test that will eventually claim t
 | **1** | **`tools/shared_probe.py` — the access rate, from a kernel that does nothing else** | **done — 1530.0 G accesses/s, 0.3% spread, two controls** |
 | **2** | **the derivation, with the coarsening in it** | **done — the `[KNOWN_LIMIT]` inverted; four coarsenings asserted** |
 | **3** | **the machine file gains the rate; a ceiling per level, and the binder named** | **done — 12 kernels still `dram`, the matmul `smem`, 4 tests** |
-| 4 | the falsification: `coarsen 2, 4` and `4, 4` | **built and bit-identical; the timing run is blocked on a lost GPU** |
+| **4** | **the falsification: `coarsen 2, 4` and `4, 4`** | **done — predicted 3.92 and 5.76, measured 85% and 79% of them, twice** |
 
 Step 3 has a regression risk worth naming in advance: **every kernel in this repository has its
 regime printed by this code path**, and nine of them are correctly DRAM-bound today. A change
@@ -337,5 +392,5 @@ ran 35% more instructions than nvcc and finished first. What this ADR adds is a 
 and a rule for choosing between candidates. The next one to bind will need the same treatment,
 and the structure will be there for it.
 
-It also does not make this language compute-bound. `coarsen 4, 4` predicts 5.13 TFLOP/s against
-a measured cuBLAS SGEMM of 15.30. The ceiling moves; the category does not.
+It also does not make this language compute-bound. `coarsen 4, 4` measured 4.55 TFLOP/s against
+a measured cuBLAS SGEMM of 15.30. The ceiling moved by a factor of four; the category did not.

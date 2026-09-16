@@ -1,6 +1,6 @@
 # ADR-0023 — The machine is part of the instrument
 
-**Status:** Accepted — the guard is built, one suspect falsified, `TdrDelay` pending a reboot
+**Status:** Accepted — guard built and then fixed, one suspect falsified, `TdrDelay` at 10 s
 **Date:** 2026-09-16
 **Depends on:** ADR-0004 (the probe that measured a host round trip), ADR-0022 (what was running)
 
@@ -156,6 +156,41 @@ Both are the workloads the guard now brackets, so the next occurrence names itse
 of the variant list, and it drifted the moment ADR-0022 added two schedules. That is the exact
 shape of ADR-0019's defect — the reduction grid rule living in two places, corrected in one —
 and it cost that ADR a measurement. `ORDER` is now derived from `VARIANTS`. One definition.
+
+## The guard failed the first time, silently
+
+`TdrDelay` went to 10 seconds, the machine rebooted, and the step-4 run finished with:
+
+```
+  driver   not checked (no event log on this platform)
+```
+
+On Windows. `tdr_count()` worked standalone and returned 37 in a second. The fault was the API:
+`Watch` took its closing reading only in `__exit__`, both callers drove it by hand —
+`w.__enter__()` at the top, `w.report()` at the bottom, no `with` — so `after` stayed `None` and
+`clean` returned `None` through a whole nine-round benchmark.
+
+**A guard whose entire job is to notice a silent failure, failing silently.** The joke writes
+itself, and the lesson is the one this project keeps relearning: a check that can be half-used
+will be. `Watch.start()` is now the entry point, `report()` takes the closing reading if nothing
+else did, and `start()` says so out loud when the counter cannot be read at all.
+
+The re-run reported `no display-driver reset during this run`, and so did a second one.
+
+### And the guarded numbers are lower
+
+The unguarded pre-crash figures were **3 to 4% higher** than two guarded runs that agree with
+each other to 1.6%:
+
+| | pre-crash, unguarded | guarded A | guarded B |
+|---|---|---|---|
+| `tile 32` | 1.26 TFLOP/s | 1.21 | 1.22 |
+| `coarsen 2, 2` | 2.63 | 2.48 | 2.52 |
+
+This ADR does **not** claim the driver resets caused that. A reboot changes clock state as well
+as removing TDRs, and nothing here separates the two. What it claims is narrower and enough:
+three of ADR-0021's percentages were measured on an instrument that was not watching, one of
+them (`102.7%`, LYTH beating nvcc) does not reproduce, and it has been corrected in place.
 
 ## What this does not say
 
