@@ -33,6 +33,23 @@ pub struct Machine {
     /// Achieved FP16/TC-class GEMM peak when measured separately.
     #[serde(default)]
     pub peak_tflops_fp16: Option<f64>,
+    /// What a single block may ask for, read from the driver rather than assumed.
+    ///
+    /// These existed as sentences before they existed as fields. ADR-0018 argued that the
+    /// thread cap binds before shared memory and quoted 1024 from the datasheet, and nothing
+    /// in the compiler knew either number -- so `tile 64, 64` compiled, emitted 3620 bytes of
+    /// PTX, and failed at launch with `INVALID_VALUE` and no indication of which argument.
+    ///
+    /// `None` means the machine file predates this and the check is skipped, which is
+    /// deliberate: a missing limit must not silently become a limit of zero.
+    #[serde(default)]
+    pub max_threads_per_block: Option<u32>,
+    /// The default shared-memory allowance. Above it and up to
+    /// `max_shared_bytes_per_block_optin`, a kernel must ask for the extra explicitly.
+    #[serde(default)]
+    pub max_shared_bytes_per_block: Option<u32>,
+    #[serde(default)]
+    pub max_shared_bytes_per_block_optin: Option<u32>,
     #[serde(default)]
     pub ops: Vec<OpDecl>,
     /// The ridge, precomputed in the file for a human to read.

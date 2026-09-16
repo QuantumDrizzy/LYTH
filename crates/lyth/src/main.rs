@@ -164,6 +164,14 @@ struct Machine {
     levels: Vec<MachineLevel>,
     #[serde(default)]
     peak_tflops: Option<f64>,
+    /// What one block may ask for. `None` when the machine file predates these fields, and
+    /// the check is then skipped -- a missing limit must not become a limit of zero.
+    #[serde(default)]
+    max_threads_per_block: Option<u32>,
+    #[serde(default)]
+    max_shared_bytes_per_block: Option<u32>,
+    #[serde(default)]
+    max_shared_bytes_per_block_optin: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -295,6 +303,69 @@ fn front(file: &Path, machine_path: Option<&Path>, tol: f64) -> Result<Front, Ex
             Some(m)
         }
     };
+
+    // What a block may ask for, checked before anything is emitted.
+    //
+    // A tile fixes the block at one thread per element, so `tile 64, 64` asks for 4096 threads
+    // against a cap of 1024. Until this check existed that compiled, wrote 3620 bytes of PTX,
+    // and failed at launch with `CUDA_ERROR_INVALID_VALUE` -- a driver error that names no
+    // argument and no reason. ADR-0018 had already argued that this cap is what stops the tile
+    // growing; it argued it in prose, against a compiler that did not know the number.
+    if let (Some(m), Some(tile)) = (machine.as_ref(), ir.tile.as_ref()) {
+        let threads: u32 = tile.iter().product();
+        if let Some(cap) = m.max_threads_per_block {
+            if threads > cap {
+                let dims = tile
+                    .iter()
+                    .map(|d| d.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let traffic = ir
+                    .cost
+                    .bytes_expr()
+                    .unwrap_or_else(|| ir.cost.bytes_fixed().to_string());
+                eprintln!(
+                    "error[launch]: {}:{}: `tile {dims}` is {threads} threads per block and {} allows {cap}.",
+                    file.display(),
+                    kernel.span,
+                    m.id,
+                );
+                eprintln!("  A tile puts one thread on each of its elements, so the block is the tile's area.");
+                eprintln!("  The traffic it would buy is derived and real -- {traffic} bytes per element --");
+                eprintln!("  but no block is that wide.");
+                eprintln!("  Thread coarsening, one thread computing several outputs, is the way to a");
+                eprintln!("  larger tile. It is not implemented.");
+                return Err(ExitCode::from(EXIT_REFUSED));
+            }
+        }
+        // Shared memory is the *next* limit, and saying which one is in the way is the point:
+        // ADR-0018 claimed the thread count binds first, and on this machine it does, but only
+        // up to a tile of 64. Past that the memory is what refuses.
+        if let Some(l) = &ir.shared {
+            let optin = m.max_shared_bytes_per_block_optin.unwrap_or(0);
+            if optin > 0 && l.bytes > optin {
+                eprintln!(
+                    "error[launch]: {}:{}: this tile stages {} bytes into shared memory,",
+                    file.display(),
+                    kernel.span,
+                    l.bytes,
+                );
+                eprintln!(
+                    "  and {} allows {optin} even when a kernel opts in to the maximum.",
+                    m.id
+                );
+                return Err(ExitCode::from(EXIT_REFUSED));
+            }
+            if let Some(default) = m.max_shared_bytes_per_block {
+                if l.bytes > default && l.bytes <= optin {
+                    eprintln!(
+                        "note: {} bytes of shared memory is above the {default} a block gets by default on {}; the launch opts in to the {optin} maximum.",
+                        l.bytes, m.id
+                    );
+                }
+            }
+        }
+    }
 
     let report = check_intensity(
         &ir,

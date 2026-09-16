@@ -1,8 +1,11 @@
 {
   "schema": "lyth-machine/0.1",
   "id": "sm_120",
-  "peak_tflops": 15.30,
+  "peak_tflops": 15.3,
   "peak_tflops_fp16": 46.07,
+  "max_threads_per_block": 1024,
+  "max_shared_bytes_per_block": 49152,
+  "max_shared_bytes_per_block_optin": 101376,
   "levels": [
     {
       "name": "dram",

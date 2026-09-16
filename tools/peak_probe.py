@@ -37,6 +37,7 @@ import argparse
 import datetime
 import json
 import platform
+import sys
 from pathlib import Path
 
 import torch
@@ -85,6 +86,35 @@ def bandwidth(n_bytes: int, reps: int) -> dict[str, float]:
     return out
 
 
+def block_limits() -> dict[str, int]:
+    """What one block may ask for, read from the driver.
+
+    These are checked by the compiler before it emits anything (ADR-0021). They existed as
+    sentences in ADR-0018 long before they existed as numbers anywhere the compiler could see,
+    and in the meantime `tile 64, 64` compiled and failed at launch.
+    """
+    import ctypes
+
+    cuda = ctypes.WinDLL("nvcuda.dll") if sys.platform == "win32" else ctypes.CDLL("libcuda.so.1")
+    cuda.cuInit(0)
+    dev = ctypes.c_int()
+    cuda.cuDeviceGet(ctypes.byref(dev), 0)
+    # CU_DEVICE_ATTRIBUTE_ values, from the driver API enum.
+    attrs = {
+        "max_threads_per_block": 1,
+        "max_shared_bytes_per_block": 8,
+        "max_shared_bytes_per_block_optin": 97,
+        "max_registers_per_block": 12,
+        "max_threads_per_multiprocessor": 39,
+    }
+    out = {}
+    for name, num in attrs.items():
+        v = ctypes.c_int()
+        if cuda.cuDeviceGetAttribute(ctypes.byref(v), num, dev) == 0:
+            out[name] = v.value
+    return out
+
+
 def gemm_tflops(dtype: torch.dtype, n: int, reps: int) -> float:
     """Achieved GEMM, which is what a roofline's compute ceiling should be measured against.
 
@@ -128,6 +158,12 @@ def main() -> int:
     print(f"\n  ceiling {ceiling:.2f} GB/s from `{fastest}` -- this is what `bandwidth_gbs` records.")
     print(f"  a kernel that writes will not reach it: `triad` is {bw['triad'] / ceiling:.1%} of it.")
 
+    lim = block_limits()
+    print()
+    print("  what one block may ask for, from the driver:")
+    for k, v in lim.items():
+        print(f"    {k:<34} {v:>9,}")
+
     fp32 = gemm_tflops(torch.float32, args.gemm, 10)
     fp16 = gemm_tflops(torch.float16, args.gemm, 10)
     print(f"\n  achieved SGEMM {fp32:.2f} TFLOP/s, HGEMM {fp16:.2f} TFLOP/s")
@@ -152,6 +188,7 @@ def main() -> int:
                     "bandwidth_gbs_by_pattern": {k: round(v, 2) for k, v in bw.items()},
                     "bandwidth_gbs": round(ceiling, 2),
                     "bandwidth_pattern": fastest,
+                    **lim,
                     "peak_tflops": round(fp32, 2),
                     "peak_tflops_fp16": round(fp16, 2),
                     "ridge_flops_per_byte": round(fp32 * 1e3 / ceiling, 2),
