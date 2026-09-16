@@ -9,3 +9,4 @@ __pycache__/
 # Generated reports: the HTML that produced them is the artifact, not this.
 *.pdf
 bench/gen/
+bench/cuda/*.ptx
