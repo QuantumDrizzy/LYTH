@@ -37,8 +37,17 @@ def load_nvrtc() -> ctypes.CDLL:
     sys.exit(f"no nvrtc found under {CUDA / 'bin' / 'x64'}")
 
 
-def compile_ptx(source: str, name: str, arch: str = "compute_120") -> str:
-    """CUDA C++ in, PTX out. Raises with the compiler log on failure."""
+def compile_ptx(
+    source: str, name: str, arch: str = "compute_120", extra: tuple[str, ...] = ()
+) -> str:
+    """CUDA C++ in, PTX out. Raises with the compiler log on failure.
+
+    `extra` is for options a *comparison* needs rather than options that make the kernel
+    fast. The one in use is `--fmad=false` (ADR-0021 step 5): LYTH emits a multiply and an
+    add as two instructions on purpose, since one rounding is a different answer from two
+    (ADR-0010), so an nvrtc left to contract them is computing something else and a timing
+    against it would be a timing against a different function.
+    """
     nvrtc = load_nvrtc()
 
     def check(code: int, what: str) -> None:
@@ -55,6 +64,7 @@ def compile_ptx(source: str, name: str, arch: str = "compute_120") -> str:
     )
 
     opts = [f"--gpu-architecture={arch}".encode(), b"-default-device"]
+    opts += [o.encode() for o in extra]
     arr = (ctypes.c_char_p * len(opts))(*opts)
     rc = nvrtc.nvrtcCompileProgram(prog, len(opts), arr)
 

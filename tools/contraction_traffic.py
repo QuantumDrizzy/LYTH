@@ -75,15 +75,43 @@ def find_ncu():
     sys.exit("ncu not found under 'C:/Program Files/NVIDIA Corporation/Nsight Compute*'")
 
 
+def coarsening_for(tile: int, cap: int = 1024) -> int:
+    """The per-axis factor that brings `tile x tile` threads under the block cap.
+
+    Not a schedule search. A tile puts one thread on each of its elements, the device caps a
+    block at `cap`, and `coarsen` says how many of those elements one thread owns -- so the
+    smallest legal factor is fully determined by the tile and the cap, and every other choice
+    is a larger one. Powers of two only, which is the parser's rule (ADR-0021): a thread's
+    position in the tile stays a shift and a mask.
+
+    Returns 1 when the tile already fits, which is the absent declaration.
+    """
+    c = 1
+    while (tile // c) ** 2 > cap:
+        c *= 2
+        if tile % c:
+            sys.exit(f"tile {tile} needs a coarsening its edge does not divide")
+    return c
+
+
 def variant(tile: int, out: pathlib.Path) -> pathlib.Path:
-    """The matmul example with its tile and its declared limit rewritten.
+    """The matmul example with its tile, its coarsening and its declared limit rewritten.
 
     The declaration has to move with the tile: the asymptote is `T/4`, so a source that kept
     `intensity asymptotic 8.0` at `tile 16, 16` would be refused -- which is the compiler doing
     its job and not something to work around.
+
+    Past `tile 32` the source also needs `coarsen`, because 64 x 64 is 4096 threads and no block
+    is that wide (ADR-0021). **That line changes nothing the cost model derives**, which is why
+    it belongs in a measurement rather than in an argument: if the derivation is right, the
+    traffic halves from `tile 32` to `tile 64` and the coarsening is invisible in it.
     """
     src = (REPO / "examples/matmul.lyth").read_text(encoding="utf-8")
-    src = src.replace("    tile 32, 32\n", f"    tile {tile}, {tile}\n")
+    c = coarsening_for(tile)
+    tile_line = f"    tile {tile}, {tile}\n"
+    if c > 1:
+        tile_line += f"    coarsen {c}, {c}\n"
+    src = src.replace("    tile 32, 32\n", tile_line)
     src = src.replace(
         "    intensity asymptotic 8.0\n", f"    intensity asymptotic {tile / 4}\n"
     )
@@ -141,7 +169,7 @@ def main():
     ap.add_argument("--machine", type=pathlib.Path, default=REPO / "fixtures/machine/sm_120.json")
     ap.add_argument("--binary", type=pathlib.Path, default=REPO / "target/release/lyth.exe")
     ap.add_argument("--sizes", type=int, nargs="+", default=[512, 1024, 2048])
-    ap.add_argument("--tiles", type=int, nargs="+", default=[32, 16])
+    ap.add_argument("--tiles", type=int, nargs="+", default=[64, 32, 16])
     args = ap.parse_args()
 
     ncu = find_ncu()
@@ -150,8 +178,13 @@ def main():
         tmp = pathlib.Path(tmp)
         for tile in args.tiles:
             src = variant(tile, tmp)
+            c = coarsening_for(tile)
             sym = derived(args.binary, args.machine, src, tmp)
-            print(f"\ntile {tile} x {tile}: the compiler derives {sym['bytes']} bytes per output")
+            label = f"tile {tile} x {tile}"
+            if c > 1:
+                label += f" + coarsen {c}, {c}"
+            label += f"  [{(tile // c) ** 2} threads/block]"
+            print(f"\n{label}: the compiler derives {sym['bytes']} bytes per output")
             print(f"  asymptotic intensity {sym['asymptotic_intensity']:.4f} = T/4 = {tile / 4}")
             print(
                 f"  {'m=n=k':>7} {'derived':>9} {'L2/out':>9} {'vs model':>9} "

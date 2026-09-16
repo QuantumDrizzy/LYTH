@@ -268,6 +268,60 @@ not step 4.
 It joins the honest open list next to the bank-conflict excess from ADR-0018: small, consistent,
 inside the 2% tolerance, and not understood.
 
+## Step 5, pre-registered before it was measured
+
+The first run of `bench/vs_handwritten_matmul.py` produced a number that looks like the ADR
+landing and is **not evidence for it**, and the reason is worth writing down before the
+instrument is pointed at it.
+
+Coarsening halves three different quantities at once, all by exactly two:
+
+| per flop | `tile 32` | `tile 64` + `coarsen 2, 2` |
+|---|---|---|
+| global bytes (derived, and measured in step 4) | 2.16 GB / launch | 1.09 GB |
+| **shared-memory reads** | 4.0 B/flop — 68.7 GB | 2.0 B/flop — 34.4 GB |
+| **instructions** — `ci + cj` loads feeding `ci · cj` bodies | ~13 per 2 flop | ~27 per 8 flop |
+
+A 2× speedup is therefore consistent with all three and discriminates between none of them. If
+this ADR reports "traffic halved, time halved, the cost model works", it has fitted the one
+mechanism it happens to model to a result three mechanisms predict.
+
+Three things are pre-registered, before the counters are read:
+
+1. **DRAM is not the constraint, and the printed ceiling is a category error at this size.**
+   `A + B` at 2048 is **33.6 MB** against an L2 of **34 MB**, so the operands fit in cache and
+   ADR-0018 already measured `DRAM/output = 8.02`, which is each matrix read exactly once. The
+   derived figure is an **L1→L2** claim — step 4 checks it as one — but `lyth run` prints
+   `payload ... at dram` and computes its "43.35% of peak FLOPS" ceiling by dividing that
+   figure into a **DRAM** bandwidth. Predicted: DRAM moves ≈33.6 MB per launch for both tiles,
+   which at 414.51 GB/s is 0.08 ms against a launch that takes several.
+
+2. **Neither kernel reaches its printed roofline ceiling.** 8 flop/byte × 414.51 GB/s = 3.32
+   TFLOP/s and 16 × 414.51 = 6.63. Predicted: both land near 40% of those, for the reason in
+   (1) — the number they are a fraction of is not about this kernel.
+
+3. **The binding constraint is instruction issue**, which is the quantity ADR-0020 measured
+   LYTH to be **17% worse at** and explicitly deferred to this ADR. Counting warp-instructions
+   from the emitted inner loop against 36 SMs × 4 schedulers × ~2.4 GHz:
+
+   | | thread-inst | warp-inst | predicted | first measured |
+   |---|---|---|---|---|
+   | `tile 32` | ~112 G | 3.5 G | ~10.1 ms | 13.6 ms |
+   | `tile 64` + `coarsen 2, 2` | ~58 G | 1.8 G | ~5.2 ms | 6.4 ms |
+
+   74% and 82% of issue peak — close enough that issue is a candidate and neither of the other
+   two is.
+
+**And (3) predicts something the first run already contradicts.** If this kernel is issue-bound
+and LYTH emits 17% more instructions, LYTH should lose by something near 17%. The first,
+contaminated run had it at **98.2%** and **103.4%**. So at most one of these is true:
+
+* the kernel is not issue-bound, or
+* LYTH is not 17% behind **on this kernel** — the saxpy figure does not transfer.
+
+`smsp__thread_inst_executed.sum` on both sides decides which, and it is one counter. Whichever
+way it falls, the losing half of this paragraph stays in the document.
+
 ## Build sequence
 
 | step | | testable on its own |
