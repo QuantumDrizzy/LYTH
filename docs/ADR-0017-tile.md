@@ -1,6 +1,10 @@
 # ADR-0017 — The tile, and the first cost that depends on the schedule
 
-**Status:** Proposed
+**Status:** Accepted — built, measured, and depended on
+
+*(Status corrected 2026-09-16. This said `Proposed` while `tile` was shipping in the emitter,
+measured to +0.80% by ADR-0022 step 4, and depended on by ADR-0018, ADR-0021 and ADR-0022. A
+status line that says a built thing is proposed is a document lying about the code.)*
 **Date:** 2026-09-16
 **Depends on:** ADR-0000 (why), ADR-0015 (shape), ADR-0016 (callable), ADR-0011 (reductions)
 
