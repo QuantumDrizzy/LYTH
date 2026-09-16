@@ -1,6 +1,6 @@
 # ADR-0025 — Standalone: a second target, and the instruction that is missing
 
-**Status:** Proposed — steps 0 and 1 built
+**Status:** Proposed — steps 0, 1 and 2 built
 **Date:** 2026-09-16
 **Depends on:** ADR-0022 (the level that binds), ADR-0019 (the dogfood), ADR-0000 (why)
 
@@ -155,6 +155,59 @@ useful spread. On a memory-bound matmul the compute candidate is the fastest of 
 mile, and quoting `10.31x` answers a question nobody asked. The line now compares the binder
 against the **runner-up**, which restores the 2.24x that was meaningful and keeps meaning it.
 
+## Step 2, built — a kernel body that the emulator agrees with
+
+`crates/lyth-uasm` takes a `KernelIr` and `n` and returns a complete `.uasm` text: `.data`
+holding the inputs, `.text` holding `_start`, a lane loop, and an `ecall` per drained buffer so
+the result leaves the machine. `emit_program` is the whole surface.
+
+The inputs are baked in from **`lyth_lang::inputs`**, the same generator the host oracle reads.
+That is not tidiness. A program computing on different numbers from the oracle would make every
+comparison between them a comparison of two functions, and this back end has no other way to be
+checked — there is no `ncu` for Unibit and no second implementation to agree with.
+
+| LYTH | Unibit |
+|---|---|
+| `stream x : dram -> reg` | `LQ t, 0(s_i)`, the base bumped by 32 each iteration |
+| a scalar parameter | `LI` + `VSPLAT.w` once, **before** the loop |
+| `a * x + y` (one `Op::Fma`) | `MV` the addend, then `VFMA` — the instruction accumulates into `rd` |
+| `+`, `-`, `*` | `VFADD`, `VFSUB`, `VFMUL` — step 0's instructions |
+| `-x` | `VFSUB` against a splatted zero, because there is no packed negate |
+| `drain` | `SQ`, then a second loop that prints it |
+
+Nine things are refused by name rather than approximated: a `tile` (no level to stage into), a
+`coarsen`, a `reduce` (step 3), a rank-2 `space` (step 3), an `n` that is not a multiple of 8
+(no tail loop — refused rather than rounded), a narrow buffer (the float unit is packed single
+precision only, and emitting it as f32 would move twice the bytes the cost model derived), more
+than eight buffers (one base pointer per saved register), a body needing more than seven live
+values (no spilling), and a float divide (step 0 added add, sub, mul, fma, max and min).
+
+`tests/against_the_emulator.rs` assembles each emitted program with the real `unibit` binary,
+runs it, reads back the printed lanes and compares them **bit for bit** against `lyth_lang::eval`
+— the same host oracle the PTX back end is checked against. Two kernels, one that fuses and one
+that does not, 64 and 32 elements. They pass.
+
+### The defect, and it was the check again
+
+The first honest run said:
+
+```
+the program printed 8 lanes
+  left: 8
+ right: 64
+```
+
+Which reads as a loop that ran once. It was a **parser** that ran once: `PRINT_REG256` emits no
+newline, so the eight registers arrive concatenated on a single line, and the test scanned
+`text.lines()` taking one match each. The emitted program had been right from the first run.
+
+It is the third time in this project that a test's own reading of the output was the thing that
+was wrong, and the second in this file — the skip above it had been reporting seven passes in
+0.01 seconds because `Path::parent` is lexical and the emulator was being looked for in
+`LYTH/crates/Unibit`. Both have the same shape: **a check whose failure state was unreachable**,
+one by skipping and one by parsing. The rule ADR-0000 already states covers it, and the fix in
+both cases was to make the check say where it looked.
+
 ## What this does not give you
 
 Stated plainly, because the complaint deserves an honest answer rather than a hopeful one.
@@ -177,7 +230,7 @@ then `unibit run main.ubo`, with no other language anywhere in the workflow.**
 |---|---|---|
 | **0** | **Unibit** | **done — six instructions, 5 tests, `saxpy_f32.uasm` runs on the emulator** |
 | **1** | **LYTH** | **done — 28.43 B/cycle, 14.21 flop/cycle, ridge 0.4999; and it found the missing compute ceiling** |
-| 2 | LYTH | `lyth-uasm`: emit a kernel body as Unibit assembly, checked against the emulator |
+| **2** | **LYTH** | **done — `lyth-uasm`, bit-exact against the emulator on two kernels, nine refusals by name** |
 | 3 | LYTH | `space` as a bounded lane loop; `reduce` onto `VREDUCE` |
 | 4 | LYTH | a program: `_start`, declared buffers, `ecall` I/O, and `main.lyth` -> `main.ubo` |
 | 5 | both | the contract measured on Unibit, against its counters, the way ADR-0009 did on PTX |
