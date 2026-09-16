@@ -3,6 +3,7 @@
 //! `lex` -> `parse` -> `ir::lower` -> `check::check_intensity`. Nothing here knows about
 //! PTX or about CUDA; the back end consumes `ir::KernelIr` and nothing else.
 
+pub mod half;
 pub mod ast;
 pub mod check;
 pub mod eval;
