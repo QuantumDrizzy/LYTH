@@ -91,6 +91,87 @@ identical speed and differ only in accuracy. `bf16` has f32's exponent range and
 mantissa bits; `f16` has 10 mantissa bits and a range that overflows at 65504. A sum over 2048
 terms will find that edge, and the oracle is what will say so.
 
+## Two semantics step 1 decided, written down as decisions
+
+Both of these came out of tests of mine that were wrong. A rule that surprises the person who
+wrote the code is exactly what an ADR is for, and neither should be rediscovered in an argument
+about whether some future refusal was fair.
+
+### `drain` asserts the outgoing movement, not an incoming dependency
+
+**A drained buffer is read only if the body reads it.** `y = a * x + y` reads `y`; `y = x` does
+not, and the second moves 6 bytes per element at half width where the first moves 10. The
+`drain` keyword says a value leaves; it says nothing about whether one arrived.
+
+A test here asserted 10 for `y = x` on the assumption that `drain` implied both, and the cost
+model was right. Written down now because tomorrow this decides whether a refusal is just.
+
+### A sector does not know what is in it
+
+ADR-0015 separated the payload from the bus. Narrow elements sharpen that separation into two
+different behaviours in the same kernel:
+
+| access | at `f32` | at `f16` |
+|---|---|---|
+| coalesced | 4 B — **the payload is the bus** | 2 B, halves with the element |
+| strided | 32 B — a whole sector for one element | **32 B, unchanged** |
+
+> **A strided `f16` kernel wastes twice the fraction of the bus that a strided `f32` one does.**
+
+That is a reusable prediction rather than an observation about this type: **every narrow type
+this language ever gains inherits it**, and any future `f8` would waste four times the fraction.
+It also means coalescence is no longer a property of the access pattern alone — it is the
+pattern *and* the width, and `coalescence()` already reports it that way.
+
+A test summed the read and write sectors, got 36 against 34, and read that as the bus narrowing.
+It did not. The halves have to be checked apart.
+
+### And a note on method
+
+The exhaustiveness check earned its own line. Converting `== Ty::BufF32` into `.is_buffer()`
+first was necessary because equality checks are invisible to the compiler and would have gone
+silently false. But the sharper lesson is the guard pattern that was written and then deleted:
+`t if t.is_buffer()` compiles, reads better, and **switches exhaustiveness off**. The step where
+a shortcut is most tempting is the step where the compiler enumerating what has not been thought
+of is worth the most.
+
+## Step 2's three decisions, made before any of it is written
+
+Left to the implementation these get decided by accident, and then a measurement cannot tell
+whether it validated the physics or the emitter.
+
+### 1. Storage is narrow; arithmetic is not
+
+```
+ld.global.b16  →  cvt.f32.f16  →  every operation in f32  →  cvt.rn.f16.f32  →  st.global.b16
+```
+
+Two bytes cross the bus, four bytes sit in the register, and `.rn` is round-to-nearest-even on
+the way back out. This is what the hardware's own mixed-precision path does and it is the only
+choice under which the traffic prediction is testable at all: if the arithmetic narrowed too, a
+changed time could be the bytes **or** the rounding and nothing would be separated.
+
+### 2. A reduction's accumulator is f32, and that is not a detail
+
+A sum of `f16` accumulated in `f16` rounds once per term; accumulated in `f32` it rounds once,
+at the end. **Those are different functions with the same signature**, and over `k = 2048` the
+difference is not subtle. The accumulator is f32. A future `reduce sum f16` that wants the other
+behaviour will have to say so, and will be a different kernel rather than the same one compiled
+differently.
+
+### 3. The host oracle is the actual work of step 2
+
+Rust's `f16` is **unstable** on this toolchain — checked, not assumed: `error[E0658]: the type
+f16 is unstable`, rustc 1.91.1 — and `lyth-lang` has exactly one dependency. So the conversion
+is written here, as IEEE 754-2008 binary16 with round-half-to-even, including subnormals and the
+overflow at 65504.
+
+**And it is verified against the device before anything else runs.** The rule is the one this
+project has always had: the oracle models what the device *will* do, not what it *should*. An
+oracle that rounds a hair differently from `cvt.rn.f16.f32` produces a mismatch that is nobody's
+bug and eats an afternoon, so step 2 starts with a rounding test over the hard cases — ties,
+subnormals, overflow, and the values either side of each — and only then compiles a kernel.
+
 ## Build sequence
 
 | step | | testable on its own |
@@ -101,6 +182,29 @@ terms will find that edge, and the oracle is what will say so.
 | 4 | `bf16` beside `f16` | identical time, different error — the traffic model's blind spot, confirmed as blind |
 
 Step 3 is the one this ADR exists for. Steps 1 and 2 are the price of admission.
+
+### Step 3's outcomes, pre-registered
+
+| result | conclusion |
+|---|---|
+| `saxpy` ~2x in **time**, matmul unchanged | both levels confirmed, and ADR-0022 is tied down as it has not been |
+| `saxpy` ~2x, **matmul speeds up too** | ADR-0022's level is wrong: the shared pipe is priced in bytes after all, and `smem binds` is decoration |
+| `saxpy` does **not** halve its time | the DRAM traffic model is missing a term for narrow types |
+
+Three precisions on how that is read, because each one is a way to get a false result:
+
+* **The claim is 2x in time, not in GB/s.** The achievable bandwidth does not change; the bytes
+  do. A kernel that halves its bytes and keeps its bandwidth halves its time, and quoting the
+  unchanged GB/s as "no improvement" would be reading the wrong number.
+* **The traffic claim lives at `lts__t_bytes`, not at DRAM.** ADR-0015's level discipline and
+  ADR-0018's measurement both say so: write-back does not respect a launch boundary, and DRAM
+  figures in this project have been 1.5x off the payload for that reason.
+* **"Unchanged" means inside the band, not exactly zero** — and the band is **±5%**, not
+  ADR-0022's ±0.80%. Those are different tolerances for different quantities: ±0.80% is how
+  closely the *traffic* model matched `ncu`, while this row is a *timing* claim, and the
+  measured run-to-run reproducibility of the ADR-0022 timing harness is **1.6%** across two
+  guarded nine-round runs. ±5% covers that with room for thermal drift. Using a traffic
+  tolerance on a timing prediction would manufacture a falsification out of ordinary noise.
 
 ## What this does not claim
 
