@@ -23,7 +23,9 @@
       "name": "smem",
       "capacity": "~100KiB/block class",
       "bandwidth_gbs": 0.0,
-      "latency_cyc": null
+      "latency_cyc": null,
+      "accesses_gps": 1530.0,
+      "accesses_note": "Thread-granularity shared-memory accesses per second, in billions. NOT a bandwidth, and the distinction is measured: tools/shared_probe.py clocked a broadcast (4 useful bytes per wavefront) and a coalesced read (128) at 1530.0 and 1527.2, agreeing to 0.2% while their payloads differ by 32x. bandwidth_gbs stays 0.0 because dividing by it would be the wrong division. ADR-0022."
     },
     {
       "name": "reg",
@@ -73,7 +75,8 @@
     "EVERY NUMBER HERE IS MEASURED ON THIS MACHINE, NOT A DATASHEET. peak_tflops 15.37 is an achieved cuBLAS SGEMM at n=8192; bandwidth 358.43 GB/s is the median of six runs. Both via tools/peak_probe.py on 2026-09-14.",
     "Ridge FP32 = 15.37e3 / 358.43 = 42.9 flop/byte. Both terms are achieved figures, which is the only way the ratio describes a real machine: mixing a datasheet peak with a measured bandwidth, or the reverse, produces a number that describes nothing.",
     "For contrast, and NOT used anywhere: this card's datasheet figures are 23.7 TFLOP/s FP32 and 448 GB/s, a ridge of 52.9. Measurement reaches 65% of the first and 80% of the second, which is ordinary. The datasheet ridge is the right number for a procurement decision and the wrong one for asking whether a kernel on THIS machine is memory-bound.",
-    "l2/smem/reg bandwidth stays 0 until a probe names them."
+    "smem now carries accesses_gps rather than bandwidth_gbs, because the shared pipe is priced in wavefronts and not in bytes -- measured, ADR-0022 step 1. l2/reg bandwidth stays 0 until a probe names them.",
+    "ADR-0022: the roofline is no longer DRAM-only. A ceiling is computed at every level whose throughput this file names, and the slowest one binds. For every kernel that stages nothing that is still DRAM; for a tiled contraction it is smem, by more than 2x."
   ],
   "measurement": {
     "method": "tools/peak_probe.py, torch.sum over 1 GiB (read) and cuBLAS GEMM n=8192",
@@ -84,7 +87,11 @@
     "dram_spread_pct": 4.9,
     "sgemm_tflops_steady": 15.37,
     "date": "2026-09-14",
-    "clock_state": "default boost, not locked"
+    "clock_state": "default boost, not locked",
+    "smem_accesses_gps": 1530.0,
+    "smem_spread_pct": 0.3,
+    "smem_method": "tools/shared_probe.py, 9 rounds x 20 launches, two block sizes x two access patterns, with a doubling-scaling control and the PTX load count asserted",
+    "smem_date": "2026-09-16"
   },
   "ridge_flop_per_byte": {
     "fp32": 42.9,

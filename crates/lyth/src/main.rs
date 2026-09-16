@@ -178,6 +178,12 @@ struct Machine {
 struct MachineLevel {
     name: String,
     bandwidth_gbs: f64,
+    /// Accesses per second, in billions, where this level is priced in accesses rather than
+    /// bytes. `None` on every level that is not `smem`, and on an `smem` written before
+    /// ADR-0022's probe -- in which case no shared ceiling is offered at all, because a
+    /// missing rate becoming a rate of zero would make every staged kernel infinitely slow.
+    #[serde(default)]
+    accesses_gps: Option<f64>,
 }
 
 impl Machine {
@@ -186,6 +192,11 @@ impl Machine {
         Some(Ridge {
             peak_tflops: self.peak_tflops?,
             bandwidth_gbs: dram.bandwidth_gbs,
+            smem_accesses_gps: self
+                .levels
+                .iter()
+                .find(|l| l.name == "smem")
+                .and_then(|l| l.accesses_gps),
         })
     }
 }
@@ -465,13 +476,85 @@ fn print_cost(ir: &KernelIr, report: &lyth_lang::IntensityReport) {
     }
     if let (Some(r), Some(regime)) = (report.ridge, report.regime) {
         println!("  ridge    {r:.1} flop/byte — {}", regime.name());
+        print_ceiling(report);
+    }
+}
+
+/// Which level this kernel runs out of first, and what that allows (ADR-0022).
+///
+/// This used to be one line — the DRAM intensity as a fraction of peak FLOPS, "with bandwidth
+/// saturated". ADR-0021 step 5 measured that sentence false for a tiled contraction: DRAM was
+/// at **1.7%** of this device's bandwidth, and a tile moving twice the derived traffic took
+/// exactly the same time. Nothing was saturated, and the level that was is not in the roofline
+/// at all.
+///
+/// So the ceiling is now computed per level and the slowest one is named. For every kernel
+/// that stages nothing there is one candidate and the answer is what it always was.
+fn print_ceiling(report: &lyth_lang::check::IntensityReport) {
+    let Some(binding) = report.binding else {
+        // No machine, or no level whose throughput this file names.
         if let Some(f) = report.peak_flops_fraction {
             println!(
-                "           at this intensity the ceiling is {:.2}% of peak FLOPS, \
-                 with bandwidth saturated",
+                "           at this intensity the ceiling is {:.2}% of peak FLOPS",
                 f * 100.0
             );
         }
+        return;
+    };
+
+    let unit = |c: &lyth_lang::check::LevelCeiling| match c.level {
+        lyth_lang::ast::Level::Smem => "access",
+        _ => "byte",
+    };
+    match report.ceiling_flops {
+        Some(flops) => {
+            let of_peak = report
+                .ceiling_peak_fraction
+                .map(|f| format!(", {:.2}% of peak FLOPS", f * 100.0))
+                .unwrap_or_default();
+            println!(
+                "  ceiling  {} binds — {:.2} TFLOP/s{of_peak}",
+                binding.level.name(),
+                flops / 1e12,
+            );
+        }
+        None => println!(
+            "  ceiling  {} binds — the kernel retires no flops, so there is no FLOP/s to report",
+            binding.level.name(),
+        ),
+    }
+
+    // Every candidate, always, including the one that lost. A ceiling that reported only the
+    // binder would be a number with no way to tell whether it was close.
+    //
+    // `per` carries the contracted extent into the unit, because for a matmul these are bytes
+    // per element *per unit of k* and a line that dropped the `k` would be wrong by a factor
+    // of two thousand at the sizes this is measured at.
+    let per = match &report.per_extent {
+        Some(k) => format!("/element/{k}"),
+        None => "/element".to_string(),
+    };
+    for c in &report.ceilings {
+        let mark = if c.level == binding.level { "*" } else { " " };
+        println!(
+            "         {mark} {:<5} {:>9.4} {}{per}, {:.3} ns per 1e6 of them",
+            c.level.name(),
+            c.units,
+            unit(c),
+            c.seconds * 1e6 * 1e9,
+        );
+    }
+    if report.ceilings.len() > 1 {
+        let slowest = binding.seconds;
+        let fastest = report
+            .ceilings
+            .iter()
+            .map(|c| c.seconds)
+            .fold(f64::INFINITY, f64::min);
+        println!(
+            "           the two disagree by {:.2}x, so which one is quoted is not a detail",
+            slowest / fastest
+        );
     }
 }
 

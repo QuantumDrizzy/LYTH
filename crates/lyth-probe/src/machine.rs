@@ -80,6 +80,21 @@ pub struct Level {
     pub capacity: Option<String>,
     /// Peak or measured bandwidth in GB/s (decimal 1e9).
     pub bandwidth_gbs: f64,
+    /// Accesses per second, in billions, at thread granularity.
+    ///
+    /// Only `smem` carries one, and it is there **instead of** a bandwidth rather than beside
+    /// it. `tools/shared_probe.py` clocked a broadcast (4 useful bytes per wavefront) and a
+    /// coalesced read (128) at the same rate to within 0.2%, so the shared pipe is priced in
+    /// wavefronts and dividing a byte count by a GB/s would be right for one access pattern
+    /// and wrong by 32x for the other. ADR-0022 step 1.
+    ///
+    /// `None` on a file written before that probe. A missing rate must not become a rate of
+    /// zero: the level is simply not offered as a candidate ceiling.
+    #[serde(default)]
+    pub accesses_gps: Option<f64>,
+    /// Free text beside `accesses_gps`, for the same reason `notes` exists on the machine.
+    #[serde(default)]
+    pub accesses_note: Option<String>,
     #[serde(default)]
     pub latency_cyc: Option<u64>,
 }

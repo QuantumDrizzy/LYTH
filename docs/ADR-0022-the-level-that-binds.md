@@ -1,6 +1,6 @@
 # ADR-0022 — The ceiling belongs to the level that binds, and it is not always DRAM
 
-**Status:** Proposed — step 1 measured
+**Status:** Proposed — steps 1, 2 and 3 built
 **Date:** 2026-09-16
 **Depends on:** ADR-0021 (coarsening, and the measurement that forced this), ADR-0015 (payload vs
 bus), ADR-0000 (why)
@@ -181,13 +181,102 @@ Which makes the predictions in the table above concrete, and one of them **large
 1530.0 G accesses/s the ceilings are 1.53, 3.06, 4.08 and 6.12 TFLOP/s, and the three measured
 kernels sit at 82%, 83% and 86% of theirs.
 
+## Step 2, as built — the rule was already in the file
+
+The fix is four lines, and that is the finding rather than a boast. `reuse_of` has read, since
+ADR-0017:
+
+> the product of the tile dimensions of the free axes the buffer's index does not mention
+
+Shared memory earns its reuse from the **tile**: staging is what lets the threads of a tile row
+share one element of `a[i, p]`. The register file earns its reuse from the **coarsening**, by the
+identical rule: a thread owning `cj` outputs along `j` loads that element once and spends it
+`cj` times, so the shared pipe sees one access instead of `cj`. `register_reuse_of` is therefore
+`reuse_of` with `coarsen` substituted for `tile`.
+
+Derived, against the profiler:
+
+| | derived shared read | loads feeding outputs |
+|---|---|---|
+| none | `8 * k` | 2 feed 1 |
+| `coarsen 2, 2` | `4 * k` | 4 feed 4 |
+| `coarsen 2, 4` | `3 * k` | 6 feed 8 |
+| `coarsen 4, 4` | `2 * k` | 8 feed 16 |
+
+The **write** side is deliberately not divided by it, and the emitter is the check: coarsening
+does not change what is staged — the same tile, the same elements, spread over fewer threads
+doing more each — so it is `ci · cj` stores per operand per step against `ci + cj` loads per
+term. The global figure does not move either, which is the ADR-0021 claim that survives.
+
+This also corrected a comment that **was** the bug, written down in the source:
+
+> Everything here is about the declaration against the tile, so it needs neither the body nor
+> the cost — and the cost does not need it either.
+
+True of the global level. False of the level below. The level below is the one that decides the
+time.
+
+## Step 3, as built
+
+`Ridge` gains `smem_accesses_gps: Option<f64>`, the `smem` level of the machine file gains
+`accesses_gps: 1530.0` beside a `bandwidth_gbs` that **stays 0.0**, and the ceiling is computed
+per level:
+
+```
+seconds per element at dram = bytes    / bandwidth
+seconds per element at smem = accesses / access rate      (accesses = bytes / 4, one f32 each)
+```
+
+The slowest binds. For a contracted kernel the figures are the per-extent coefficients, because
+that is what survives to the limit — the same `asymptotic` distinction ADR-0018 already decided.
+
+What `lyth check` now prints for the kernel this ADR exists for:
+
+```
+  ridge    36.9 flop/byte — memory-bound
+  ceiling  smem binds — 2.97 TFLOP/s, 19.39% of peak FLOPS
+           dram     0.1250 byte/element/k, 301.561 ns per 1e6 of them
+         * smem     1.0312 access/element/k, 674.020 ns per 1e6 of them
+           the two disagree by 2.24x, so which one is quoted is not a detail
+```
+
+Three decisions in that block worth defending:
+
+* **Both candidates are always printed, including the loser.** A ceiling that named only the
+  winner gives a reader no way to tell whether it was close. Here it is not close, and a reader
+  who only ever sees `dram` on their own kernels learns what the other column looks like.
+* **The extent is in the unit.** `0.1250 byte/element/k`, not `byte/element`. At the size these
+  were measured, dropping the `k` is a factor of two thousand — and printing a contraction's
+  cost as a constant is precisely what ADR-0018 spent itself refusing.
+* **"with bandwidth saturated" is gone.** It was measured false: DRAM at 1.7% of this device's
+  bandwidth. `peak_bandwidth_fraction` is still on the report, still `1.0`, and now carries a
+  `[KNOWN_LIMIT]` saying so — the twelve kernels that stage nothing are still described by it.
+
+### Against the regression this ADR named in advance
+
+> A change that makes the matmul right and a saxpy wrong has traded one error for another. The
+> test is that the nine do not move.
+
+`crates/lyth/tests/binding_level.rs` lists **twelve** and asserts each still reports `dram
+binds`. Two of them are the interesting ones: `transpose-tiled` and `dot` *do* have shared
+traffic, so they are exactly where a careless implementation flips. A transpose is 8 bytes and 2
+shared accesses per element, which at this machine's two rates is 19,300 ns against 1,307 per
+million — DRAM by a factor of fifteen. **The ceiling being per level does not mean the shared
+level ever wins; it means it is asked.**
+
+And a fourth test strips `accesses_gps` back out of the machine file and checks the matmul falls
+back to `dram`, with no `smem` row offered at all. A missing rate must not become a rate of
+zero — the same failure mode the block limits have, and the reason those are `Option` too.
+
+247 tests green, clippy clean.
+
 ## Build sequence
 
 | step | | testable on its own |
 |---|---|---|
 | **1** | **`tools/shared_probe.py` — the access rate, from a kernel that does nothing else** | **done — 1530.0 G accesses/s, 0.3% spread, two controls** |
-| 2 | the derivation: shared accesses per element, with the coarsening in it | the `[KNOWN_LIMIT]` in `coarsen.rs` inverts to an assertion |
-| 3 | the machine file gains the rate; `lyth run` reports a ceiling per level and names the binder | every existing kernel still reports `dram`, and the matmul reports `smem` |
+| **2** | **the derivation, with the coarsening in it** | **done — the `[KNOWN_LIMIT]` inverted; four coarsenings asserted** |
+| **3** | **the machine file gains the rate; a ceiling per level, and the binder named** | **done — 12 kernels still `dram`, the matmul `smem`, 4 tests** |
 | 4 | the falsification: `coarsen 2, 4` and `4, 4` against the predictions above | pre-registered here, measured there |
 
 Step 3 has a regression risk worth naming in advance: **every kernel in this repository has its
