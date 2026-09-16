@@ -180,6 +180,7 @@ impl Parser {
         let mut streams = Vec::new();
         let mut space = None;
         let mut tile = None;
+        let mut coarsen = None;
         let mut reductions = Vec::new();
         let mut contract = None;
         let mut blocks = Vec::new();
@@ -215,6 +216,11 @@ impl Parser {
                     return self.msg("`tile` declared twice");
                 }
                 tile = Some(self.tile()?);
+            } else if self.at_word("coarsen") {
+                if coarsen.is_some() {
+                    return self.msg("`coarsen` declared twice");
+                }
+                coarsen = Some(self.coarsen()?);
             } else if self.at_word("stream") {
                 streams.push(self.stream()?);
             } else if self.at_word("reduce") {
@@ -227,8 +233,9 @@ impl Parser {
             } else if self.at_word("at") {
                 blocks.push(self.block()?);
             } else {
-                return self
-                    .expected("`intensity`, `space`, `tile`, `stream`, `reduce`, `contract` or `at`");
+                return self.expected(
+                    "`intensity`, `space`, `tile`, `coarsen`, `stream`, `reduce`, `contract` or `at`",
+                );
             }
         }
 
@@ -242,6 +249,7 @@ impl Parser {
             streams,
             space,
             tile,
+            coarsen,
             reductions,
             contract,
             blocks,
@@ -398,6 +406,39 @@ impl Parser {
             }
         }
         Ok(TileDecl { dims, span })
+    }
+
+    /// `coarsen 2, 2`
+    fn coarsen(&mut self) -> Result<CoarsenDecl, ParseError> {
+        let span = self.span();
+        self.expect(Tok::Word("coarsen".into()))?;
+        let mut dims = Vec::new();
+        loop {
+            let (v, s) = self.number()?;
+            let d = v as u32;
+            if d as f64 != v || d == 0 {
+                return Err(ParseError::Message {
+                    span: s,
+                    msg: format!("`{v}` is not a coarsening factor; give a positive whole number"),
+                });
+            }
+            // A power of two for the same reason a tile dimension is one: the block's width is
+            // the tile's divided by this, and a thread's place in the tile stays a shift and a
+            // mask only if every one of those is a power of two.
+            if !d.is_power_of_two() {
+                return Err(ParseError::Message {
+                    span: s,
+                    msg: format!(
+                        "a coarsening factor must be a power of two, got {d}. The block's width is the tile's divided by it, and a thread's position inside the tile is a shift and a mask."
+                    ),
+                });
+            }
+            dims.push(d);
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        Ok(CoarsenDecl { dims, span })
     }
 
     /// `space i, j : rows, cols`

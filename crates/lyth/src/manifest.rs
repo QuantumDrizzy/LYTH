@@ -346,12 +346,10 @@ impl Manifest {
             kernel: ir.name.clone(),
             params,
             launch: LaunchSpec {
-                // A tile fixes the block: one thread per element of the tile. Otherwise the
-                // compiler's default, which `--block` may override.
-                block: match &ir.tile {
-                    Some(t) => t.iter().product(),
-                    None => block,
-                },
+                // A tile fixes the block: one thread per element of the tile, divided by
+                // what `coarsen` gives each thread. One definition, in the IR, because this
+                // rule already lived in two places once and they drifted (ADR-0019).
+                block: ir.block_threads(block),
                 shared_bytes: match (&ir.shared, ir.reduction.is_some()) {
                     (Some(l), _) => l.bytes,
                     (None, true) => block * 4,

@@ -1,6 +1,6 @@
 # ADR-0021 — Thread coarsening, and the limit that was argued but never checked
 
-**Status:** Proposed — step 1 built
+**Status:** Proposed — steps 1 and 2 built
 **Date:** 2026-09-16
 **Depends on:** ADR-0018 (contraction), ADR-0017 (the tile), ADR-0000 (why)
 
@@ -125,12 +125,62 @@ the register-level reuse it introduces, and **not** because it makes this langua
 compute-bound. Nothing in the roofline changes category. A kernel at 16 flop/byte against a
 ridge of 36.9 is still memory-bound, at 43% of peak FLOPS instead of 22%.
 
+## Step 2, as built
+
+`coarsen 2, 2` parses, resolves, and sets the block width. `KernelIr::block_threads` is the one
+definition — the manifest publishes it and `lyth run` launches it, and when that rule lived in
+two places they drifted once already (ADR-0019), so both now call it.
+
+What the compiler says for each shape, on this machine:
+
+| source | block | refused by |
+|---|---|---|
+| `tile 32, 32` | 1024 | nothing |
+| `tile 64, 64` | 4096 | the thread cap |
+| `tile 64, 64` + `coarsen 2, 2` | **1024** | no emitter yet |
+| `tile 64, 64` + `coarsen 2, 4` | 512 | no emitter yet |
+| `tile 128, 128` + `coarsen 4, 4` | 1024 | **shared memory, 132,096 bytes** |
+
+**The last row is the prediction landing.** This ADR derived, before any of it was written, that
+past a tile of 64 the binder stops being the thread count and becomes the shared memory. Step 1
+implemented that refusal and could not reach it on this device — the block is the tile's area,
+so the thread cap always bit first, and the branch had to be tested against a machine file
+describing a smaller card. Step 2 made it reachable, and the number the compiler prints is the
+number the ADR derived.
+
+### Five refusals, and one of them is the identity
+
+`coarsen` without a `tile`; a factor count that does not match the tile's rank; a factor that
+does not divide its tile edge; a factor that is not a power of two (in the parser, like a tile
+dimension, and for the same reason — the block's width is the tile's divided by it, and a
+thread's position stays a shift and a mask only if every one of them is a power of two); and
+`coarsen 1, 1`, which is what a tile does without the line.
+
+Refusing the identity is a judgement and worth the sentence: a declaration that changes nothing
+is a line a reader has to check and then discard, and this language has spent ADR-0018 refusing
+exactly that shape — a `contract` nothing is indexed at, a `tile` that stages nothing.
+
+### The cost model still does not appear
+
+`crates/lyth-lang/tests/coarsen.rs` asserts it directly: `tile 64, 64` with and without
+`coarsen 2, 2` derive the same `0.125 * k + 4`, the same asymptote of 16, and the same 33,280
+bytes of shared memory. That absence is the design being right rather than an omission — reuse
+is a property of the tile, and coarsening changes which thread computes what, not what is
+staged.
+
+### One test was testing the wrong rule
+
+`a_factor_that_does_not_divide_its_tile_edge_is_refused` was written with `coarsen 2, 3`, and 3
+is not a power of two — so the parser refused it first and the test never reached the rule it
+named. It needs a factor that is a power of two *and* does not divide: 64 against a tile edge of
+32. The original version asserted the parser twice and the divisibility check never.
+
 ## Build sequence
 
 | step | | testable on its own |
 |---|---|---|
 | **1** | **the block limits as machine-file facts, checked before emission** | **done — 5 tests, no GPU needed** |
-| 2 | `coarsen` in the AST, parser and IR, with its refusals | a coarsened matmul parses; the block is `tile/coarsen`; every existing example unchanged |
+| **2** | **`coarsen` in the AST, parser and IR, with its refusals** | **done — 9 tests, no GPU needed** |
 | 3 | the emitter: register accumulators, the staging loop, the term loop | bit-exact against the host at non-divisible `m`, `n`, `k` |
 | 4 | `--ncu` | the derived `0.125 * k + 4` at `tile 64, 64`, against measurement |
 | 5 | against a hand-written coarsened matmul | the ADR-0020 comparison, on a kernel where instructions might finally matter |

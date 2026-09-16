@@ -32,6 +32,11 @@ pub struct KernelIr {
     /// `None` is one element per thread. A tile blocks the space into patches, one per block,
     /// and is what makes a staged stream legal.
     pub tile: Option<Vec<u32>>,
+    /// Outputs of the tile each thread owns, per axis. `None` is one.
+    ///
+    /// Read through `block_threads`, never multiplied out at a call site: the block width is
+    /// derived from the tile in two places already and the two have drifted apart once.
+    pub coarsen: Option<Vec<u32>>,
     /// How the staged buffers sit in shared memory, and the bytes the launch must request.
     /// `None` when nothing is staged.
     pub shared: Option<SharedLayout>,
@@ -45,6 +50,32 @@ pub struct KernelIr {
     pub contract: Option<ContractIr>,
     pub cost: Cost,
 }
+
+impl KernelIr {
+    /// Threads per block: the tile's area divided by what each thread owns of it.
+    ///
+    /// **One definition.** The manifest publishes this and `lyth run` launches it, and when the
+    /// same rule lived in both places they drifted -- the reduction grid was corrected in one
+    /// and not the other, and every generated binding published a launch shape that had already
+    /// been measured at half the achievable bandwidth (ADR-0019). A fix belongs where the rule
+    /// lives.
+    ///
+    /// `fallback` is what an untiled kernel uses, which is a launch choice rather than a
+    /// property of the kernel and so is passed in.
+    pub fn block_threads(&self, fallback: u32) -> u32 {
+        let Some(tile) = &self.tile else {
+            return fallback;
+        };
+        let area: u32 = tile.iter().product();
+        let per_thread: u32 = self
+            .coarsen
+            .as_ref()
+            .map(|c| c.iter().product())
+            .unwrap_or(1);
+        (area / per_thread.max(1)).max(1)
+    }
+}
+
 
 /// `contract sum p : k`, resolved.
 ///
@@ -542,6 +573,31 @@ impl Cost {
 pub enum LowerError {
     #[error("{span}: `{name}` is used but is not a parameter of this kernel")]
     UnknownName { span: Span, name: String },
+    #[error(
+        "{span}: `coarsen` without a `tile`. Coarsening says how a block's threads are spread over its tile, and without a tile there is one thread per element and nothing to spread."
+    )]
+    CoarsenWithoutTile { span: Span },
+    #[error(
+        "{span}: `coarsen` gives {dims} factors and `tile` has {tile} dimensions. One factor per tile axis: they pair up."
+    )]
+    CoarsenRankMismatch {
+        span: Span,
+        dims: usize,
+        tile: usize,
+    },
+    #[error(
+        "{span}: axis {axis} is a tile of {edge} coarsened by {per}, which does not divide it. Each thread owns a whole sub-rectangle of the tile, so the factor has to split the edge evenly."
+    )]
+    CoarsenDoesNotDivide {
+        span: Span,
+        axis: usize,
+        per: u32,
+        edge: u32,
+    },
+    #[error(
+        "{span}: `coarsen 1, 1` is what a tile does without the line. Delete it, or give a factor that changes something."
+    )]
+    CoarsenIsIdentity { span: Span },
     #[error(
         "{span}: `contract` needs a `space`. The contracted axis is the one the space does not iterate, so without free indices there is nothing to contract against."
     )]
@@ -1264,6 +1320,43 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
     }
 
 
+    // --- coarsening -----------------------------------------------------------------
+    //
+    // Everything here is about the declaration against the tile, so it needs neither the body
+    // nor the cost -- and the cost does not need it either. Reuse is a property of the tile:
+    // how many threads want one staged element. Coarsening changes which thread computes what.
+    let coarsen = match (&kernel.coarsen, &kernel.tile) {
+        (None, _) => None,
+        (Some(c), None) => {
+            return Err(LowerError::CoarsenWithoutTile { span: c.span });
+        }
+        (Some(c), Some(t)) => {
+            if c.dims.len() != t.dims.len() {
+                return Err(LowerError::CoarsenRankMismatch {
+                    span: c.span,
+                    dims: c.dims.len(),
+                    tile: t.dims.len(),
+                });
+            }
+            for (i, (&per, &edge)) in c.dims.iter().zip(&t.dims).enumerate() {
+                if edge % per != 0 {
+                    return Err(LowerError::CoarsenDoesNotDivide {
+                        span: c.span,
+                        axis: i,
+                        per,
+                        edge,
+                    });
+                }
+            }
+            // `coarsen 1, 1` is the default written out. A declaration that changes nothing is
+            // a line a reader has to check and then discard.
+            if c.dims.iter().all(|d| *d == 1) {
+                return Err(LowerError::CoarsenIsIdentity { span: c.span });
+            }
+            Some(c.dims.clone())
+        }
+    };
+
     let cost = derive_cost(
         &streams,
         &ops,
@@ -1307,6 +1400,7 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
         streams,
         space,
         tile: kernel.tile.as_ref().map(|t| t.dims.clone()),
+        coarsen,
         shared,
         ops,
         drains,

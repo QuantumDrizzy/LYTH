@@ -312,7 +312,7 @@ fn front(file: &Path, machine_path: Option<&Path>, tol: f64) -> Result<Front, Ex
     // argument and no reason. ADR-0018 had already argued that this cap is what stops the tile
     // growing; it argued it in prose, against a compiler that did not know the number.
     if let (Some(m), Some(tile)) = (machine.as_ref(), ir.tile.as_ref()) {
-        let threads: u32 = tile.iter().product();
+        let threads = ir.block_threads(BLOCK);
         if let Some(cap) = m.max_threads_per_block {
             if threads > cap {
                 let dims = tile
@@ -620,10 +620,7 @@ fn known_limits() -> [&'static str; 2] {
 /// and staging or a reduction fixes the shared bytes. `--block` may only choose what the IR
 /// leaves open.
 fn launch_shape(ir: &KernelIr, block_arg: Option<u32>, grid: u32) -> Launch {
-    let block = match &ir.tile {
-        Some(t) => t.iter().product(),
-        None => block_arg.unwrap_or(BLOCK),
-    };
+    let block = ir.block_threads(block_arg.unwrap_or(BLOCK));
     let shared = match (&ir.shared, ir.reduction.is_some()) {
         (Some(l), _) => l.bytes,
         (None, true) => block * 4,

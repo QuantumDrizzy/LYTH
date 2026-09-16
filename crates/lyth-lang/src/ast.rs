@@ -35,6 +35,13 @@ pub struct Kernel {
     /// `None` is one element per thread. A tile blocks the space and is what lets a stream be
     /// staged in shared memory.
     pub tile: Option<TileDecl>,
+    /// `coarsen 2, 2` — outputs of the tile each thread owns. `None` is one.
+    ///
+    /// A tile puts one thread on each of its elements, so the block is the tile's area and a
+    /// tile of 64 asks for 4096 threads against a cap of 1024 (ADR-0021). Coarsening decouples
+    /// the two: the tile stays the working set the traffic is derived from, and this says how
+    /// the threads are spread over it. `block = product(tile) / product(coarsen)`.
+    pub coarsen: Option<CoarsenDecl>,
     /// At most one in v1. See ADR-0011.
     pub reductions: Vec<ReduceDecl>,
     /// `contract sum p : k` — an axis walked and combined inside one thread. `None` for every
@@ -298,6 +305,22 @@ impl StreamDecl {
 /// reason `--block` refuses a width the reduction tree cannot halve.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TileDecl {
+    pub dims: Vec<u32>,
+    pub span: Span,
+}
+
+/// `coarsen 2, 2`
+///
+/// How many outputs of the tile one thread owns, per axis. Declared rather than inferred from
+/// the thread cap: inferring it would be the compiler choosing a schedule, which is the job
+/// ADR-0000 says this project does not do. Two lines, two facts.
+///
+/// **The traffic derivation does not see this.** Reuse is a property of the tile — how many
+/// threads want one staged element — and coarsening changes which thread computes what, not
+/// what is staged. `tile 64, 64` derives the same bytes per element whether one thread owns
+/// one output of it or four.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoarsenDecl {
     pub dims: Vec<u32>,
     pub span: Span,
 }
