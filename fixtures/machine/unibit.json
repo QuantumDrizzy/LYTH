@@ -45,9 +45,16 @@
       "at": "reg"
     },
     {
-      "name": "vreduce",
+      "name": "vfreduce",
       "status": "present",
-      "at": "reg"
+      "at": "reg",
+      "note": "The float one. VREDUCE beside it sums lanes as integers -- over f32 it adds bit patterns -- so the machine file used to claim a reduction it could not do. Added in ADR-0025 step 3, specified as a tree (stride 4, 2, 1) because float addition is not associative and the order is observable."
+    },
+    {
+      "name": "vreduce.i",
+      "status": "present",
+      "at": "reg",
+      "note": "Integer. Its order is not specified and does not need to be: wrapping_add is associative."
     },
     {
       "name": "smem",

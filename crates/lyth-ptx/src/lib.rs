@@ -112,6 +112,21 @@ pub fn emit_with_skew(ir: &KernelIr, arch: &str, skewed: bool) -> Result<Module,
     if ir.drains.is_empty() && ir.reduction.is_none() {
         return Err(EmitError::NoDrain(ir.name.clone()));
     }
+    // A reduction's path is now two shapes rather than one (ADR-0025), and this back end emits
+    // exactly one of them. The block tree below writes every thread's partial to `__shared__`
+    // and folds it there, so a kernel declaring `reg -> dram` is describing a machine whose
+    // parallelism is lanes of one register -- which this one is not. Refused rather than
+    // emitted with the smem the source said it would not use.
+    if let Some(r) = &ir.reduction {
+        if !r.path.contains(&lyth_lang::ast::Level::Smem) {
+            return Err(EmitError::Message(format!(
+                "kernel `{}` reduces `reg -> dram`, and this back end folds the block in shared                  memory.
+  A tree over a block's threads has to be staged somewhere every                  thread can reach; `reg -> dram` says it is not staged at all,
+  which is a                  machine whose parallelism is the lanes of one register. Declare `reg -> smem                  -> dram` for this target.",
+                ir.name
+            )));
+        }
+    }
     // Refused, not ignored. Emitting the untiled kernel for a tiled source would produce
     // working code whose cost is nothing like the one the front end derived for it: the model
     // would say 8 bytes per element and the silicon would move 36. A back end that silently

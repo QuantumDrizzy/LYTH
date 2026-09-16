@@ -1,6 +1,6 @@
 # ADR-0025 — Standalone: a second target, and the instruction that is missing
 
-**Status:** Proposed — steps 0, 1 and 2 built
+**Status:** Proposed — steps 0 to 3 built
 **Date:** 2026-09-16
 **Depends on:** ADR-0022 (the level that binds), ADR-0019 (the dogfood), ADR-0000 (why)
 
@@ -76,7 +76,7 @@ The interesting part of this design is how little of the contract is about GPUs.
 |---|---|---|
 | `space i, j : m, n` | a grid of threads | **a bounded loop over vector lanes** |
 | `stream x : dram -> reg` | a global load | a `LQ` from memory |
-| `reduce sum` | a shared-memory tree | `VREDUCE`, which already exists |
+| `reduce sum` | a shared-memory tree | `VFREDUCE` — **`VREDUCE` turned out to be integer; see step 3** |
 | the body | PTX arithmetic | `VFMUL` / `VFADD` (step 0) |
 | `tile`, `coarsen` | **the whole of ADR-0017/0021** | **no meaning — there is no shared memory** |
 | levels | `dram`, `l2`, `smem`, `reg` | `mem`, `reg` |
@@ -208,6 +208,113 @@ was wrong, and the second in this file — the skip above it had been reporting 
 one by skipping and one by parsing. The rule ADR-0000 already states covers it, and the fix in
 both cases was to make the check say where it looked.
 
+## Step 3, built — the level that has no level
+
+Step 3 was meant to be plumbing: wire `space` at rank 2, wire `reduce` onto `VREDUCE`, done.
+Both halves turned out to be about the same thing, which is that **a reduction needs somewhere
+to put the tree**, and this machine's somewhere is not a memory level at all.
+
+### `VREDUCE` sums integers, and the ADR above says otherwise
+
+The table earlier in this file says
+
+> `reduce sum` | `VREDUCE`, which already exists
+
+and that was checked as far as the instruction's existence and no further. `alu.rs` reduces
+`a.w(i) as u64`: over eight f32 lanes it adds their **bit patterns**. The row was wrong in
+exactly the way step 0's finding was wrong — eight floats fit in a register and nothing could
+fold them — and it is the second time this project has assumed an instruction did the float
+thing because `.w` is 32 bits wide.
+
+So `VFREDUCE rd, rs1` was added to Unibit: the eight lanes into lane 0, the rest zeroed.
+
+### Its order had to be written down, and the integer one's never did
+
+`VREDUCE` does not document whether it sums in a chain or a tree. It does not need to:
+`wrapping_add` is associative, so **no vector of integers can tell the two apart**, and the
+order was never a decision there. Float addition is not associative. On
+`[1.0, 2^-24 x 7]` the chain gives `0x3F800000` and the tree gives `0x3F800003`, and an
+instruction that will not say which one it is has not been specified.
+
+It is a tree — stride 4, then 2, then 1 — and that is also the more honest hardware: three
+layers of adders rather than a chain of eight.
+
+### The launch shape of a Unibit program is grid 1, block 8
+
+The choice of a tree was not free. It was chosen to match `eval_with_launch`, and the reason it
+*could* be is the finding worth keeping:
+
+| | on `sm_120` | on Unibit |
+|---|---|---|
+| a thread | a thread | **a lane** |
+| threads per block | 256 | **8 — the register** |
+| blocks | `n / 256` | **1** |
+| what one thread folds | elements at stride `grid * block` | elements at stride 8, which is one `LQ` |
+| how the block combines | a tree in shared memory | a tree in the register, `VFREDUCE` |
+
+So the oracle for the reduction is `eval_with_launch(ir, n, inputs, 1, 8)` and **not one line of
+new host code was written for it**. The function that models a GPU's two-stage fold — each
+thread in sequence, then the block tree — describes a lane accumulator followed by a horizontal
+sum exactly, because that is the same two stages. That the GPU oracle fell out unchanged for a
+machine with no threads is the strongest evidence so far that the launch shape here is a real
+launch shape and not a metaphor.
+
+`tests/against_the_emulator.rs` checks the emitted program bit for bit against it at n = 4096,
+and a second test asserts that a plain left-to-right fold of the same 4096 inputs gives a
+*different* bit pattern — without which the first test would pass against any summation order
+and the tree would be an untested claim.
+
+### `reduce` had the GPU's shape written into the language
+
+`ir.rs` said, in one line:
+
+```rust
+if r.path != [Level::Reg, Level::Smem, Level::Dram] {
+```
+
+One legal path, and it is a GPU's. There are now two — `reg -> smem -> dram` where the tree is
+staged, `reg -> dram` where it is not — and **which one a kernel may use is the machine's
+answer, not the language's**. The PTX back end refuses the short one (its tree needs shared
+memory); `lyth-uasm` refuses the long one (there is no shared level to stage in). Both say so
+by name.
+
+The cost model followed. A reduction used to derive 8 bytes read and 8 written at `smem`
+unconditionally, and on `unibit` that charged the kernel for a level it does not have — the
+same error as costing a tile that cannot be staged, pointing the other way. The traffic now
+follows the declared path, and the same `sum` reads:
+
+| | `sm_120` | `unibit` |
+|---|---|---|
+| candidates | dram, smem, reg | **dram, reg** |
+| binds | dram, 0.68% of peak | dram, **50.01% of peak** |
+| runner-up | 3.69x faster | 2.00x faster |
+| intensity | 0.25 | 0.25 — unchanged, because `smem` was never in the ratio |
+
+A kernel at 0.25 flop/byte against a ridge of 0.4999 is sitting almost exactly on it, which is
+the second time this machine has put a kernel somewhere `sm_120` never could.
+
+### Rank 2, and a refusal that is not "not yet"
+
+A rank-2 space whose buffers are all read at `[i, j]` is a linear walk over `rows * cols`, so it
+is the rank-1 loop with a larger bound and the emitter never needs the two extents apart. Rank 2
+is a claim about the *indices*; when they all agree it is not a claim about the addresses. The
+oracle does need the extents, because it decomposes the linear index to address each buffer at
+its own permutation — and when every permutation is the identity, that decomposition cancels.
+
+A **permuted** one is refused, and permanently. `b[j, i] = a[i, j]` puts consecutive `j` at a
+stride of `rows`, and `SQ` is the only vector store: 32 contiguous bytes, no strided store, no
+scatter, no lane extract. `LW`/`SW` could copy it a word at a time and that is refused too,
+which is the part worth stating: it would move **4 bytes per instruction where the cost model
+derived 32**, so ADR-0022's ceiling would be eight times the machine. A back end that can
+produce the right answer at a cost the contract does not describe has to decline.
+
+### And a hole in the other repository's test table
+
+The six packed-float instructions from step 0 were never added to `binary.rs`'s round-trip
+list, so their encoding had no test at all. An opcode typo in `decode` would have surfaced as a
+LYTH program failing to verify rather than as the table that exists to catch it. All seven are
+in it now.
+
 ## What this does not give you
 
 Stated plainly, because the complaint deserves an honest answer rather than a hopeful one.
@@ -231,7 +338,7 @@ then `unibit run main.ubo`, with no other language anywhere in the workflow.**
 | **0** | **Unibit** | **done — six instructions, 5 tests, `saxpy_f32.uasm` runs on the emulator** |
 | **1** | **LYTH** | **done — 28.43 B/cycle, 14.21 flop/cycle, ridge 0.4999; and it found the missing compute ceiling** |
 | **2** | **LYTH** | **done — `lyth-uasm`, bit-exact against the emulator on two kernels, nine refusals by name** |
-| 3 | LYTH | `space` as a bounded lane loop; `reduce` onto `VREDUCE` |
+| **3** | **both** | **done — `VFREDUCE` in Unibit; rank 2 and `reduce` in `lyth-uasm`; the reduction path opened to two shapes** |
 | 4 | LYTH | a program: `_start`, declared buffers, `ecall` I/O, and `main.lyth` -> `main.ubo` |
 | 5 | both | the contract measured on Unibit, against its counters, the way ADR-0009 did on PTX |
 

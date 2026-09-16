@@ -814,7 +814,7 @@ pub enum LowerError {
     )]
     ReduceIntoStream { span: Span, name: String },
     #[error(
-        "{span}: a reduction travels `reg -> smem -> dram`; `{path}` is not implemented in v1"
+        "{span}: a reduction travels `reg -> smem -> dram` where the tree is staged, or `reg -> dram` where it is not; `{path}` is neither"
     )]
     ReducePath { span: Span, path: String },
     #[error("{span}: v1 supports one reduction per kernel")]
@@ -1164,7 +1164,16 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
     }
     let mut reduction = None;
     if let Some(r) = kernel.reductions.first() {
-        if r.path != [Level::Reg, Level::Smem, Level::Dram] {
+        // Two legal shapes, because the tree has to live somewhere and not every machine
+        // has a shared level to put it in. `reg -> smem -> dram` is the GPU's: threads write
+        // their partials to shared memory and a tree folds them there. `reg -> dram` is a
+        // machine whose parallelism is lanes of one register -- the tree is register-internal
+        // (Unibit's `VFREDUCE`), so nothing is staged and one store leaves.
+        //
+        // Which one a kernel may use is the **machine's** answer, not the language's, and it
+        // is the back end that refuses the other. ADR-0025.
+        if r.path != [Level::Reg, Level::Smem, Level::Dram] && r.path != [Level::Reg, Level::Dram]
+        {
             return Err(LowerError::ReducePath {
                 span: r.span,
                 path: r
@@ -1738,18 +1747,24 @@ fn derive_cost(input: CostInputs<'_>) -> Cost {
     }
 
     if let Some(r) = reduction {
-        // Shared-memory traffic of the tree, per block of B threads:
-        //   B initial writes                        4B bytes
-        //   B-1 combines, each 2 reads and 1 write  12(B-1) bytes
-        //   one final read of slot 0                4 bytes
-        // which is 16B - 8, so 16 - 8/B per element. Counted as 16; at B = 256 that
-        // overstates by 0.03 bytes, 0.2%. [KNOWN LIMIT] in ADR-0011.
-        levels.push(LevelCost {
-            level: Level::Smem,
-            read: 8.0,
-            write: 8.0,
-            ..Default::default()
-        });
+        // The tree's traffic follows the **path**, because on a machine without a shared level
+        // the tree is register-internal and moves no bytes at all. Deriving it unconditionally
+        // charged `unibit` for staging into a level it does not have, which is the same error
+        // in the other direction as costing a tile that cannot exist.
+        if r.path.contains(&Level::Smem) {
+            // Shared-memory traffic of the tree, per block of B threads:
+            //   B initial writes                        4B bytes
+            //   B-1 combines, each 2 reads and 1 write  12(B-1) bytes
+            //   one final read of slot 0                4 bytes
+            // which is 16B - 8, so 16 - 8/B per element. Counted as 16; at B = 256 that
+            // overstates by 0.03 bytes, 0.2%. [KNOWN LIMIT] in ADR-0011.
+            levels.push(LevelCost {
+                level: Level::Smem,
+                read: 8.0,
+                write: 8.0,
+                ..Default::default()
+            });
+        }
         // The tree retires B-1 combines over B elements, so (B-1)/B per element. Counted as
         // one, for the same reason: the block size is not in the source.
         flops += r.op.flops();

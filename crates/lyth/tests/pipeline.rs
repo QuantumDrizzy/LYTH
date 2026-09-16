@@ -40,6 +40,25 @@ fn saxpy_compiles_and_moves_what_it_says() {
 }
 
 #[test]
+fn an_unstaged_reduction_is_refused_by_the_gpu_back_end() {
+    // ADR-0025 step 3 gave `reduce` a second legal path, `reg -> dram`, for a machine whose
+    // parallelism is the lanes of one register. This back end emits the other one: it writes
+    // every thread's partial to `__shared__` and folds a tree there.
+    //
+    // So the second path has to be refused *here*, not merely unused. Emitting the staged
+    // kernel for a source that declared it unstaged would produce working PTX whose cost is
+    // nothing like the one the front end derived for it -- the model would say no shared
+    // traffic and the device would move 8 bytes an element.
+    let src = example("sum.lyth").replace("reg -> smem -> dram", "reg -> dram");
+    let unit = parse(&src).expect("parses");
+    let ir = ir::lower(&unit, &unit.kernels[0]).expect("lowers -- the path is legal now");
+    let e = emit(&ir, "sm_120").expect_err("but not on this machine");
+    let msg = e.to_string();
+    assert!(msg.contains("folds the block in shared"), "{msg}");
+    assert!(msg.contains("reg -> smem"), "{msg}");
+}
+
+#[test]
 fn the_lying_example_does_not_compile() {
     let e = compile("saxpy-lie.lyth").expect_err("an intensity lie must not compile");
     assert!(e.contains("body computes 0.1667"), "{e}");

@@ -24,6 +24,11 @@ fn check_on(example: &str, machine: &str) -> String {
     let src = std::fs::read_to_string(repo().join("examples").join(example))
         .unwrap()
         .replace("machine sm_120", &format!("machine {machine}"));
+    check_src(example, &src, machine)
+}
+
+/// The same, for a source that is not one of the examples.
+fn check_src(example: &str, src: &str, machine: &str) -> String {
     let dir = tempfile::tempdir().unwrap();
     let f = dir.path().join(example);
     std::fs::write(&f, src).unwrap();
@@ -48,6 +53,33 @@ fn check_on(example: &str, machine: &str) -> String {
     );
     assert!(out.status.success(), "{example} on {machine}:\n{text}");
     text
+}
+
+#[test]
+fn a_reduction_is_charged_for_shared_memory_only_where_the_tree_is_staged() {
+    // ADR-0025 step 3. A reduction used to derive 8 bytes read and 8 written at `smem`
+    // unconditionally, because there was one machine and its tree lived there. On `unibit` the
+    // tree is the eight lanes of one register -- `VFREDUCE` folds it in place -- so that
+    // traffic does not exist, and charging for it was the same error as costing a tile that
+    // cannot be staged, pointing the other way.
+    //
+    // The traffic follows the declared path, which is why the language now has two.
+    let gpu = check_on("sum.lyth", "sm_120");
+    assert!(gpu.contains("smem     4.0000 access/element"), "{gpu}");
+
+    let src = std::fs::read_to_string(repo().join("examples/sum.lyth"))
+        .unwrap()
+        .replace("machine sm_120", "machine unibit")
+        .replace("reg -> smem -> dram", "reg -> dram");
+    let uni = check_src("sum.lyth", &src, "unibit");
+    assert!(!uni.contains("smem"), "no shared level, no shared traffic:\n{uni}");
+    assert!(uni.contains("dram binds"), "{uni}");
+
+    // And the intensity is unchanged by it, which is the check that this removed a level and
+    // not a flop: `smem` never appeared in the ratio, only in the ceiling.
+    for text in [&gpu, &uni] {
+        assert!(text.contains("declared 0.25 — matches"), "{text}");
+    }
 }
 
 #[test]
