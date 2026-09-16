@@ -159,33 +159,57 @@ fn a_second_coarsen_is_refused() {
 }
 
 #[test]
-fn known_limit_the_shared_traffic_does_not_see_the_coarsening() {
-    // [KNOWN_LIMIT] ADR-0021 step 5. The compiler derives the same `8 * k` shared read per
-    // output element with and without `coarsen 2, 2`, and the profiler says the coarsened
-    // kernel issues **exactly half** the shared loads: 268,435,456 against 536,870,912 at
-    // 2048 cubed, where `8 * k` per element is 68.7 GB and the measurement is 34.4.
+fn the_shared_traffic_sees_the_coarsening_and_the_global_traffic_does_not() {
+    // ADR-0022 step 2. This was a `[KNOWN_LIMIT]` pinned at the wrong value for one commit,
+    // because ADR-0021 step 5 measured the compiler deriving `8 * k` shared read per output at
+    // `coarsen 2, 2` while the profiler counted **exactly half**: 268,435,456 shared-load
+    // instructions against 536,870,912 uncoarsened, at 2048 cubed.
     //
-    // The right figure is `4k * (ci + cj) / (ci * cj)` -- `ci + cj` operands are loaded to
-    // feed `ci * cj` bodies, which is the entire mechanism this ADR raises the intensity
-    // with. `8 * k` is that expression at `coarsen 1, 1`.
+    // The rule is `reuse_of` one level down. Shared memory earns its reuse from the tile --
+    // how many threads want one staged element. The register file earns its from the
+    // coarsening: a thread owning `cj` outputs along `j` loads `a[i, p]` once and spends it
+    // `cj` times. So the divisor is the product of the coarsening of the free axes the index
+    // does not mention, which is exactly the tile rule with `coarsen` substituted.
     //
-    // This is not cosmetic. Step 5 measured that the shared-load count, not the derived
-    // global traffic, is what paces a tiled contraction on this device: `tile 16` moves twice
-    // the global bytes of `tile 32`, issues the same shared loads, and takes the same time.
-    // So this is the wrong value of the quantity that decides the time, sitting beside the
-    // right value of one that does not.
-    //
-    // Pinned rather than fixed, because fixing it means the shared level has to enter the
-    // roofline instead of being printed beside it -- the ceiling would be computed against
-    // whichever level binds. That is the next ADR, not this one.
+    // `2 * ci * cj / (ci + cj)` flops per shared access is what coarsening actually buys, and
+    // ADR-0022 measured that the shared pipe -- not DRAM -- is what a tiled contraction on
+    // this device runs out of first.
     let plain = ir(&matmul("64, 64", None)).expect("lowers");
-    let coarse = ir(&matmul("64, 64", Some("2, 2"))).expect("lowers");
-    let (plain_r, _) = plain.cost.traffic_words(lyth_lang::ast::Level::Smem);
-    let (coarse_r, _) = coarse.cost.traffic_words(lyth_lang::ast::Level::Smem);
-    assert_eq!(plain_r, "8 * k", "the uncoarsened figure is right");
+    let sq = ir(&matmul("64, 64", Some("2, 2"))).expect("lowers");
+    let wide = ir(&matmul("64, 64", Some("2, 4"))).expect("lowers");
+    let deep = ir(&matmul("64, 64", Some("4, 4"))).expect("lowers");
+
+    let smem_read = |k: &lyth_lang::ir::KernelIr| {
+        k.cost.traffic_words(lyth_lang::ast::Level::Smem).0
+    };
+
+    // `ci + cj` loads feed `ci * cj` bodies, so per output it is `(ci + cj) / (ci * cj)`
+    // loads of four bytes, times `k` terms.
+    assert_eq!(smem_read(&plain), "8 * k", "2 loads per output per term");
+    assert_eq!(smem_read(&sq), "4 * k", "4 loads for 4 outputs: one each");
+    assert_eq!(smem_read(&wide), "3 * k", "6 loads for 8 outputs");
+    assert_eq!(smem_read(&deep), "2 * k", "8 loads for 16 outputs");
+
+    // And the global figure does not move, which is the ADR-0021 claim that survived: reuse at
+    // that level is the tile's, and all four of these have the same tile. Measured to +0.80%.
+    for k in [&sq, &wide, &deep] {
+        assert_eq!(k.cost.bytes_expr(), plain.cost.bytes_expr());
+        assert_eq!(k.cost.bytes_expr().as_deref(), Some("0.125 * k + 4"));
+        assert_eq!(k.cost.intensity, 16.0);
+    }
+}
+
+#[test]
+fn an_uncoarsened_kernel_derives_exactly_what_it_derived_before() {
+    // The other half of step 2. `register_reuse_of` returns 1 without a `coarsen`, so every
+    // kernel written before ADR-0021 has to be bit-identical in its cost -- and a staged
+    // transpose, which has no contraction at all, must not acquire one.
+    let a = ir(&matmul("32, 32", None)).expect("lowers");
     assert_eq!(
-        coarse_r, "8 * k",
-        "[KNOWN_LIMIT] this should be `4 * k`; the emitter halves the loads and the model \
-         does not know"
+        a.cost.traffic_words(lyth_lang::ast::Level::Smem).0,
+        "8 * k",
+        "the figure ADR-0018 shipped"
     );
+    assert_eq!(a.cost.bytes_expr().as_deref(), Some("0.25 * k + 4"));
+    assert_eq!(a.cost.intensity, 8.0);
 }

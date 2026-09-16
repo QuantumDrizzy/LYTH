@@ -1323,8 +1323,16 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
     // --- coarsening -----------------------------------------------------------------
     //
     // Everything here is about the declaration against the tile, so it needs neither the body
-    // nor the cost -- and the cost does not need it either. Reuse is a property of the tile:
-    // how many threads want one staged element. Coarsening changes which thread computes what.
+    // nor the cost. The **global** cost does not need it either: reuse at that level is a
+    // property of the tile -- how many threads want one staged element -- and coarsening
+    // changes which thread computes what. ADR-0021 step 4 measured that to +0.80%.
+    //
+    // The shared level is a different claim and this file got it wrong until ADR-0022. A
+    // coarsened thread loads `ci` values of one operand and `cj` of the other and uses each
+    // across the other axis, so it reads shared **fewer** times per output: the register file
+    // is a third level of reuse, and `coarsen` is the declaration that earns it. See
+    // `register_reuse_of` below, which is `reuse_of` with the coarsening factors in place of
+    // the tile's.
     let coarsen = match (&kernel.coarsen, &kernel.tile) {
         (None, _) => None,
         (Some(c), None) => {
@@ -1364,6 +1372,7 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
         contract.as_ref(),
         space.as_ref(),
         kernel.tile.as_ref().map(|t| t.dims.as_slice()),
+        coarsen.as_deref(),
     );
 
     // The word `asymptotic`, required exactly where the claim is a limit and refused
@@ -1484,6 +1493,7 @@ fn derive_cost(
     contract: Option<&ContractIr>,
     space: Option<&SpaceIr>,
     tile: Option<&[u32]>,
+    coarsen: Option<&[u32]>,
 ) -> Cost {
     // `levels` is built below; a staged stream adds one before the reduction's, and the sort
     // at the end puts the deepest first so `roofline()` still finds DRAM.
@@ -1510,6 +1520,35 @@ fn derive_cost(
             .zip(t)
             .filter(|(v, _)| !st.index.contains(v))
             .map(|(_, dim)| *dim)
+            .product::<u32>()
+            .max(1)
+    };
+    // How many of this buffer's shared reads one thread's registers absorb.
+    //
+    // **The same rule as `reuse_of`, one level down.** Shared memory earns its reuse from the
+    // tile: the threads of a tile row want one element of `a[i, p]` between them, and staging
+    // is what lets them share it. The register file earns its reuse from the coarsening: a
+    // thread that owns `cj` outputs along `j` loads that same element once and spends it `cj`
+    // times, so the shared pipe sees one access instead of `cj`.
+    //
+    // So the factor is the product of the coarsening of the free axes the index does **not**
+    // mention -- `reuse_of` with `coarsen` substituted for `tile`. That the two rules are the
+    // same rule is why this fix is four lines and not a rewrite: ADR-0021 argued reuse was a
+    // property of the tile and stopped there, and the level below has its own tile.
+    //
+    // Unstaged, or uncoarsened, it is 1, which is what every kernel before ADR-0021 gets.
+    let register_reuse_of = |st: &StreamIr| -> u32 {
+        let (Some(sp), Some(c)) = (space, coarsen) else {
+            return 1;
+        };
+        if !st.staged {
+            return 1;
+        }
+        sp.vars
+            .iter()
+            .zip(c)
+            .filter(|(v, _)| !st.index.contains(v))
+            .map(|(_, per)| *per)
             .product::<u32>()
             .max(1)
     };
@@ -1572,9 +1611,17 @@ fn derive_cost(
         for st in streams.iter().filter(|s| s.staged) {
             let walked = contract.map(|c| st.index.contains(&c.var)).unwrap_or(false);
             if walked {
-                // Once per step the thread reads its element out of shared. The write into
-                // shared happened once for the whole set of threads that wanted it.
-                smem.read_per_extent += elem;
+                // Once per step the thread reads its element out of shared -- divided by what
+                // its own registers absorb, which is the coarsening of the axis this buffer's
+                // index does not mention. At `coarsen 1, 1` that is 1 and this is the figure
+                // every kernel before ADR-0021 derived.
+                //
+                // The write is **not** divided by it. Coarsening does not change what is
+                // staged: the tile is the same size and the same elements land in it, spread
+                // over fewer threads doing more each. Only the reading changes, which is
+                // exactly what the emitter does -- `ci * cj` stores per operand per step, and
+                // `ci + cj` loads per term.
+                smem.read_per_extent += elem / register_reuse_of(st) as f64;
                 smem.write_per_extent += elem / reuse_of(st) as f64;
             } else {
                 smem.read += elem;
