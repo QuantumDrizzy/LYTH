@@ -406,6 +406,10 @@ fn emit_text(ir: &KernelIr, prog: &Program, out: &mut String) -> Result<(), Emit
                     BinOp::Add => "vfadd",
                     BinOp::Sub => "vfsub",
                     BinOp::Mul => "vfmul",
+                    // The one form of choosing this machine can do without a branch, and the
+                    // reason `max` is allowed in a body at all (ADR-0027).
+                    BinOp::Max => "vfmax",
+                    BinOp::Min => "vfmin",
                     BinOp::Div => {
                         return Err(refuse(
                             "this machine has no packed float divide. ADR-0025 step 0 added \

@@ -36,6 +36,12 @@ struct Parser {
 }
 
 impl Parser {
+    /// One token past `peek`. Needed only to tell `max(a, b)` from a buffer called `max`,
+    /// which is a real thing somebody will write.
+    fn peek_at(&self, ahead: usize) -> &Tok {
+        &self.toks[(self.i + ahead).min(self.toks.len() - 1)].tok
+    }
+
     fn peek(&self) -> &Tok {
         &self.toks[self.i.min(self.toks.len() - 1)].tok
     }
@@ -754,6 +760,24 @@ impl Parser {
 
     fn atom(&mut self) -> Result<Expr, ParseError> {
         match self.peek().clone() {
+            // `max(a, b)` and `min(a, b)`. A closed set of two, not a call syntax: there are no
+            // user functions in this language and a `(` after any other name is an error rather
+            // than a call to something undefined. ADR-0027.
+            Tok::Word(w) if (w == "max" || w == "min") && self.peek_at(1) == &Tok::LParen => {
+                let op = if w == "max" { BinOp::Max } else { BinOp::Min };
+                let span = self.bump().span;
+                self.expect(Tok::LParen)?;
+                let lhs = self.expr(0)?;
+                self.expect(Tok::Comma)?;
+                let rhs = self.expr(0)?;
+                self.expect(Tok::RParen)?;
+                Ok(Expr::Bin {
+                    op,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                    span,
+                })
+            }
             Tok::Word(w) => {
                 let span = self.bump().span;
                 let index = self.index_list()?;

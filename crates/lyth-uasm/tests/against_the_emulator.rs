@@ -155,6 +155,43 @@ fn a_kernel_with_no_fma_is_right_too() {
 }
 
 #[test]
+fn a_relu_is_bit_exact_through_vfmax() {
+    // ADR-0027. `VFMAX` uses `f32::max` and the host oracle goes through `ReduceOp::combine`,
+    // which is *not* `f32::max` -- it forces +0.0 for a pair of signed zeros because that is
+    // what PTX does. So the two could disagree here and the only way to know is to run it.
+    let src = "machine unibit\n\n\
+         kernel relu(n: u32, x: [f32; n], out: [f32; n])\n    \
+         intensity 0.0\n    \
+         stream x   : dram -> reg\n    \
+         stream out : dram -> reg, drain\n    \
+         at reg:\n        \
+         out = max(x, 0.0)\n";
+    let n = 256;
+    let k = lower(src);
+    let asm = lyth_uasm::emit_program(&k, n).expect("emits");
+    assert!(asm.contains("vfmax"), "{asm}");
+    let dir = tempfile::tempdir().unwrap();
+    let Some(got) = run_on_emulator(&asm, dir.path()) else {
+        eprintln!("skipped: no Unibit emulator");
+        return;
+    };
+    let want = oracle(&k, n, &[]);
+    assert_eq!(got.len(), n as usize);
+
+    // Again as a rate: if every input were positive this would pass on a program that did not
+    // clamp at all.
+    let negatives = lyth_lang::inputs::buffer("x", Ty::BufF32, n)
+        .iter()
+        .filter(|v| **v < 0.0)
+        .count();
+    assert!(negatives > n as usize / 8, "only {negatives} of {n} inputs are negative");
+    for i in 0..n as usize {
+        assert_eq!(got[i].to_bits(), want[i].to_bits(), "element {i}
+{asm}");
+    }
+}
+
+#[test]
 fn the_two_input_buffers_really_differ() {
     // Without this the test above would pass under a kernel that read `y` twice. The generator
     // used to give `x` and `y` the same data in 99.6% of elements, which is exactly the bug

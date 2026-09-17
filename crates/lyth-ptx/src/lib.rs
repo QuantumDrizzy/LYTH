@@ -804,6 +804,11 @@ pub(crate) fn bin_mnemonic(op: BinOp) -> &'static str {
         BinOp::Sub => "sub.rn.f32",
         BinOp::Mul => "mul.rn.f32",
         BinOp::Div => "div.rn.f32",
+        // No `.rn`: a compare-and-select does not round, so there is no rounding mode to
+        // choose and PTX does not offer one. `max.f32` is IEEE 754-2019 `maximumNumber`,
+        // which is the behaviour `BinOp::apply` reproduces for a pair of signed zeros.
+        BinOp::Max => "max.f32",
+        BinOp::Min => "min.f32",
     }
 }
 

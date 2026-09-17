@@ -495,6 +495,14 @@ pub enum BinOp {
     Sub,
     Mul,
     Div,
+    /// `max(a, b)` — written as a call because there is no infix spelling anyone would read.
+    ///
+    /// The only form of **choosing** this language allows, and the reason it is allowed is that
+    /// its cost does not depend on the choice: one instruction, the same one either way, the
+    /// same traffic either way. A branch is refused because the byte count would depend on
+    /// which side ran; `max` picks an operand and moves on. ADR-0027.
+    Max,
+    Min,
 }
 
 impl BinOp {
@@ -504,6 +512,31 @@ impl BinOp {
             BinOp::Sub => "-",
             BinOp::Mul => "*",
             BinOp::Div => "/",
+            BinOp::Max => "max",
+            BinOp::Min => "min",
+        }
+    }
+
+    /// Whether this operator is spelled `f(a, b)` rather than `a f b`.
+    pub fn is_call(self) -> bool {
+        matches!(self, BinOp::Max | BinOp::Min)
+    }
+
+    /// Apply the operator exactly as the generated code does. **The oracle's contract.**
+    ///
+    /// `max` and `min` delegate to [`ReduceOp::combine`] rather than calling `a.max(b)`, and
+    /// that is not tidiness — `f32::max` is *unspecified* when both operands are zero, and on
+    /// this machine it constant-folds to `+0.0` and executes to `-0.0`. One definition, so the
+    /// elementwise spelling and the reduction spelling of the same operation cannot drift apart
+    /// on the pair of inputs where it is hardest to notice. See ADR-0013.
+    pub fn apply(self, a: f32, b: f32) -> f32 {
+        match self {
+            BinOp::Add => a + b,
+            BinOp::Sub => a - b,
+            BinOp::Mul => a * b,
+            BinOp::Div => a / b,
+            BinOp::Max => ReduceOp::Max.combine(a, b),
+            BinOp::Min => ReduceOp::Min.combine(a, b),
         }
     }
 
@@ -514,8 +547,20 @@ impl BinOp {
     /// hardware, so a kernel full of divides will measure as doing more arithmetic than this
     /// says. Counting it as one keeps the number comparable with every published flop count,
     /// which all do the same. Recorded as a known limit rather than silently assumed.
+    ///
+    /// **`max` and `min` retire none**, for the same reason [`ReduceOp::flops`] gives: they are
+    /// a compare-and-select, no vendor's FLOP/s figure counts them, and charging them would
+    /// place the kernel against a compute ceiling measured with FMA — the one comparison
+    /// ADR-0005 forbids. The two must agree, because `reduce max` and `max(a, b)` are the same
+    /// operation reached by two syntaxes, and a kernel's intensity must not depend on which
+    /// one the author wrote.
+    ///
+    /// [KNOWN LIMIT] Zero flops is not zero time. The instruction still issues.
     pub fn flops(self) -> f64 {
-        1.0
+        match self {
+            BinOp::Max | BinOp::Min => 0.0,
+            _ => 1.0,
+        }
     }
 }
 

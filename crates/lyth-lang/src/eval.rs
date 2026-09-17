@@ -12,7 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::ast::{BinOp, ReduceOp, Ty};
+use crate::ast::{ReduceOp, Ty};
 use crate::ir::{KernelIr, Op, RegId};
 
 #[derive(Debug, thiserror::Error)]
@@ -234,12 +234,7 @@ pub fn eval_with_launch(
                 Op::Bin { op, lhs, rhs, .. } => {
                     let a = regs[*lhs as usize];
                     let b = regs[*rhs as usize];
-                    match op {
-                        BinOp::Add => a + b,
-                        BinOp::Sub => a - b,
-                        BinOp::Mul => a * b,
-                        BinOp::Div => a / b,
-                    }
+                    op.apply(a, b)
                 }
                 // A true FMA: one rounding, matching `fma.rn.f32`. Writing `a * b + c` here
                 // would round twice and disagree with the GPU on the last bit.
@@ -436,12 +431,7 @@ fn eval_contraction(ir: &KernelIr, inputs: &Inputs) -> Result<Inputs, EvalError>
                         Op::Bin { op, lhs, rhs, .. } => {
                             let a = regs[*lhs as usize];
                             let b = regs[*rhs as usize];
-                            match op {
-                                BinOp::Add => a + b,
-                                BinOp::Sub => a - b,
-                                BinOp::Mul => a * b,
-                                BinOp::Div => a / b,
-                            }
+                            op.apply(a, b)
                         }
                         Op::Fma { a, b, c, .. } => {
                             regs[*a as usize].mul_add(regs[*b as usize], regs[*c as usize])

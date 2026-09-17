@@ -153,6 +153,7 @@ are growth and which are drift:
 
 **May be added.** More machines. More back ends. More operations at a level a stream has
 reached. More levels a machine can name. Anything whose cost is derivable from the source.
+`max` and `min` were the first instance and are ADR-0027: they choose, and their cost does not.
 
 **May never be added.** Anything that makes the byte count unknowable at compile time — see the
 refusal table. Anything that makes a project require another of the same author's to be worth
