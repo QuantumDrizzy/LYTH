@@ -1,6 +1,6 @@
 # ADR-0025 — Standalone: a second target, and the instruction that is missing
 
-**Status:** Accepted — steps 0 to 4 built; the claim it was written for is now a command
+**Status:** Accepted — all five steps built and measured
 **Date:** 2026-09-16
 **Depends on:** ADR-0022 (the level that binds), ADR-0019 (the dogfood), ADR-0000 (why)
 
@@ -414,6 +414,45 @@ Two tests now hold it: one that `main` arrives after the dedent, and one that a 
 comment line close a block **the same way** — two spellings of "nothing on this line" must not
 mean two things.
 
+## Step 5, measured — the contract against the machine's own counters
+
+ADR-0009 checked the derived traffic against `ncu` on `sm_120` and agreed to ±0.80%, which is
+what a sampled hardware counter gives. The same check on this ISA agrees to **zero**:
+
+| | derived | the machine moved |
+|---|---|---|
+| saxpy, bytes per element | **12.0** | **12.0** |
+| packed-float instructions, n = 4096 | n/8 = **512** | **512** |
+| packed-float instructions, n = 8192 | n/8 = **1024** | **1024** |
+
+There is no tolerance because there is nothing to average. A machine that charges one cycle per
+instruction and counts every memory operation either moved the bytes the model derived or the
+model is wrong.
+
+The measurement is **differential**: the same kernel is emitted at two element counts and the
+counters are subtracted, so `_start`, the pointer setup and the print epilogue cancel rather
+than being estimated. A constant the test does not know cannot bias it — and a second test
+asserts the constant really is constant, because if the program printed the whole buffer the
+epilogue would scale with `n` and the traffic would come out a third high while still agreeing
+with itself.
+
+### And the counter that was wrong was the machine's
+
+```
+Packed f32 (8 lanes):  512        Flops (f32 lanes): 4096
+```
+
+The work is **8192** flops: 512 instructions x 8 lanes x 2 flops, because `VFMA` is a fused
+multiply-add and retires both. The field counts **lane operations** and calls them flops. For
+`VFADD` the two coincide; for `VFMA` the counter is short by exactly the multiply.
+
+A roofline built on that counter would place every FMA-dense kernel at half its real intensity.
+**LYTH's derivation is the one that is right here**, which is the opposite of the usual
+direction — the compiler is normally the thing being checked — and is why the comparison is run
+in both directions rather than treating the hardware as the oracle. Left as a `[KNOWN_LIMIT]`
+with a test pinning the present behaviour, because changing what `float_ops` weighs is a
+decision about that ISA's metrics and not a thing to slip into a verification commit.
+
 ## What this does not give you
 
 Stated plainly, because the complaint deserves an honest answer rather than a hopeful one.
@@ -439,7 +478,7 @@ then `unibit run main.ubo`, with no other language anywhere in the workflow.**
 | **2** | **LYTH** | **done — `lyth-uasm`, bit-exact against the emulator on two kernels, nine refusals by name** |
 | **3** | **both** | **done — `VFREDUCE` in Unibit; rank 2 and `reduce` in `lyth-uasm`; the reduction path opened to two shapes** |
 | **4** | **both** | **done — `main`, `PRINT_F32`, `lyth build -o main.ubo`; and a lexer defect older than the ADR** |
-| 5 | both | the contract measured on Unibit, against its counters, the way ADR-0009 did on PTX |
+| **5** | **both** | **done — traffic exact to the byte, and it found the machine's own flop counter short by every fused multiply** |
 
 Step 0 is in another repository and is the precondition for all of it. Steps 1–3 are a backend,
 which is known work. Step 4 is the one that answers the complaint, and step 5 is the one that

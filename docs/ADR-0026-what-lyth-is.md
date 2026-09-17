@@ -112,14 +112,17 @@ itself, which is worth nothing.
 | `sm_120`, traffic | **measured** against `ncu`, ±0.80% (ADR-0009) |
 | `sm_120`, machine file | **measured**: 414.51 GB/s read, 15.30 TFLOP/s SGEMM, ridge 36.9 |
 | `unibit`, machine file | **measured** from the emulator's counters: 28.43 B/cycle, 14.21 flop/cycle, ridge 0.4999 |
-| `unibit`, a kernel's derived cost | **not yet** checked against what an emitted program retires |
+| `unibit`, a kernel's derived cost | **measured**, and exact: 12.0 byte/element derived, 12.0 moved (ADR-0025 step 5) |
 
-So the publishable sentence today is:
+So the publishable sentence is now:
 
-> Verified against NVIDIA silicon to ±0.80%; a second, independent ISA is in progress.
+> Verified on two independent ISAs: against NVIDIA silicon to ±0.80% of `ncu`, and against a
+> second ISA's own counters exactly.
 
-and **not** "verified on two ISAs". The verb changes the day ADR-0025 step 5 measures it, and
-not before. This is exactly the class of claim the project's own method exists to catch — and
+This paragraph previously said the opposite, and the verb changed on 2026-09-17 because step 5
+ran — not because the sentence read better. The rule it is an instance of stands: **no claim
+moves ahead of its measurement**, and this one is kept in the ADR rather than edited away, so
+that the next claim has a precedent for waiting. This is exactly the class of claim the project's own method exists to catch — and
 the one kind that `ncu` cannot catch, because it is caught by reading a repository rather than a
 counter.
 
