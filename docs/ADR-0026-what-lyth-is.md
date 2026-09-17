@@ -122,9 +122,12 @@ So the publishable sentence is now:
 This paragraph previously said the opposite, and the verb changed on 2026-09-17 because step 5
 ran — not because the sentence read better. The rule it is an instance of stands: **no claim
 moves ahead of its measurement**, and this one is kept in the ADR rather than edited away, so
-that the next claim has a precedent for waiting. This is exactly the class of claim the project's own method exists to catch — and
-the one kind that `ncu` cannot catch, because it is caught by reading a repository rather than a
-counter.
+that the next claim has a precedent for waiting.
+
+It is worth saying why this rule needs writing down at all. Every other check in this project is
+enforced by something that runs: a test, a counter, `ncu`. A claim in a README is the one kind
+nothing executes, so it is the one kind that can outrun its evidence indefinitely — caught by
+reading a repository rather than by measuring anything.
 
 ## The domains this exists for
 
