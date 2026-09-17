@@ -1,0 +1,20 @@
+machine sm_120
+
+# Multiplicacion compleja, layout separado (structure of arrays):
+#   (ar + i*ai) * (br + i*bi) = (ar*br - ai*bi) + i*(ar*bi + ai*br)
+kernel cmul(n: u32,
+            ar: [f32; n], ai: [f32; n],
+            br: [f32; n], bi: [f32; n],
+            cr: [f32; n], ci: [f32; n])
+    intensity 0.25
+
+    stream ar : dram -> reg
+    stream ai : dram -> reg
+    stream br : dram -> reg
+    stream bi : dram -> reg
+    stream cr : dram -> reg, drain
+    stream ci : dram -> reg, drain
+
+    at reg:
+        cr = ar * br - ai * bi
+        ci = ar * bi + ai * br

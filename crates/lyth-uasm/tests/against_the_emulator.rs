@@ -398,3 +398,91 @@ fn the_default_scalar_matches_the_one_lyth_run_uses() {
     // with a scalar and the difference would be blamed on the emitter.
     assert_eq!(lyth_uasm::DEFAULT_SCALAR, 2.0);
 }
+
+const CMUL: &str = "machine unibit\n\n\
+     kernel cmul(n: u32, ar: [f32; n], ai: [f32; n], br: [f32; n], bi: [f32; n], \
+     cr: [f32; n], ci: [f32; n])\n    \
+     intensity 0.25\n    \
+     stream ar : dram -> reg\n    \
+     stream ai : dram -> reg\n    \
+     stream br : dram -> reg\n    \
+     stream bi : dram -> reg\n    \
+     stream cr : dram -> reg, drain\n    \
+     stream ci : dram -> reg, drain\n    \
+     at reg:\n        \
+     cr = ar * br - ai * bi\n        \
+     ci = ar * bi + ai * br\n";
+
+#[test]
+fn a_complex_multiply_needs_no_complex_type() {
+    // The finding this test exists to keep. Complex arithmetic over separate real and imaginary
+    // buffers is *already* expressible, and the compiler derives 6 flop / 24 byte from the
+    // operations themselves -- so a `[c64; n]` type would buy type safety and an interleaved
+    // layout that is worse for coalescing, and nothing else.
+    //
+    // It did not compile for this machine until the register allocator learned to free. Nine
+    // values are allocated across the two statements and never more than seven are live, and
+    // the refusal it used to produce blamed the ISA for the emitter's arithmetic.
+    let n = 64;
+    let k = lower(CMUL);
+    let asm = lyth_uasm::emit(
+        &k,
+        &Program {
+            n,
+            extents: Default::default(),
+            scalars: Default::default(),
+            prints: vec![
+                PrintRange { buffer: "cr".into(), lo: 0, hi: n },
+                PrintRange { buffer: "ci".into(), lo: 0, hi: n },
+            ],
+        },
+    )
+    .expect("emits");
+
+    let dir = tempfile::tempdir().unwrap();
+    let Some(got) = run_on_emulator(&asm, dir.path()) else {
+        eprintln!("skipped: no Unibit emulator");
+        return;
+    };
+
+    let mut inputs = eval::Inputs::default();
+    for p in &k.params {
+        if p.ty.is_buffer() {
+            inputs
+                .buffers
+                .insert(p.name.clone(), lyth_lang::inputs::buffer(&p.name, p.ty, n));
+        }
+    }
+    let want = eval::eval(&k, n as usize, &inputs).expect("the oracle evaluates");
+
+    assert_eq!(got.len(), 2 * n as usize, "cr then ci");
+    for (j, buf) in ["cr", "ci"].iter().enumerate() {
+        for i in 0..n as usize {
+            assert_eq!(
+                got[j * n as usize + i].to_bits(),
+                want.buffers[*buf][i].to_bits(),
+                "{buf}[{i}]"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_allocator_hands_registers_back() {
+    // Nine allocations, seven registers. Without reuse this body does not emit at all, so the
+    // test above would cover it -- but it would fail with "more than seven live values", which
+    // is the message that was wrong about its own cause. This one names the property directly.
+    let asm = lyth_uasm::emit_program(&lower(CMUL), 64).expect("emits");
+    let used: std::collections::BTreeSet<&str> = asm
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() == 2 && w.starts_with('t') && w[1..].parse::<u8>().is_ok())
+        .collect();
+    assert!(
+        used.len() <= 7,
+        "the body used {} distinct temporaries: {used:?}",
+        used.len()
+    );
+    // And the register that held `ar` is not the one that held the first product, because a
+    // value cannot be freed before its last read.
+    assert!(asm.contains("vfsub"), "{asm}");
+}

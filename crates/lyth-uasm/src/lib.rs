@@ -59,6 +59,37 @@ fn refuse(msg: impl Into<String>) -> EmitError {
     EmitError(msg.into())
 }
 
+/// Hand out one of the seven temporaries.
+fn take(free: &mut Vec<usize>) -> Result<usize, EmitError> {
+    free.pop().ok_or_else(|| {
+        refuse(
+            "the body needs more than seven values live at the same moment, and this back end              does not spill.
+  Seven is what t0..t6 gives. The machine has thirty-two              registers and a future allocator could reach the rest -- so this is a limit of              the emitter, said as one.",
+        )
+    })
+}
+
+fn tname(i: usize) -> String {
+    format!("t{i}")
+}
+
+/// Record which temporary holds a value, so its last read can hand the register back.
+fn own(owner: &mut BTreeMap<RegId, usize>, dst: RegId, i: usize) -> String {
+    owner.insert(dst, i);
+    tname(i)
+}
+
+/// The registers an op reads. Its `dst` is not among them, which is what makes it safe to free
+/// an operand only after the whole instruction has been written.
+fn op_reads(op: &Op) -> Vec<RegId> {
+    match op {
+        Op::Load { .. } | Op::Param { .. } | Op::Const { .. } => Vec::new(),
+        Op::Bin { lhs, rhs, .. } => vec![*lhs, *rhs],
+        Op::Fma { a, b, c, .. } => vec![*a, *b, *c],
+        Op::Neg { src, .. } => vec![*src],
+    }
+}
+
 /// Emit a complete, runnable Unibit program for this kernel at `n` elements, printing every
 /// result it produces.
 ///
@@ -293,21 +324,36 @@ fn emit_text(ir: &KernelIr, prog: &Program, out: &mut String) -> Result<(), Emit
         let _ = writeln!(out, "        la      s{i}, {b}");
     }
 
-    let mut next_t = 0usize;
-    let mut alloc = |out: &mut String| -> Result<String, EmitError> {
-        // t0..t6 are the seven temporaries this ISA names. Running out is a real limit and is
-        // reported as one rather than wrapping around and corrupting a live value.
-        if next_t >= 7 {
-            return Err(refuse(
-                "the body needs more than seven live values and this back end does not spill. \
-                 A longer expression is a real limit here, not a bug.",
-            ));
+    // Where each value is read for the last time, so its register can be handed back.
+    //
+    // This used to allocate monotonically and never free, and the refusal it produced said "a
+    // longer expression is a real limit here, not a bug" -- which was **wrong about its own
+    // cause**. A complex multiply over separate real and imaginary buffers never has more than
+    // seven values live at once; it makes nine allocations. The machine has thirty-two
+    // registers. The limit was the allocator's and the message blamed the ISA.
+    let last_use = {
+        let mut m: BTreeMap<RegId, usize> = BTreeMap::new();
+        for (i, op) in ir.ops.iter().enumerate() {
+            for r in op_reads(op) {
+                m.insert(r, i);
+            }
         }
-        let r = format!("t{next_t}");
-        next_t += 1;
-        let _ = out;
-        Ok(r)
+        m
     };
+    // Values the loop's tail still needs after the last op: what is stored, and what the
+    // reduction folds. Freeing these would hand out a register holding a result.
+    let live_to_end: Vec<RegId> = ir
+        .drains
+        .iter()
+        .map(|(_, r)| *r)
+        .chain(ir.reduction.iter().map(|r| r.value))
+        .collect();
+
+    let mut free: Vec<usize> = (0..7).rev().collect();
+    // Which temporary holds each body value, so it can be handed back at its last read.
+    // `Op::Param` is absent on purpose: a scalar's register is broadcast before the loop and
+    // lives for the whole of it, so it is not the body's to free.
+    let mut owner: BTreeMap<RegId, usize> = BTreeMap::new();
 
     // Scalars, broadcast once before the loop. `VSPLAT.w` copies the low 32 bits into all
     // eight lanes, and an f32 is bits, so the integer instruction serves a float unchanged.
@@ -325,7 +371,7 @@ fn emit_text(ir: &KernelIr, prog: &Program, out: &mut String) -> Result<(), Emit
                 p.name
             ))
         })?;
-        let r = alloc(out)?;
+        let r = tname(take(&mut free)?);
         let _ = writeln!(
             out,
             "        li      {r}, 0x{:08X}   ; {} = {v}",
@@ -347,7 +393,7 @@ fn emit_text(ir: &KernelIr, prog: &Program, out: &mut String) -> Result<(), Emit
     // the launch shape of a Unibit program is a real launch shape and not a metaphor.
     let acc = match &ir.reduction {
         Some(r) => {
-            let a = alloc(out)?;
+            let a = tname(take(&mut free)?);
             let _ = writeln!(
                 out,
                 "        li      {a}, 0x{:08X}   ; {} identity",
@@ -372,14 +418,14 @@ fn emit_text(ir: &KernelIr, prog: &Program, out: &mut String) -> Result<(), Emit
             .expect("SSA: every use follows its definition")
     }
 
-    for op in &ir.ops {
+    for (i, op) in ir.ops.iter().enumerate() {
         match op {
             Op::Load { dst, buffer } => {
                 let i = buffers
                     .iter()
                     .position(|b| b == buffer)
                     .expect("a streamed buffer is a parameter");
-                let r = alloc(out)?;
+                let r = own(&mut owner, *dst, take(&mut free)?);
                 let _ = writeln!(out, "        lq      {r}, 0(s{i})");
                 regs.push((*dst, r));
             }
@@ -392,7 +438,7 @@ fn emit_text(ir: &KernelIr, prog: &Program, out: &mut String) -> Result<(), Emit
                 regs.push((*dst, r));
             }
             Op::Const { dst, value } => {
-                let r = alloc(out)?;
+                let r = own(&mut owner, *dst, take(&mut free)?);
                 let _ = writeln!(
                     out,
                     "        li      {r}, 0x{:08X}",
@@ -418,7 +464,7 @@ fn emit_text(ir: &KernelIr, prog: &Program, out: &mut String) -> Result<(), Emit
                     }
                 };
                 let (l, r2) = (get(&regs, *lhs), get(&regs, *rhs));
-                let r = alloc(out)?;
+                let r = own(&mut owner, *dst, take(&mut free)?);
                 let _ = writeln!(out, "        {m}   {r}, {l}, {r2}");
                 regs.push((*dst, r));
             }
@@ -427,7 +473,7 @@ fn emit_text(ir: &KernelIr, prog: &Program, out: &mut String) -> Result<(), Emit
                 // instruction runs. Copying rather than writing into `c`'s register keeps SSA
                 // intact: `c` may be read again later in the body.
                 let (ra, rb, rc) = (get(&regs, *a), get(&regs, *b), get(&regs, *c));
-                let r = alloc(out)?;
+                let r = own(&mut owner, *dst, take(&mut free)?);
                 let _ = writeln!(out, "        mv      {r}, {rc}");
                 let _ = writeln!(out, "        vfma    {r}, {ra}, {rb}");
                 regs.push((*dst, r));
@@ -437,12 +483,29 @@ fn emit_text(ir: &KernelIr, prog: &Program, out: &mut String) -> Result<(), Emit
                 // because a reader counting instructions should know where the extra two came
                 // from.
                 let s = get(&regs, *src);
-                let z = alloc(out)?;
-                let r = alloc(out)?;
+                let zi = take(&mut free)?;
+                let z = tname(zi);
+                let r = own(&mut owner, *dst, take(&mut free)?);
                 let _ = writeln!(out, "        li      {z}, 0");
                 let _ = writeln!(out, "        vsplat.w {z}, {z}");
                 let _ = writeln!(out, "        vfsub   {r}, {z}, {s}");
+                // The zero lives for exactly one instruction and has no `RegId` to be the last
+                // reader of, so it is handed back here rather than by the sweep below.
+                free.push(zi);
                 regs.push((*dst, r));
+            }
+        }
+
+        // Hand back every register whose last read was this instruction.
+        //
+        // After the whole op is written, never during it: `vfsub rd, rs1, rs2` reads before it
+        // writes, but freeing an operand first would let `rd` be given the same register, and
+        // that only happens to be safe. It is safe here because nothing is live to reuse yet.
+        for r in op_reads(op) {
+            if last_use.get(&r) == Some(&i) && !live_to_end.contains(&r) {
+                if let Some(t) = owner.remove(&r) {
+                    free.push(t);
+                }
             }
         }
     }
