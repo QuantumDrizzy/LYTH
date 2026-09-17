@@ -62,15 +62,28 @@ fn refuse(msg: impl Into<String>) -> EmitError {
 /// Hand out one of the seven temporaries.
 fn take(free: &mut Vec<usize>) -> Result<usize, EmitError> {
     free.pop().ok_or_else(|| {
-        refuse(
-            "the body needs more than seven values live at the same moment, and this back end              does not spill.
-  Seven is what t0..t6 gives. The machine has thirty-two              registers and a future allocator could reach the rest -- so this is a limit of              the emitter, said as one.",
-        )
+        refuse(format!(
+            "the body needs more than {} values live at the same moment, and this back end              does not spill.
+  That is `t0..t6` plus `a0..a7`; the rest of the register file              holds the buffer base pointers and the loop counters, so reaching further means              spilling rather than renaming.",
+            TEMPS.len()
+        ))
     })
 }
 
+/// Registers the loop body may use as temporaries.
+///
+/// `t0..t6` are the named temporaries. `a0..a7` are argument registers, and they are safe here
+/// for a reason worth writing down rather than assuming: this back end issues **no `ecall`
+/// inside a loop**. The only syscalls are in the print epilogue, which runs after every loop
+/// has finished, so nothing in the body can be clobbered by one. Anything that later emits a
+/// syscall mid-loop has to shorten this list.
+const TEMPS: [&str; 15] = [
+    "t0", "t1", "t2", "t3", "t4", "t5", "t6", //
+    "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7",
+];
+
 fn tname(i: usize) -> String {
-    format!("t{i}")
+    TEMPS[i].to_string()
 }
 
 /// Record which temporary holds a value, so its last read can hand the register back.
@@ -349,7 +362,7 @@ fn emit_text(ir: &KernelIr, prog: &Program, out: &mut String) -> Result<(), Emit
         .chain(ir.reduction.iter().map(|r| r.value))
         .collect();
 
-    let mut free: Vec<usize> = (0..7).rev().collect();
+    let mut free: Vec<usize> = (0..TEMPS.len()).rev().collect();
     // Which temporary holds each body value, so it can be handed back at its last read.
     // `Op::Param` is absent on purpose: a scalar's register is broadcast before the loop and
     // lives for the whole of it, so it is not the body's to free.

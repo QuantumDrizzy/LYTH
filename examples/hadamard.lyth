@@ -1,0 +1,30 @@
+machine sm_120
+
+# Una puerta Hadamard sobre el qubit mas significativo de un vector de estado.
+#
+#   |psi> se parte en dos mitades contiguas: p0 (bit q = 0) y p1 (bit q = 1).
+#   H = 1/sqrt(2) * [[1, 1], [1, -1]]
+#
+#       q0 = s * (p0 + p1)
+#       q1 = s * (p0 - p1)
+#
+# Amplitudes complejas, layout separado re/im.
+kernel hadamard(n: u32, s: f32,
+                p0r: [f32; n], p0i: [f32; n], p1r: [f32; n], p1i: [f32; n],
+                q0r: [f32; n], q0i: [f32; n], q1r: [f32; n], q1i: [f32; n])
+    intensity 0.25
+
+    stream p0r : dram -> reg
+    stream p0i : dram -> reg
+    stream p1r : dram -> reg
+    stream p1i : dram -> reg
+    stream q0r : dram -> reg, drain
+    stream q0i : dram -> reg, drain
+    stream q1r : dram -> reg, drain
+    stream q1i : dram -> reg, drain
+
+    at reg:
+        q0r = s * (p0r + p1r)
+        q0i = s * (p0i + p1i)
+        q1r = s * (p0r - p1r)
+        q1i = s * (p0i - p1i)

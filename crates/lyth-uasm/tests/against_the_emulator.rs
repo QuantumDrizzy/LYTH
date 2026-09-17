@@ -486,3 +486,70 @@ fn the_allocator_hands_registers_back() {
     // value cannot be freed before its last read.
     assert!(asm.contains("vfsub"), "{asm}");
 }
+
+#[test]
+fn a_quantum_gate_is_expressible_and_bit_exact() {
+    // `examples/hadamard.lyth`, run on the second ISA and checked against the oracle.
+    //
+    // The trick is a view, not a feature: a single-qubit gate splits the state vector into the
+    // amplitudes whose q-th bit is 0 and those whose bit is 1, and on those two sets it is
+    // purely elementwise. For the **most significant** qubit the two sets are the two
+    // contiguous halves, so they are two ordinary buffers and LYTH needs nothing new.
+    //
+    // [KNOWN LIMIT] That is only the top qubit. For any other, the two sets interleave in
+    // blocks of 2^q, which is a stride this language cannot express -- the real quantum gap,
+    // and it is about indexing rather than about complex numbers.
+    let src = std::fs::read_to_string(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/hadamard.lyth"),
+    )
+    .unwrap()
+    .replace("machine sm_120", "machine unibit");
+    let n = 64;
+    let k = lower(&src);
+
+    let mut scalars = std::collections::BTreeMap::new();
+    // 1/sqrt(2), rounded to f32 once and used by both sides.
+    let s = std::f32::consts::FRAC_1_SQRT_2;
+    scalars.insert("s".to_string(), s);
+    let asm = lyth_uasm::emit(
+        &k,
+        &Program {
+            n,
+            extents: Default::default(),
+            scalars,
+            prints: vec![
+                PrintRange { buffer: "q0r".into(), lo: 0, hi: n },
+                PrintRange { buffer: "q1r".into(), lo: 0, hi: n },
+            ],
+        },
+    )
+    .expect("emits");
+
+    let dir = tempfile::tempdir().unwrap();
+    let Some(got) = run_on_emulator(&asm, dir.path()) else {
+        eprintln!("skipped: no Unibit emulator");
+        return;
+    };
+
+    let mut inputs = eval::Inputs::default();
+    for p in &k.params {
+        if p.ty.is_buffer() {
+            inputs
+                .buffers
+                .insert(p.name.clone(), lyth_lang::inputs::buffer(&p.name, p.ty, n));
+        }
+    }
+    inputs.scalars.insert("s".to_string(), s);
+    let want = eval::eval(&k, n as usize, &inputs).expect("the oracle evaluates");
+
+    assert_eq!(got.len(), 2 * n as usize);
+    for (j, buf) in ["q0r", "q1r"].iter().enumerate() {
+        for i in 0..n as usize {
+            assert_eq!(
+                got[j * n as usize + i].to_bits(),
+                want.buffers[*buf][i].to_bits(),
+                "{buf}[{i}]"
+            );
+        }
+    }
+}
