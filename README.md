@@ -193,3 +193,8 @@ put through the tool, and for each one whether a Rust macro would have done the 
 | `lyth-cuda` | CUDA Driver API. All `unsafe` in the project lives here. `raw-dylib`, so **no toolkit is needed to build** |
 | `lyth` | the compiler binary: `check`, `build`, `run` |
 | `lyth-probe` | evidence, machine-as-value, intensity, measured traffic |
+
+## License
+
+Proprietary. All rights reserved. See [LICENSE](LICENSE). Visibility for review or
+evaluation grants no right of use beyond reading.
