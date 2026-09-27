@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/lyth_banner.jpg" alt="LYTH" width="550"/>
+  <img src="assets/lyth_recall.gif" alt="LYTH" width="820"/>
 </p>
 
 # LYTH
