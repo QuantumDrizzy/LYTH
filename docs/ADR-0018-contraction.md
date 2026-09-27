@@ -478,6 +478,51 @@ The consequence for the language is concrete and not deferred: **`predicted_bank
 is falsified for this kernel.** It is derived from the skew being coprime with the bank count,
 which remains true and is not what decides the outcome here.
 
+### Cause of the falsified zero (filed, predictor unchanged)
+
+The table above is the baseline. A later split of the same counter on the same machine
+(`sm_120`, RTX 5060 Ti) says what those counts are made of, without replacing them:
+
+| `m = n = k` | `pipe_lsu.sum` | `mem_shared_op_ld` | `mem_shared_op_st` | `type_arbitration` | store wavefronts / `STS` |
+|---|---|---|---|---|---|
+| 128 | 0 | 0 | 0 | 0 | **1.000** |
+| 256 | ~5k | 0 | ~5k | = `pipe_lsu` | ~1.16 |
+| 512 | ~68k | 0 | ~68k | = `pipe_lsu` | ~1.26 |
+
+* **Which operand / which op.** Loads are clean: `op_ld = 0` and exactly one shared-load
+  wavefront per `LDS`. The entire excess is on **shared stores** (`op_st`), matching
+  ADR-0017's `op_st`-only residue.
+* **Not padding, not 64-bit banks, not a missed column walk.** Emitted addresses for `T = 32`,
+  stride 33: one warp is one row, so stores hit banks `(ty + tx) mod 32` — 32 distinct;
+  `A` is a broadcast; `B` is row-contiguous. Same readout at stride 32. The address pattern
+  the predictor models is conflict-free on every access this schedule issues.
+* **What the counter is counting.** Every non-zero above equals
+  `l1tex__data_bank_conflicts_type_arbitration` (lost L1TEX client arbitrations — fill returns
+  and other higher-priority clients — not address divergence). Excess store wavefronts track
+  that count. NVIDIA's own guidance: the hardware bank-conflict counter includes those
+  arbitrations; address-pattern conflicts are what the Source-page "excessive" view isolates,
+  and arbitration is not fixable by layout.
+
+So the predictor said 0 because `walk_is_conflict_free` answers a real question — "does this
+skewed column walk collide?" — and for this schedule the answer is no. The silicon number that
+falsified it is a **superset**: address conflicts plus arbitration replays on the store path.
+Predicting the arbitration term would need a model of L1TEX client contention, not a stride
+rule. No such rule matches the filed 256/512 points *and* a second measured tile without
+fitting noise, so **`predicted_bank_conflicts` is left at 0** and this stays a noted limit of
+what that field means against `l1tex__data_bank_conflicts_pipe_lsu.sum`.
+
+> **Related, not this open item:** at `tile 16, 16` (stride 17) a warp covers **two** rows, so
+> stores take two wavefronts each (`wf/STS = 2.0`) from a single 2-way address conflict the
+> column-walk check never sees. That is a different miss (real address conflict, predictor
+> still prints 0). It is not the mechanism behind the 5k/68k table above, and it is not a
+> reason to retune the skew on the tile-32 kernel.
+
+**Command** (confirming split, not a new baseline):
+
+```
+ncu --metrics l1tex__data_bank_conflicts_pipe_lsu.sum,l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_ld.sum,l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_st.sum,l1tex__data_bank_conflicts_type_arbitration.sum,l1tex__data_pipe_lsu_wavefronts_mem_shared_op_st.sum,smsp__sass_inst_executed_op_shared_st.sum --csv --page raw target/release/lyth.exe run examples/matmul.lyth --machine fixtures/machine/sm_120.json --set m=512 --set n=512 --set k=512
+```
+
 ### What step 3 does not claim
 
 It is not fast, and no timing appears above. Intensity 8 against a ridge of 42.9 makes it
@@ -492,21 +537,37 @@ claim**, with DRAM expected lower.
 emitted, so the number under test comes from the compiler that generated the kernel and no
 human writes the model — ADR-0009's rule, applied to an expression instead of a constant.
 
+**Command** (local RTX 5060 Ti, `sm_120`, 2026-09-27):
+
+```
+python tools/contraction_traffic.py --tiles 32 --sizes 512 1024
+python tools/contraction_traffic.py --tiles 16 --sizes 512 1024 2048
+```
+
+**Counter for the model:** `lts__t_bytes.sum` (L1→L2 bytes), divided by `m * n`.
+Also collected: `dram__bytes_op_{read,write}.sum`, `l1tex__t_sector_pipe_lsu_mem_global_op_ld_hit_rate.pct`.
+Derived at `tile 32, 32` is `0.25 * k + 4` from the manifest (`bytes_per_extent * k + bytes_fixed`).
+
 | tile | `m=n=k` | derived | L2/output | vs model | L1 hit | DRAM/output | DRAM vs A+B |
 |---|---|---|---|---|---|---|---|
-| 32 | 512 | 132.0 | 132.21 | **+0.16%** | 0.37% | 8.02 | 1.00x |
-| 32 | 1024 | 260.0 | 260.91 | **+0.35%** | 0.00% | 8.04 | 1.00x |
-| 16 | 512 | 260.0 | 252.56 | −2.86% | 2.95% | 8.02 | 1.00x |
-| 16 | 1024 | 516.0 | 487.84 | −5.46% | 5.51% | 8.01 | 1.00x |
-| 16 | 2048 | 1028.0 | 1025.21 | −0.27% | 0.54% | — | — |
+| 32 | 512 | 132.0 | 132.16 | **+0.12%** | 0.52% | 10.49 | 1.31x |
+| 32 | 1024 | 260.0 | 260.03 | **+0.01%** | 0.00% | 8.01 | 1.00x |
+| 16 | 512 | 260.0 | 252.90 | −2.73% | 2.82% | 8.02 | 1.00x |
+| 16 | 1024 | 516.0 | 488.19 | −5.39% | 5.44% | 8.04 | 1.00x |
+| 16 | 2048 | 1028.0 | 1024.82 | −0.31% | 0.53% | 13.57 | 1.70x |
+
+**Verdict:** claim 2 **holds** — not a filed miss. Worst L1-adjusted disagreement on these
+points is **+0.64%**, inside the ±2% tolerance ADR-0017 earned. A bare intensity 8.0 without
+`asymptotic` stays refused; the cost formula was not changed to match the counter; the tile was
+not retuned; the tolerance was not widened.
 
 ### Claim 1 holds, and it is now a measurement rather than a derivation
 
 The same body, the same buffers, the same extents, **one number changed in a declaration**:
 
-* at 512, `tile 32` moves 132.21 bytes per output and `tile 16` moves 252.56 — a factor of
+* at 512, `tile 32` moves 132.16 bytes per output and `tile 16` moves 252.90 — a factor of
   **1.91**;
-* at 1024, 260.91 against 487.84 — **1.87**.
+* at 1024, 260.03 against 488.19 — **1.88**.
 
 The traffic tracks the tile. That is the sentence ADR-0000 exists for: the quantity which
 determines performance is a property of the declared schedule, and here it is one a profiler
@@ -514,26 +575,27 @@ agrees with.
 
 ### Claim 2 holds at `tile 32` without needing the tolerance it was given
 
-**+0.16% and +0.35%** against a tolerance of 2%. The read-for-ownership excess that spoiled the
-untiled transpose's prediction does not appear, for the reason pre-registered: a matmul writes
-`C` once and coalesced.
+**+0.12% and +0.01%** against a tolerance of 2%. The claim-2 extent (`m = n = k = 1024`,
+`T = 32`) is **260.03 measured against 260.0 derived** on `lts__t_bytes.sum`. The
+read-for-ownership excess that spoiled the untiled transpose's prediction does not appear, for
+the reason pre-registered: a matmul writes `C` once and coalesced.
 
 ### The finding: what the model is *about* got sharper
 
-At `tile 16` the measurement is **2.86% and 5.46% below** the derivation. Not noise, and not in
-the forgiving direction by luck — the L1 global-load hit rate at those two points is **2.95% and
-5.51%**.
+At `tile 16` the measurement is **2.73% and 5.39% below** the derivation. Not noise, and not in
+the forgiving direction by luck — the L1 global-load hit rate at those two points is **2.82% and
+5.44%**.
 
 > **The derived figure is what the *kernel* asks for. `lts__t_bytes` is what the *L1* asks the
 > L2 for. They differ by exactly what the L1 served.**
 
-Adjusting for it: **+0.53%, +0.35%, +0.09%, +0.05%, +0.27%** across the five points — every
-one inside 0.6%, on a model that spans a factor of eight in traffic.
+Adjusting for it: **+0.64%, +0.01%, +0.09%, +0.05%, +0.22%** across the five points — every
+one inside 0.7%, on a model that spans a factor of eight in traffic.
 
 The last row is the one that makes this a relation rather than a correlation, because it moves
-the **other way**. At 2048 the L1 hit rate collapses from 5.51% to 0.54% — the working set has
+the **other way**. At 2048 the L1 hit rate collapses from 5.44% to 0.53% — the working set has
 outgrown what an L1 can hold across blocks — and the disagreement collapses with it, from
-−5.46% to −0.27%. The gap follows the hit rate up and back down across a tenfold change in it.
+−5.39% to −0.31%. The gap follows the hit rate up and back down across a tenfold change in it.
 
 Every kernel in this language before a contraction had an L1 hit rate of zero. They stream: no
 block ever re-reads data another block read, so nothing is ever in L1 to hit. A tiled
@@ -544,14 +606,23 @@ That is a refinement of ADR-0015's claim rather than a contradiction of it. The 
 measured exact at the L1-to-L2 interface on kernels where the L1 served nothing. It still is;
 the interface has just turned out to have a cache in front of it that can matter.
 
-### DRAM, pre-registered as lower and measured lower
+### DRAM, pre-registered as lower and measured lower at the claim-2 extent
 
-**8.0 bytes per output at every point, which is 1.00x the A+B floor**: the schedule reads each
-input matrix exactly once from DRAM and the L2 serves every re-read. Against 260 bytes per
-output at L2, DRAM is **32x lower**.
+At `m = n = k = 1024`, `T = 32`: **8.01 bytes per output, 1.00x the A+B floor** — each input
+matrix read once from DRAM, L2 serving every re-read. Against 260 bytes per output at L2, DRAM
+is **32x lower**. That is the pre-registered sentence, and it holds where claim 2 was written.
 
-`C` never reaches DRAM at all within the launch — 5,632 bytes written against 4 MB — because it
-fits in the 34 MB L2, which is the [KNOWN LIMIT] ADR-0015 already recorded.
+It is **not** 8.0 at every point in this run, and that is recorded rather than smoothed:
+
+* at `tile 16`, `2048`: DRAM **13.57** (1.70x). A+B+C is 48 MB against a 34 MB L2 — the working
+  set outgrows the cache, so traffic above the A+B floor is expected. Not a claim-2 miss; claim 2
+  is `lts__t_bytes`.
+* at `tile 32`, `512`: DRAM **10.49** in the filed sweep; a replicate of the same point measured
+  **8.02**. L2 at that point stayed at 132.16 / 131.72 — inside 0.3% of derived either way. The
+  DRAM figure at this size is run-to-run; the L2 claim is not.
+
+`C` at the claim-2 extent never reaches DRAM within the launch in volume — it fits in the 34 MB
+L2, which is the [KNOWN LIMIT] ADR-0015 already recorded.
 
 Writing "17.25 GB of DRAM" would have been the tidy sentence, and it would have been wrong by a
 factor of 32 in a direction that had already been measured once.

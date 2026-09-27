@@ -31,6 +31,8 @@ pub enum EvalError {
         got: usize,
         want: usize,
     },
+    #[error("zipper2 is one 256-bit step: n must be 8 and the body is that one op, got n = {0}")]
+    Zipper2(usize),
 }
 
 /// Host-side inputs, keyed by parameter name.
@@ -109,6 +111,9 @@ pub fn eval_with_launch(
         return Err(EvalError::ZeroBlock);
     }
     let mut out = inputs.clone();
+    if ir.ops.iter().any(|op| matches!(op, Op::Zipper2 { .. })) {
+        return eval_zipper2(ir, n, out);
+    }
 
     // Per-element values the reduction will consume, in element order.
     let mut reduced: Vec<f32> = Vec::new();
@@ -242,6 +247,7 @@ pub fn eval_with_launch(
                     regs[*a as usize].mul_add(regs[*b as usize], regs[*c as usize])
                 }
                 Op::Neg { src, .. } => -regs[*src as usize],
+                Op::Zipper2 { .. } => return Err(EvalError::Zipper2(n)),
             };
             regs[op.dst() as usize] = v;
         }
@@ -437,6 +443,7 @@ fn eval_contraction(ir: &KernelIr, inputs: &Inputs) -> Result<Inputs, EvalError>
                             regs[*a as usize].mul_add(regs[*b as usize], regs[*c as usize])
                         }
                         Op::Neg { src, .. } => -regs[*src as usize],
+                        Op::Zipper2 { .. } => return Err(EvalError::Zipper2(0)),
                     };
                     regs[op.dst() as usize] = v;
                 }
@@ -641,4 +648,57 @@ kernel dot(n: u32, x: [f32; n], y: [f32; n], partial: [f32; blocks])
         let e = eval(&ir, 4, &inputs).unwrap_err();
         assert!(e.to_string().contains("expected at least 4"), "{e}");
     }
+}
+
+fn eval_zipper2(ir: &KernelIr, n: usize, mut out: Inputs) -> Result<Inputs, EvalError> {
+    if n != 8 {
+        return Err(EvalError::Zipper2(n));
+    }
+    let mut steps = ir.ops.iter().filter(|op| matches!(op, Op::Zipper2 { .. }));
+    let Some(Op::Zipper2 { dst, acc, ket, bra }) = steps.next() else {
+        return Err(EvalError::Zipper2(n));
+    };
+    if steps.next().is_some() {
+        return Err(EvalError::Zipper2(n));
+    }
+    let load = |reg: u32| -> Result<[f32; 8], EvalError> {
+        let name = ir
+            .ops
+            .iter()
+            .find_map(|op| match op {
+                Op::Load { dst, buffer } if *dst == reg => Some(buffer.as_str()),
+                _ => None,
+            })
+            .ok_or_else(|| EvalError::MissingBuffer(format!("r{reg}")))?;
+        let col = out
+            .buffers
+            .get(name)
+            .ok_or_else(|| EvalError::MissingBuffer(name.to_string()))?;
+        if col.len() < 8 {
+            return Err(EvalError::ShortBuffer {
+                name: name.to_string(),
+                got: col.len(),
+                want: 8,
+            });
+        }
+        let mut words = [0.0f32; 8];
+        words.copy_from_slice(&col[..8]);
+        Ok(words)
+    };
+    let result = crate::zipper2::zipper2_words(&load(*acc)?, &load(*ket)?, &load(*bra)?);
+    let drain = ir
+        .drains
+        .iter()
+        .find(|(_, reg)| *reg == *dst)
+        .map(|(name, _)| name.clone())
+        .ok_or_else(|| EvalError::MissingBuffer("zipper2 drain".into()))?;
+    let slot = out
+        .buffers
+        .get_mut(&drain)
+        .ok_or_else(|| EvalError::MissingBuffer(drain))?;
+    if slot.len() < 8 {
+        return Err(EvalError::Zipper2(slot.len()));
+    }
+    slot[..8].copy_from_slice(&result);
+    Ok(out)
 }

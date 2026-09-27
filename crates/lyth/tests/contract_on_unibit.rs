@@ -81,6 +81,7 @@ fn run_at(src: &str, n: u32) -> Option<Counters> {
                 lo: 0,
                 hi: 8,
             }],
+            buffers: BTreeMap::new(),
         },
     )
     .expect("emits");

@@ -280,6 +280,7 @@ fn a_reduction_folds_the_lanes_and_the_result_leaves_the_machine() {
                 lo: 0,
                 hi: 8,
             }],
+            buffers: Default::default(),
         },
     )
     .expect("emits");
@@ -435,6 +436,7 @@ fn a_complex_multiply_needs_no_complex_type() {
                 PrintRange { buffer: "cr".into(), lo: 0, hi: n },
                 PrintRange { buffer: "ci".into(), lo: 0, hi: n },
             ],
+            buffers: Default::default(),
         },
     )
     .expect("emits");
@@ -521,6 +523,7 @@ fn a_quantum_gate_is_expressible_and_bit_exact() {
                 PrintRange { buffer: "q0r".into(), lo: 0, hi: n },
                 PrintRange { buffer: "q1r".into(), lo: 0, hi: n },
             ],
+            buffers: Default::default(),
         },
     )
     .expect("emits");

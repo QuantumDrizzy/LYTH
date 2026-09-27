@@ -100,6 +100,7 @@ fn op_reads(op: &Op) -> Vec<RegId> {
         Op::Bin { lhs, rhs, .. } => vec![*lhs, *rhs],
         Op::Fma { a, b, c, .. } => vec![*a, *b, *c],
         Op::Neg { src, .. } => vec![*src],
+        Op::Zipper2 { acc, ket, bra, .. } => vec![*acc, *ket, *bra],
     }
 }
 
@@ -140,6 +141,7 @@ pub fn emit_program(ir: &KernelIr, n: u32) -> Result<String, EmitError> {
             extents: BTreeMap::new(),
             scalars,
             prints,
+            buffers: BTreeMap::new(),
         },
     )
 }
@@ -162,7 +164,12 @@ pub fn emit(ir: &KernelIr, p: &Program) -> Result<String, EmitError> {
     );
     let _ = writeln!(
         out,
-        "; Inputs are lyth_lang::inputs, the generator the host oracle uses."
+        "; Inputs are {}.",
+        if p.buffers.is_empty() {
+            "lyth_lang::inputs, the generator the host oracle uses"
+        } else {
+            "the caller's buffers; the host oracle must be given the same bytes"
+        }
     );
     // The contract, in the file the machine runs. A program that carries the intensity it was
     // checked against can be read against its own counters later without a second artifact.
@@ -175,7 +182,7 @@ pub fn emit(ir: &KernelIr, p: &Program) -> Result<String, EmitError> {
         );
     }
     let _ = writeln!(out);
-    emit_data(ir, p, &mut out);
+    emit_data(ir, p, &mut out)?;
     emit_text(ir, p, &mut out)?;
     Ok(out)
 }
@@ -272,14 +279,25 @@ fn check_scope(ir: &KernelIr, n: u32) -> Result<(), EmitError> {
     Ok(())
 }
 
-fn emit_data(ir: &KernelIr, prog: &Program, out: &mut String) {
+fn emit_data(ir: &KernelIr, prog: &Program, out: &mut String) -> Result<(), EmitError> {
     let n = prog.n;
     let _ = writeln!(out, "        .data");
     for p in &ir.params {
         if !p.ty.is_buffer() {
             continue;
         }
-        let words: Vec<String> = lyth_lang::inputs::buffer(&p.name, p.ty, n)
+        let values = match prog.buffers.get(&p.name) {
+            Some(given) if given.len() == n as usize => given.clone(),
+            Some(given) => {
+                return Err(refuse(format!(
+                    "buffer `{}` has {} elements and this program runs {n}",
+                    p.name,
+                    given.len()
+                )))
+            }
+            None => lyth_lang::inputs::buffer(&p.name, p.ty, n),
+        };
+        let words: Vec<String> = values
             .iter()
             .map(|v| format!("0x{:08X}", v.to_bits()))
             .collect();
@@ -306,6 +324,7 @@ fn emit_data(ir: &KernelIr, prog: &Program, out: &mut String) {
         );
     }
     let _ = writeln!(out);
+    Ok(())
 }
 
 fn emit_text(ir: &KernelIr, prog: &Program, out: &mut String) -> Result<(), EmitError> {
@@ -505,6 +524,15 @@ fn emit_text(ir: &KernelIr, prog: &Program, out: &mut String) -> Result<(), Emit
                 // The zero lives for exactly one instruction and has no `RegId` to be the last
                 // reader of, so it is handed back here rather than by the sweep below.
                 free.push(zi);
+                regs.push((*dst, r));
+            }
+            Op::Zipper2 { dst, acc, ket, bra } => {
+                // `zipper2` reads `rd` as the incoming transfer matrix. Copy the
+                // accumulator in first; `mv` moves the whole 256-bit register.
+                let (ra, rk, rb) = (get(&regs, *acc), get(&regs, *ket), get(&regs, *bra));
+                let r = own(&mut owner, *dst, take(&mut free)?);
+                let _ = writeln!(out, "        mv      {r}, {ra}");
+                let _ = writeln!(out, "        zipper2 {r}, {rk}, {rb}");
                 regs.push((*dst, r));
             }
         }

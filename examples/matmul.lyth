@@ -12,11 +12,11 @@ machine sm_120
 # body states the term being accumulated. An `+=` would put the schedule back in the body,
 # which is the thing this language exists not to do.
 #
-# THIS DOES NOT COMPILE YET, on purpose. Each block loads 2T^2 elements per step over K/T
-# steps, so 2K/T + 1 elements move per output, and `Cost` carries constants. The front end
-# accepts the syntax and refuses to cost it rather than publishing the constant part of an
-# expression -- which would be wrong by a factor of K. ADR-0018 step 2 replaces the refusal
-# with the symbolic form, and step 5 measures it.
+# Compiles. Each block loads 2T^2 elements per step over K/T steps, so 2K/T + 1 elements
+# move per output: `Cost` carries that as the expression `0.25 * k + 4` bytes (at tile 32),
+# not a constant. Declaring the constant part alone is still refused -- it would be wrong by
+# a factor of K. `intensity asymptotic 8.0` claims the limit T/4; a bare `intensity 8.0` is
+# refused. ADR-0018 step 2. The tiled PTX emits (step 3); step 5 measured the traffic.
 #
 # The asymptote is `T/4` flop/byte. At `tile 32, 32` that is 8, against a ridge of 42.9 on this
 # machine, and it cannot be raised: T^2 threads per block against MAX_THREADS_PER_BLOCK = 1024

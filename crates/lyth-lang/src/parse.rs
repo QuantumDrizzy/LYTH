@@ -760,6 +760,22 @@ impl Parser {
 
     fn atom(&mut self) -> Result<Expr, ParseError> {
         match self.peek().clone() {
+            Tok::Word(w) if w == "zipper2" && self.peek_at(1) == &Tok::LParen => {
+                let span = self.bump().span;
+                self.expect(Tok::LParen)?;
+                let acc = self.expr(0)?;
+                self.expect(Tok::Comma)?;
+                let ket = self.expr(0)?;
+                self.expect(Tok::Comma)?;
+                let bra = self.expr(0)?;
+                self.expect(Tok::RParen)?;
+                Ok(Expr::Zipper2 {
+                    acc: Box::new(acc),
+                    ket: Box::new(ket),
+                    bra: Box::new(bra),
+                    span,
+                })
+            }
             // `max(a, b)` and `min(a, b)`. A closed set of two, not a call syntax: there are no
             // user functions in this language and a `(` after any other name is an error rather
             // than a call to something undefined. ADR-0027.

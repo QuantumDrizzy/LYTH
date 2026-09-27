@@ -15,6 +15,7 @@ use lyth_lang::BinOp;
 
 mod contracted;
 mod tiled;
+mod zipper_emit;
 
 /// The PTX ISA version each target first became legal in.
 ///
@@ -33,7 +34,7 @@ const TARGET_ISA: &[(&str, &str)] = &[
     ("sm_75", "6.3"),
 ];
 
-fn isa_for(arch: &str) -> Result<&'static str, EmitError> {
+pub(crate) fn isa_for(arch: &str) -> Result<&'static str, EmitError> {
     TARGET_ISA
         .iter()
         .find(|(t, _)| *t == arch)
@@ -89,6 +90,9 @@ pub fn emit(ir: &KernelIr, arch: &str) -> Result<Module, EmitError> {
 /// that must conflict. It is correct and slow, and it is not reachable from the language --
 /// only from the fixture that falsifies the claim.
 pub fn emit_with_skew(ir: &KernelIr, arch: &str, skewed: bool) -> Result<Module, EmitError> {
+    if ir.ops.iter().any(|op| matches!(op, Op::Zipper2 { .. })) {
+        return zipper_emit::emit(ir, arch);
+    }
     // The index space is bounded by the extent the streamed buffers declare, which the front
     // end has already checked they agree on. Taking "the first u32 parameter" instead was
     // right only while a kernel could have exactly one; with shapes a kernel may take a count
@@ -620,6 +624,11 @@ impl Emitter {
                     let r = self.f32();
                     line(out, &format!("neg.f32 {r}, {};", get(&regs, *src)));
                     regs.push((*dst, r));
+                }
+                Op::Zipper2 { .. } => {
+                    return Err(EmitError::Message(
+                        "zipper2 is lowered by emit_zipper2, not the elementwise body".into(),
+                    ));
                 }
             }
         }

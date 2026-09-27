@@ -423,6 +423,11 @@ impl Emitter {
                 );
                 regs.push((*dst, r));
             }
+            Op::Zipper2 { .. } => {
+                return Err(crate::EmitError::Message(
+                    "a tile cannot hold zipper2".into(),
+                ));
+            }
         }
         Ok(())
     }

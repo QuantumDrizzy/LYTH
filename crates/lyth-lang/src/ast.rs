@@ -475,6 +475,13 @@ pub enum Expr {
         span: Span,
     },
     Neg(Box<Expr>, Span),
+    /// `zipper2(acc, ket, bra)`. One 256-bit step, not an elementwise op.
+    Zipper2 {
+        acc: Box<Expr>,
+        ket: Box<Expr>,
+        bra: Box<Expr>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -484,7 +491,8 @@ impl Expr {
             | Expr::At { span: s, .. }
             | Expr::Const(_, s)
             | Expr::Bin { span: s, .. }
-            | Expr::Neg(_, s) => *s,
+            | Expr::Neg(_, s)
+            | Expr::Zipper2 { span: s, .. } => *s,
         }
     }
 }

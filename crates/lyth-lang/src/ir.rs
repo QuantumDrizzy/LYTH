@@ -190,6 +190,14 @@ pub enum Op {
         dst: RegId,
         src: RegId,
     },
+    /// One `ZIPPER2` step. `acc` is read as the incoming transfer matrix.
+    /// 256 flops on the whole register, charged as 32 per `f32` lane.
+    Zipper2 {
+        dst: RegId,
+        acc: RegId,
+        ket: RegId,
+        bra: RegId,
+    },
 }
 
 impl Op {
@@ -200,7 +208,8 @@ impl Op {
             | Op::Const { dst, .. }
             | Op::Bin { dst, .. }
             | Op::Fma { dst, .. }
-            | Op::Neg { dst, .. } => *dst,
+            | Op::Neg { dst, .. }
+            | Op::Zipper2 { dst, .. } => *dst,
         }
     }
 
@@ -214,8 +223,8 @@ impl Op {
             Op::Load { .. } | Op::Param { .. } | Op::Const { .. } => 0.0,
             Op::Bin { op, .. } => op.flops(),
             Op::Fma { .. } => 2.0,
-            // Negation is a sign flip, not an arithmetic op worth charging for.
             Op::Neg { .. } => 0.0,
+            Op::Zipper2 { .. } => crate::zipper2::FLOPS_PER_ELEMENT,
         }
     }
 }
@@ -1860,6 +1869,13 @@ impl Lowering<'_> {
                 let src = self.expr(inner)?;
                 let dst = self.fresh();
                 Ok(self.emit(Op::Neg { dst, src }))
+            }
+            Expr::Zipper2 { acc, ket, bra, .. } => {
+                let acc = self.expr(acc)?;
+                let ket = self.expr(ket)?;
+                let bra = self.expr(bra)?;
+                let dst = self.fresh();
+                Ok(self.emit(Op::Zipper2 { dst, acc, ket, bra }))
             }
             Expr::Bin { op, lhs, rhs, .. } => {
                 // Contract `a * b + c` and `c + a * b` into one fma. This is a structural

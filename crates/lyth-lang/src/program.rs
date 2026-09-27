@@ -25,6 +25,9 @@ pub struct Program {
     pub extents: BTreeMap<String, u32>,
     pub scalars: BTreeMap<String, f32>,
     pub prints: Vec<PrintRange>,
+    /// When a name is present, those f32s are the buffer. Absent names use `lyth_lang::inputs`,
+    /// which is what every existing program does. The host oracle must be given the same bytes.
+    pub buffers: BTreeMap<String, Vec<f32>>,
 }
 
 /// Half-open, and resolved: `print y` has become `y[0:n]`.
@@ -200,6 +203,7 @@ pub fn resolve(unit: &Unit, main: &Main, ir: &KernelIr) -> Result<Program, Progr
         extents,
         scalars,
         prints,
+        buffers: BTreeMap::new(),
     })
 }
 

@@ -1,0 +1,15 @@
+machine sm_120
+
+# One ZIPPER2 step. n is eight f32 lanes, one 256-bit register.
+# 256 flops on the instruction, 32 per lane. Four streams of 4 bytes: 16 bytes
+# per lane. 32/16 = 2.
+kernel step(n: u32, acc: [f32; n], ket: [f32; n], bra: [f32; n], out: [f32; n])
+    intensity 2
+
+    stream acc : dram -> reg
+    stream ket : dram -> reg
+    stream bra : dram -> reg
+    stream out : dram -> reg, drain
+
+    at reg:
+        out = zipper2(acc, ket, bra)

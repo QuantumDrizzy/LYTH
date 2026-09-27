@@ -266,7 +266,10 @@ the L1 hit rate the ADR-0018 adjustment needs. That is step 4's job, and this is
 not step 4.
 
 It joins the honest open list next to the bank-conflict excess from ADR-0018: small, consistent,
-inside the 2% tolerance, and not understood.
+inside the 2% tolerance. The bank-conflict half of that list is now **understood** (ADR-0018
+step 3, "Cause of the falsified zero"): the filed counts are shared-store L1TEX *arbitration*
+events, not address-pattern conflicts, so `predicted_bank_conflicts: 0` stays and the counter
+is the wrong oracle for that field. The L2 overshoot above is still open.
 
 ## Step 4, as measured
 
