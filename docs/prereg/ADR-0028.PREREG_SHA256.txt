@@ -1,0 +1,5 @@
+sha256=ac49058c34352b7f4bb77ea09edd80e4ca0d34c5d5007a1b6dbfb383079c7fe7
+file=docs/prereg/ADR-0028.prereg-frozen.md
+frozen_at=2026-09-29T01:51:12+02:00
+git_head=c20651afbab6dc6413342f31cda32a04b2aa7296
+note=ADR-0028 as proposed on 2026-09-18, frozen at acceptance before any split code; P1-P4 are its predictions
