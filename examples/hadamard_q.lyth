@@ -1,0 +1,34 @@
+machine sm_120
+
+# Una puerta Hadamard sobre CUALQUIER qubit q de un vector de estado (ADR-0028).
+#
+#   Con w = 2^q, el elemento k de la vista j es el elemento (k / w) * 2w + j * w + (k % w)
+#   del vector: las amplitudes cuyo bit q vale j. La vista es un nombre, no una copia.
+#
+#   El cuerpo es el de hadamard.lyth, byte a byte. Con w = n/2 (el qubit superior) este
+#   kernel ES hadamard; con w = 1 es el qubit 0.
+#
+# Amplitudes complejas, layout separado re/im; n amplitudes, n/2 pares.
+kernel hadamard_q(n: u32, w: u32, s: f32,
+                  re: [f32; n], im: [f32; n], qr: [f32; n], qi: [f32; n])
+    intensity 0.25
+
+    split re into p0r, p1r : blocks w
+    split im into p0i, p1i : blocks w
+    split qr into q0r, q1r : blocks w
+    split qi into q0i, q1i : blocks w
+
+    stream p0r : dram -> reg
+    stream p0i : dram -> reg
+    stream p1r : dram -> reg
+    stream p1i : dram -> reg
+    stream q0r : dram -> reg, drain
+    stream q0i : dram -> reg, drain
+    stream q1r : dram -> reg, drain
+    stream q1i : dram -> reg, drain
+
+    at reg:
+        q0r = s * (p0r + p1r)
+        q0i = s * (p0i + p1i)
+        q1r = s * (p0r - p1r)
+        q1i = s * (p0i - p1i)

@@ -312,6 +312,7 @@ impl Parser {
         let mut coarsen = None;
         let mut reductions = Vec::new();
         let mut contract = None;
+        let mut splits = Vec::new();
         let mut blocks = Vec::new();
 
         loop {
@@ -359,11 +360,13 @@ impl Parser {
                     return self.msg("`contract` declared twice; v1 contracts one axis");
                 }
                 contract = Some(self.contract()?);
+            } else if self.at_word("split") {
+                splits.push(self.split()?);
             } else if self.at_word("at") {
                 blocks.push(self.block()?);
             } else {
                 return self.expected(
-                    "`intensity`, `space`, `tile`, `coarsen`, `stream`, `reduce`, `contract` or `at`",
+                    "`intensity`, `space`, `tile`, `coarsen`, `stream`, `reduce`, `contract`, `split` or `at`",
                 );
             }
         }
@@ -381,8 +384,34 @@ impl Parser {
             coarsen,
             reductions,
             contract,
+            splits,
             blocks,
         })
+    }
+
+    /// `split re into p0, p1 : blocks w` (ADR-0028).
+    ///
+    /// Exactly two views, a width that is a name, nothing else: no offsets, no sub-ranges, no
+    /// arithmetic on the split point. Each of those is a refusal here rather than a feature
+    /// later, because each makes the address of an element something the reader has to compute.
+    fn split(&mut self) -> Result<SplitDecl, ParseError> {
+        let span = self.span();
+        self.expect(Tok::Word("split".into()))?;
+        let (base, _) = self.word()?;
+        self.expect(Tok::Word("into".into()))?;
+        let (v0, _) = self.word()?;
+        self.expect(Tok::Comma)?;
+        let (v1, _) = self.word()?;
+        if self.eat(&Tok::Comma) {
+            return self.msg(format!(
+                "`split {base}` names more than two views; a split is into two, the blocks whose \
+                 bit is 0 and whose bit is 1 (ADR-0028)"
+            ));
+        }
+        self.expect(Tok::Colon)?;
+        self.expect(Tok::Word("blocks".into()))?;
+        let (width, _) = self.word()?;
+        Ok(SplitDecl { base, views: [v0, v1], width, span })
     }
 
     /// `contract sum p : k`

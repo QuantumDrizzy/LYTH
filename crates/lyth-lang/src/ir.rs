@@ -48,10 +48,40 @@ pub struct KernelIr {
     pub reduction: Option<ReductionIr>,
     /// The contracted axis, resolved. `None` for every kernel that does not contract.
     pub contract: Option<ContractIr>,
+    /// Split views (ADR-0028). **Not parameters**: a view is a name for half of a base buffer,
+    /// so the launch signature carries the base and never the view. Streams and the body name
+    /// views; [`KernelIr::buffer_param`] resolves one to the base it addresses.
+    pub views: Vec<ViewIr>,
     pub cost: Cost,
 }
 
+/// One view of a split, resolved (ADR-0028).
+///
+/// Element `k` of the view is element `(k / w) * 2w + part * w + (k % w)` of `base`, with `w`
+/// the value of the `u32` parameter `width`. The loop runs over half the base: a split kernel's
+/// index space is the number of pairs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ViewIr {
+    pub name: String,
+    pub base: String,
+    /// 0 for the block whose bit is 0, 1 for the block whose bit is 1.
+    pub part: u8,
+    pub width: String,
+}
+
 impl KernelIr {
+    /// The parameter a streamed name reads and writes: the buffer itself, or for a split view
+    /// the base it is a view of. Every back end asks this rather than searching `params` by the
+    /// stream's name, which would find nothing for a view.
+    pub fn buffer_param(&self, name: &str) -> Option<&Param> {
+        let base = self.views.iter().find(|v| v.name == name).map_or(name, |v| v.base.as_str());
+        self.params.iter().find(|p| p.name == base)
+    }
+
+    /// The view named `name`, if it is one.
+    pub fn view(&self, name: &str) -> Option<&ViewIr> {
+        self.views.iter().find(|v| v.name == name)
+    }
     /// Threads per block: the tile's area divided by what each thread owns of it.
     ///
     /// **One definition.** The manifest publishes this and `lyth run` launches it, and when the
@@ -688,6 +718,22 @@ pub enum LowerError {
     NotStreamed { span: Span, name: String },
     #[error("{span}: `stream {name}` names no parameter of this kernel")]
     StreamOfNothing { span: Span, name: String },
+    #[error("{span}: `split {base}`: `{base}` is not a buffer parameter of this kernel. A split views a real buffer (ADR-0028).")]
+    SplitOfNothing { span: Span, base: String },
+    #[error("{span}: `split {base} ... : blocks {width}`: `{width}` is not a u32 parameter. The block width is passed by the caller so the launch can check it divides the buffer (ADR-0028).")]
+    SplitWidthNotU32 { span: Span, base: String, width: String },
+    #[error("{span}: `split {base} into ...`: the view name `{name}` is already taken. A view is a new name for half a buffer, and one name means one address rule (ADR-0028).")]
+    SplitNameTaken { span: Span, base: String, name: String },
+    #[error("{span}: `{name}` is split twice. A split is into two at one width; re-splitting a buffer or a view is a nested split, which needs its own ADR (ADR-0028).")]
+    SplitTwice { span: Span, name: String },
+    #[error("{span}: `{name}` is split, so the body names its views, never the base. Streaming the base as well would give one buffer two address rules (ADR-0028).")]
+    SplitBaseStreamed { span: Span, name: String },
+    #[error("{span}: `stream {name}` is not a split view, and this kernel splits. In v1 a split kernel streams only views: its loop runs over pairs, and a plain buffer has no pair (ADR-0028).")]
+    SplitMixed { span: Span, name: String },
+    #[error("{span}: `split` is rank 1 and elementwise in v1: no `space`, `tile`, `coarsen`, `reduce` or `contract` beside it (ADR-0028). `{with}` is declared here.")]
+    SplitUnsupported { span: Span, with: String },
+    #[error("{span}: `{base}` has a view drained and a view read: an in-place gate. Refused until the host oracle can evaluate aliasing honestly, which it cannot (ADR-0028).")]
+    SplitInPlace { span: Span, base: String },
     #[error(
         "{span}: `{buffer}` is declared `[f32; {dim}]` but `{dim}` is not a u32 parameter of this kernel. An extent names a length the caller passes, or `blocks` for a reduction target."
     )]
@@ -938,6 +984,61 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
 
     check_shapes(kernel, &params)?;
 
+    // --- splits (ADR-0028) ----------------------------------------------------------
+    //
+    // Resolved before the streams, because streams name views. A view enters the name map
+    // with its base's element type and nowhere else: not `params`, not the launch signature.
+    let mut params = params;
+    let mut views: Vec<ViewIr> = Vec::new();
+    let mut split_bases: BTreeSet<&str> = BTreeSet::new();
+    for sp in &kernel.splits {
+        let unsupported = [
+            (kernel.space.is_some(), "space"),
+            (kernel.tile.is_some(), "tile"),
+            (kernel.coarsen.is_some(), "coarsen"),
+            (!kernel.reductions.is_empty(), "reduce"),
+            (kernel.contract.is_some(), "contract"),
+        ];
+        if let Some((_, with)) = unsupported.iter().find(|(on, _)| *on) {
+            return Err(LowerError::SplitUnsupported { span: sp.span, with: (*with).to_string() });
+        }
+        if views.iter().any(|v| v.name == sp.base) {
+            return Err(LowerError::SplitTwice { span: sp.span, name: sp.base.clone() });
+        }
+        let Some(base_ty) = params.get(sp.base.as_str()).copied().filter(|t| t.is_buffer()) else {
+            if views.iter().any(|v| v.name == sp.base) {
+                return Err(LowerError::SplitTwice { span: sp.span, name: sp.base.clone() });
+            }
+            return Err(LowerError::SplitOfNothing { span: sp.span, base: sp.base.clone() });
+        };
+        if params.get(sp.width.as_str()) != Some(&Ty::U32) {
+            return Err(LowerError::SplitWidthNotU32 {
+                span: sp.span,
+                base: sp.base.clone(),
+                width: sp.width.clone(),
+            });
+        }
+        if !split_bases.insert(sp.base.as_str()) {
+            return Err(LowerError::SplitTwice { span: sp.span, name: sp.base.clone() });
+        }
+        for (part, name) in sp.views.iter().enumerate() {
+            if params.contains_key(name.as_str()) || sp.views[0] == sp.views[1] {
+                return Err(LowerError::SplitNameTaken {
+                    span: sp.span,
+                    base: sp.base.clone(),
+                    name: name.clone(),
+                });
+            }
+            params.insert(name.as_str(), base_ty);
+            views.push(ViewIr {
+                name: name.clone(),
+                base: sp.base.clone(),
+                part: part as u8,
+                width: sp.width.clone(),
+            });
+        }
+    }
+
     // A tile blocks the space, so there has to be one, and one dimension per index.
     if let Some(t) = &kernel.tile {
         let Some(sp) = &kernel.space else {
@@ -967,6 +1068,12 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
                 span: s.span,
                 name: s.buffer.clone(),
             });
+        }
+        if split_bases.contains(s.buffer.as_str()) {
+            return Err(LowerError::SplitBaseStreamed { span: s.span, name: s.buffer.clone() });
+        }
+        if !views.is_empty() && !views.iter().any(|v| v.name == s.buffer) {
+            return Err(LowerError::SplitMixed { span: s.span, name: s.buffer.clone() });
         }
         if !seen.insert(s.buffer.clone()) {
             return Err(LowerError::DuplicateStream {
@@ -1421,6 +1528,26 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
         }
     };
 
+    // A view costs what an element of its base costs: the split moves addresses, not bytes.
+    let cost_params: Vec<crate::ast::Param> = kernel
+        .params
+        .iter()
+        .cloned()
+        .chain(views.iter().map(|v| {
+            let base = kernel.params.iter().find(|p| p.name == v.base).expect("resolved above");
+            crate::ast::Param { name: v.name.clone(), ..base.clone() }
+        }))
+        .collect();
+    // In place: a base with one view drained and one read (ADR-0028). After the body, because
+    // which views are read is the body's answer.
+    for v in &views {
+        let drained = streams.iter().any(|s| s.drain && views.iter().any(|w| w.base == v.base && w.name == s.buffer));
+        let read = streams.iter().any(|s| s.read && views.iter().any(|w| w.base == v.base && w.name == s.buffer));
+        if drained && read {
+            let span = kernel.splits.iter().find(|s| s.base == v.base).map(|s| s.span).unwrap_or(kernel.span);
+            return Err(LowerError::SplitInPlace { span, base: v.base.clone() });
+        }
+    }
     let cost = derive_cost(CostInputs {
         streams: &streams,
         ops: &ops,
@@ -1429,7 +1556,7 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
         space: space.as_ref(),
         tile: kernel.tile.as_ref().map(|t| t.dims.as_slice()),
         coarsen: coarsen.as_deref(),
-        params: &kernel.params,
+        params: &cost_params,
     });
 
     // The word `asymptotic`, required exactly where the claim is a limit and refused
@@ -1472,6 +1599,7 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
         drains,
         reduction,
         contract,
+        views,
         cost,
     })
 }

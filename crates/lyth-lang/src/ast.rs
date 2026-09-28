@@ -82,8 +82,27 @@ pub struct Kernel {
     /// `contract sum p : k` — an axis walked and combined inside one thread. `None` for every
     /// kernel that does not contract. At most one in v1. See ADR-0018.
     pub contract: Option<ContractDecl>,
+    /// `split re into p0, p1 : blocks w` (ADR-0028). Empty for every kernel that does not split.
+    pub splits: Vec<SplitDecl>,
     /// `at <level>:` blocks, in source order.
     pub blocks: Vec<Block>,
+}
+
+/// `split re into p0, p1 : blocks w` (ADR-0028): two **names** for the even and odd blocks of
+/// one real buffer, at a declared block width. Element `k` of view `j` is element
+/// `(k / w) * 2w + j * w + (k % w)` of the base. A view moves nothing; it is an address rule.
+///
+/// On a state vector with `w = 2^q` the two views are the amplitudes whose bit `q` is 0 and 1,
+/// which is what a single-qubit gate on qubit `q` mixes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SplitDecl {
+    /// The real buffer, a kernel parameter. Never named in the body.
+    pub base: String,
+    /// The block-0 view and the block-1 view. Exactly two: a split is into two.
+    pub views: [String; 2],
+    /// The `u32` parameter holding the block width.
+    pub width: String,
+    pub span: Span,
 }
 
 /// `reduce sum p : reg -> smem -> dram into partial`
