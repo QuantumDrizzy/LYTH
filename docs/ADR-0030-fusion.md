@@ -95,3 +95,15 @@ every qubit, through generated kernels the compiler costs like any other.
 different claim, "equal to rounding", and not this one). A dense product matrix. In-place passes
 (still ping-pong: 29 qubits on 16 GB, not 30). Groups above five qubits. Anything about speed against
 cuStateVec, which does not run on this Windows machine and is not measured here.
+
+## Progress notes (the frozen predictions above are unedited)
+
+- **Step 1** (`953d1ae`): splits to depth 5, locals a later statement reads; every leaf of depth-3,
+  4 and 5 splits checked against bit insertion; `dead-local` still refused.
+- **Step 2** (`644d023`) and **Q4, measured** (tool frozen with that commit; results in
+  `docs/prereg/ADR-0030.q4-results.json`): the emitter stores a split kernel's leaves grouped by
+  buffer, in split-tree order. `cu_q` as declared now reaches the L2 at 64.9 - 68.6 B/quad at the
+  twelve P2 follow-up pairs, down from 73.6 - 119.1; against `cu_q_grouped`'s recorded figures the
+  ratio is 0.958 - 1.050. **Q4 PASS**, and at `(0, 8)` only just: 1.0499 against a 5% bound. The tree
+  order (00, 01, 10, 11) is not the order `cu_q_grouped` measured with (00, 10, 01, 11); grouping by
+  buffer is what mattered, which is what the pass shows and no more. Every bit-exact test unchanged.
