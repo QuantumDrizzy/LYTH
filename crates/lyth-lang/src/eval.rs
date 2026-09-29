@@ -33,6 +33,8 @@ pub enum EvalError {
     },
     #[error("zipper2 is one 256-bit step: n must be 8 and the body is that one op, got n = {0}")]
     Zipper2(usize),
+    #[error("{0}")]
+    Unsupported(String),
 }
 
 /// Host-side inputs, keyed by parameter name.
@@ -67,6 +69,9 @@ pub fn eval_with_launch(
     grid: usize,
     block: usize,
 ) -> Result<Inputs, EvalError> {
+    if ir.walk_depth() > 1 {
+        return Err(EvalError::Unsupported("ADR-0029 step 1 lowers a split of a view; this back end walks it from step 3. Refused rather than addressed as depth 1.".into()));
+    }
     // Before the parameter check, not after: a contraction sizes each buffer by its own shape
     // -- `a` is `m x k` where `c` is `m x n` -- and the check below asks every buffer for `n`
     // elements, which is a rule from the time when one linear index addressed them all.

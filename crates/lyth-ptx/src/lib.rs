@@ -47,6 +47,8 @@ pub(crate) fn isa_for(arch: &str) -> Result<&'static str, EmitError> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum EmitError {
+    #[error("{0}")]
+    Unsupported(String),
     #[error(
         "kernel `{0}` has no parameter that bounds the index space; add an `n: u32` parameter"
     )]
@@ -90,6 +92,9 @@ pub fn emit(ir: &KernelIr, arch: &str) -> Result<Module, EmitError> {
 /// that must conflict. It is correct and slow, and it is not reachable from the language --
 /// only from the fixture that falsifies the claim.
 pub fn emit_with_skew(ir: &KernelIr, arch: &str, skewed: bool) -> Result<Module, EmitError> {
+    if ir.walk_depth() > 1 {
+        return Err(EmitError::Unsupported("ADR-0029 step 1 lowers a split of a view; this back end walks it from step 3. Refused rather than addressed as depth 1.".into()));
+    }
     if ir.ops.iter().any(|op| matches!(op, Op::Zipper2 { .. })) {
         return zipper_emit::emit(ir, arch);
     }

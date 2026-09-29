@@ -127,7 +127,7 @@ fn refusals_name_what_is_wrong() {
         ("    split re into p0r, p1r : blocks s\n    split qr into q0r, q1r : blocks w", OK_STREAMS, "not a u32 parameter"),
         ("    split re into p0r, x : blocks w\n    split qr into q0r, q1r : blocks w", OK_STREAMS, "already taken"),
         ("    split re into p0r, p1r : blocks w\n    split re into a, b : blocks w\n    split qr into q0r, q1r : blocks w", OK_STREAMS, "split twice"),
-        ("    split re into p0r, p1r : blocks w\n    split p0r into a, b : blocks w\n    split qr into q0r, q1r : blocks w", OK_STREAMS, "split twice"),
+        ("    split re into p0r, p1r : blocks w\n    split p0r into a, b : blocks w\n    split qr into q0r, q1r : blocks w", OK_STREAMS, "never the base"), // ADR-0029 lifted the refusal of a split of a view; streaming the split view stays refused
         (OK_SPLITS, "    stream re : dram -> reg\n    stream p0r : dram -> reg\n    stream p1r : dram -> reg\n    stream q0r : dram -> reg, drain\n    stream q1r : dram -> reg, drain", "never the base"),
         (OK_SPLITS, "    stream x : dram -> reg\n    stream p0r : dram -> reg\n    stream p1r : dram -> reg\n    stream q0r : dram -> reg, drain\n    stream q1r : dram -> reg, drain", "streams only views"),
         ("    split re into p0r, p1r : blocks w\n    split qr into q0r, q1r : blocks w\n    space i : n", OK_STREAMS, "rank 1 and elementwise"),

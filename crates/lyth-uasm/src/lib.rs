@@ -68,6 +68,9 @@ fn split_plan(ir: &KernelIr, p: &Program) -> Result<Option<SplitPlan>, EmitError
     if ir.views.is_empty() {
         return Ok(None);
     }
+    if ir.walk_depth() > 1 {
+        return Err(refuse("ADR-0029 step 1 lowers a split of a view; this back end walks it from step 3. Refused rather than addressed as depth 1."));
+    }
     let mut widths: Vec<&str> = ir.views.iter().map(|v| v.width.as_str()).collect();
     widths.sort_unstable();
     widths.dedup();

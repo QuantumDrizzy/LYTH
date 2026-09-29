@@ -80,6 +80,9 @@ pub fn view_index(w: u32, part: u8, k: u32) -> u64 {
     (k / w) * 2 * w + u64::from(part) * w + (k % w)
 }
 
+/// The deepest split ADR-0029 claims: a split of a view of a buffer.
+pub const MAX_SPLIT_DEPTH: u32 = 2;
+
 /// Warps sampled when deriving a view's sector figure. 2^14 warps is 524,288 pairs: every warp
 /// of anything smaller, and the pattern repeats or saturates long before that for anything
 /// larger.
@@ -109,6 +112,12 @@ impl SplitSector {
 /// Bytes of sector one element of a view costs at width `w`: the distinct 32-byte sectors a warp
 /// of 32 consecutive elements touches, times 32, over the elements in the warp.
 pub fn view_sector_bytes(w: u32, part: u8, elem: u32, pairs: u32) -> f64 {
+    sector_bytes(|k| view_index(w, part, k), elem, pairs)
+}
+
+/// The same count for any address rule: `index(k)` is the buffer element that element `k` of the
+/// walk touches. A view at any depth is charged by walking [`KernelIr::base_index`] through this.
+pub fn sector_bytes(index: impl Fn(u32) -> u64, elem: u32, pairs: u32) -> f64 {
     const WARP: u32 = 32;
     let warps = pairs.div_ceil(WARP).min(SECTOR_SAMPLE_WARPS);
     let (mut sectors, mut elements) = (0u64, 0u64);
@@ -116,7 +125,7 @@ pub fn view_sector_bytes(w: u32, part: u8, elem: u32, pairs: u32) -> f64 {
     for m in 0..warps {
         let (k0, k1) = (m * WARP, ((m + 1) * WARP).min(pairs));
         seen.clear();
-        seen.extend((k0..k1).map(|k| view_index(w, part, k) * u64::from(elem) / 32));
+        seen.extend((k0..k1).map(|k| index(k) * u64::from(elem) / 32));
         seen.sort_unstable();
         seen.dedup();
         sectors += seen.len() as u64;
@@ -164,8 +173,15 @@ impl KernelIr {
     /// either missing from both views or hangs past the end. Cover and disjointness are
     /// therefore one arithmetic check, and it is made here, at launch, where the numbers are
     /// known -- the compiler cannot make it because `w` is the caller's.
+    ///
+    /// **At any depth (ADR-0029).** A split of a view is a split of a buffer of half the length,
+    /// so each level is this same check against its own length -- `len / 2^depth(base)` -- and
+    /// the walk is the root's length over `2^depth` of the leaves: pairs at depth 1, quads at 2.
+    /// A composition of bijections is a bijection, so the per-level checks are the whole cover.
     pub fn split_pairs(&self, extents: &BTreeMap<String, u32>) -> Result<Option<u32>, ViewLaunchError> {
-        let mut pairs: Option<u32> = None;
+        if self.views.is_empty() {
+            return Ok(None);
+        }
         let mut seen: BTreeSet<&str> = BTreeSet::new();
         for v in &self.views {
             if !seen.insert(v.base.as_str()) {
@@ -175,16 +191,23 @@ impl KernelIr {
             if w == 0 {
                 return Err(ViewLaunchError::WidthZero { width: v.width.clone() });
             }
-            let extent = self
+            let root = self.root_of(&v.base);
+            let root_extent = self
                 .params
                 .iter()
-                .find(|p| p.name == v.base)
+                .find(|p| p.name == root)
                 .and_then(|p| p.shape.first())
                 .cloned()
                 .unwrap_or_default();
-            let Some(len) = extents.get(&extent).copied() else {
-                return Err(ViewLaunchError::ExtentMissing { base: v.base.clone(), extent });
+            let Some(root_len) = extents.get(&root_extent).copied() else {
+                return Err(ViewLaunchError::ExtentMissing { base: v.base.clone(), extent: root_extent });
             };
+            // The level's own length: the buffer's, halved once per split above this one. The
+            // level above has already been checked (views are declared parent first), so the
+            // halving is exact.
+            let above = self.depth(&v.base);
+            let len = root_len >> above;
+            let extent = if above == 0 { root_extent } else { format!("{root_extent} / {}", 1u32 << above) };
             let block = 2 * u64::from(w);
             let rem = u64::from(len) % block;
             if rem != 0 {
@@ -203,9 +226,17 @@ impl KernelIr {
                     },
                 });
             }
-            pairs = Some(len / 2);
         }
-        Ok(pairs)
+        // The walk: the buffer's length over 2^depth of what the kernel streams. Every split
+        // buffer has one length (lowering refuses otherwise) and every streamed leaf one depth.
+        let leaf = match self.walk_depth() {
+            0 => self.views.iter().map(|v| self.depth(&v.name)).max().unwrap_or(1),
+            d => d,
+        };
+        let root = self.root_of(&self.views[0].name);
+        let extent = self.params.iter().find(|p| p.name == root).and_then(|p| p.shape.first());
+        let len = extent.and_then(|e| extents.get(e)).copied().unwrap_or(0);
+        Ok(Some(len >> leaf))
     }
 
     /// The exact L1-to-L2 sector figure of a split kernel at this launch, derived by walking the
@@ -227,10 +258,16 @@ impl KernelIr {
         };
         let (mut payload, mut sectors) = (0.0, 0.0);
         for st in &self.streams {
-            let Some(v) = self.view(&st.buffer) else { continue };
+            if self.view(&st.buffer).is_none() {
+                continue;
+            }
             let elem = self.buffer_param(&st.buffer).map_or(4, |p| p.ty.bytes());
-            let w = extents[&v.width];
-            let per = view_sector_bytes(w, v.part, elem, pairs);
+            // At any depth: the composed address, the one definition (ADR-0029 step 2).
+            let per = sector_bytes(
+                |k| self.base_index(&st.buffer, extents, u64::from(k)).expect("split_pairs checked every width"),
+                elem,
+                pairs,
+            );
             for on in [st.read, st.drain] {
                 if on {
                     payload += f64::from(elem);
@@ -242,11 +279,54 @@ impl KernelIr {
     }
 
     /// The parameter a streamed name reads and writes: the buffer itself, or for a split view
-    /// the base it is a view of. Every back end asks this rather than searching `params` by the
-    /// stream's name, which would find nothing for a view.
+    /// the buffer at the root of its chain of splits. Every back end asks this rather than
+    /// searching `params` by the stream's name, which would find nothing for a view.
     pub fn buffer_param(&self, name: &str) -> Option<&Param> {
-        let base = self.views.iter().find(|v| v.name == name).map_or(name, |v| v.base.as_str());
-        self.params.iter().find(|p| p.name == base)
+        let root = self.root_of(name);
+        self.params.iter().find(|p| p.name == root)
+    }
+
+    /// The real buffer under a name: itself, or the base of the base of ... a view (ADR-0029).
+    pub fn root_of<'a>(&'a self, mut name: &'a str) -> &'a str {
+        while let Some(v) = self.view(name) {
+            name = &v.base;
+        }
+        name
+    }
+
+    /// How many splits lie between a name and its buffer: 0 for a buffer, 1 for a view of one,
+    /// 2 for a view of a view (ADR-0029).
+    pub fn depth(&self, name: &str) -> u32 {
+        let mut d = 0;
+        let mut at = name;
+        while let Some(v) = self.view(at) {
+            d += 1;
+            at = &v.base;
+        }
+        d
+    }
+
+    /// The depth of the views this kernel streams: it walks `len / 2^depth` elements. 0 for a
+    /// kernel that does not split. Lowering refuses leaves of different depths, so one number
+    /// describes them all.
+    pub fn walk_depth(&self) -> u32 {
+        self.streams.iter().map(|s| self.depth(&s.buffer)).max().unwrap_or(0)
+    }
+
+    /// Element `k` of a view, as an index into its buffer: [`view_index`] applied once per level,
+    /// from the view up to the buffer (ADR-0029). **The one definition** of a split address at
+    /// any depth; at depth 1 it is `view_index` itself. `None` if a width has no value.
+    pub fn base_index(&self, name: &str, extents: &BTreeMap<String, u32>, k: u64) -> Option<u64> {
+        let mut idx = k;
+        let mut at = name;
+        while let Some(v) = self.view(at) {
+            let w = *extents.get(&v.width)?;
+            // Every intermediate index is below the length of the level it indexes, which is at
+            // most the buffer's, a u32.
+            idx = view_index(w, v.part, u32::try_from(idx).ok()?);
+            at = &v.base;
+        }
+        Some(idx)
     }
 
     /// The view named `name`, if it is one.
@@ -897,8 +977,12 @@ pub enum LowerError {
     SplitNameTaken { span: Span, base: String, name: String },
     #[error("{span}: `split {base}` is `[f32; {dim}]` but `{other}` is split with `{other_dim}`. The views are walked by one loop over pairs, so every split buffer is the same length (ADR-0028).")]
     SplitExtentsDiffer { span: Span, base: String, dim: String, other: String, other_dim: String },
-    #[error("{span}: `{name}` is split twice. A split is into two at one width; re-splitting a buffer or a view is a nested split, which needs its own ADR (ADR-0028).")]
+    #[error("{span}: `{name}` is split twice. A split is into two at one width, so one name has one split; to split its halves again, split the views (ADR-0029).")]
     SplitTwice { span: Span, name: String },
+    #[error("{span}: `split {name}` would be a split at depth {depth}. Depth 2 -- a split of a view, the two-qubit gates -- is what ADR-0029 tests and claims; deeper is a three-qubit gate and its own amendment.")]
+    SplitTooDeep { span: Span, name: String, depth: u32 },
+    #[error("{span}: `stream {name}` is a view at depth {depth} and `{other}` is at depth {other_depth}. A split kernel walks one count -- pairs at depth 1, quads at depth 2 -- so every view it streams is at the same depth (ADR-0029).")]
+    SplitDepthsDiffer { span: Span, name: String, depth: u32, other: String, other_depth: u32 },
     #[error("{span}: `{name}` is split, so the body names its views, never the base. Streaming the base as well would give one buffer two address rules (ADR-0028).")]
     SplitBaseStreamed { span: Span, name: String },
     #[error("{span}: `stream {name}` is not a split view, and this kernel splits. In v1 a split kernel streams only views: its loop runs over pairs, and a plain buffer has no pair (ADR-0028).")]
@@ -1179,13 +1263,20 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
         if let Some((_, with)) = unsupported.iter().find(|(on, _)| *on) {
             return Err(LowerError::SplitUnsupported { span: sp.span, with: (*with).to_string() });
         }
-        if views.iter().any(|v| v.name == sp.base) {
-            return Err(LowerError::SplitTwice { span: sp.span, name: sp.base.clone() });
+        // A split of a view (ADR-0029): the view is a buffer of half the length, and splitting
+        // it again composes `view_index` with itself. Depth 2 is what is tested and claimed.
+        let base_depth = {
+            let (mut d, mut at) = (0u32, sp.base.as_str());
+            while let Some(v) = views.iter().find(|v| v.name == at) {
+                d += 1;
+                at = v.base.as_str();
+            }
+            d
+        };
+        if base_depth >= MAX_SPLIT_DEPTH {
+            return Err(LowerError::SplitTooDeep { span: sp.span, name: sp.base.clone(), depth: base_depth + 1 });
         }
         let Some(base_ty) = params.get(sp.base.as_str()).copied().filter(|t| t.is_buffer()) else {
-            if views.iter().any(|v| v.name == sp.base) {
-                return Err(LowerError::SplitTwice { span: sp.span, name: sp.base.clone() });
-            }
             return Err(LowerError::SplitOfNothing { span: sp.span, base: sp.base.clone() });
         };
         if params.get(sp.width.as_str()) != Some(&Ty::U32) {
@@ -1307,6 +1398,35 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
             // `KernelIr::split_sector` (ADR-0028 step 3).
             coalesced: !views.iter().any(|v| v.name == s.buffer),
         });
+    }
+    // One walk: every streamed view at one depth (ADR-0029). A kernel that streamed a pair and
+    // a quad would walk two different counts with one index.
+    if !views.is_empty() {
+        let depth_of = |name: &str| {
+            let (mut d, mut at) = (0u32, name);
+            while let Some(v) = views.iter().find(|v| v.name == at) {
+                d += 1;
+                at = v.base.as_str();
+            }
+            d
+        };
+        let mut first: Option<(&str, u32)> = None;
+        for s in &kernel.streams {
+            let d = depth_of(&s.buffer);
+            match first {
+                None => first = Some((s.buffer.as_str(), d)),
+                Some((other, od)) if od != d => {
+                    return Err(LowerError::SplitDepthsDiffer {
+                        span: s.span,
+                        name: s.buffer.clone(),
+                        depth: d,
+                        other: other.to_string(),
+                        other_depth: od,
+                    });
+                }
+                Some(_) => {}
+            }
+        }
     }
 
     // --- body ---------------------------------------------------------------------
@@ -1732,18 +1852,32 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
         .iter()
         .cloned()
         .chain(views.iter().map(|v| {
-            let base = kernel.params.iter().find(|p| p.name == v.base).expect("resolved above");
+            let mut root = v.base.as_str();
+            while let Some(u) = views.iter().find(|u| u.name == root) {
+                root = u.base.as_str();
+            }
+            let base = kernel.params.iter().find(|p| p.name == root).expect("resolved above");
             crate::ast::Param { name: v.name.clone(), ..base.clone() }
         }))
         .collect();
     // In place: a base with one view drained and one read (ADR-0028). After the body, because
     // which views are read is the body's answer.
+    // By buffer, not by base: at depth 2 a read leaf and a drained leaf of one buffer can have
+    // different parents and are still the same memory (ADR-0029).
+    let root_of = |name: &str| -> String {
+        let mut at = name;
+        while let Some(u) = views.iter().find(|u| u.name == at) {
+            at = u.base.as_str();
+        }
+        at.to_string()
+    };
     for v in &views {
-        let drained = streams.iter().any(|s| s.drain && views.iter().any(|w| w.base == v.base && w.name == s.buffer));
-        let read = streams.iter().any(|s| s.read && views.iter().any(|w| w.base == v.base && w.name == s.buffer));
+        let root = root_of(&v.name);
+        let drained = streams.iter().any(|s| s.drain && views.iter().any(|w| w.name == s.buffer) && root_of(&s.buffer) == root);
+        let read = streams.iter().any(|s| s.read && views.iter().any(|w| w.name == s.buffer) && root_of(&s.buffer) == root);
         if drained && read {
-            let span = kernel.splits.iter().find(|s| s.base == v.base).map(|s| s.span).unwrap_or(kernel.span);
-            return Err(LowerError::SplitInPlace { span, base: v.base.clone() });
+            let span = kernel.splits.iter().find(|s| s.base == root).map(|s| s.span).unwrap_or(kernel.span);
+            return Err(LowerError::SplitInPlace { span, base: root });
         }
     }
     let cost = derive_cost(CostInputs {

@@ -1,0 +1,65 @@
+machine sm_120
+
+# Una puerta controlada C-U sobre CUALQUIER par de qubits (c = control, t = objetivo).
+#
+#   Los cuatro conjuntos de un "quad" -- las amplitudes que difieren solo en los bits c y t --
+#   son las hojas de un split de una vista (ADR-0029):
+#
+#       split re into hr0, hr1   : blocks wc     # bit c: 0 -> hr0, 1 -> hr1
+#       split hr0 into pr00, pr01 : blocks wt    # de hr0, bit t
+#
+#   El ancho interior cuenta elementos de la vista padre, no del vector: con c > t es wc = 2^c,
+#   wt = 2^t; con c < t la vista padre ha perdido el bit c, y wt = 2^(t-1). La hoja `pXY` tiene
+#   el bit c = X y el bit t = Y.
+#
+# Amplitudes complejas, layout separado re/im; n amplitudes, n/4 quads.
+#
+# La mitad con el control a 0 se copia; U = [[a, b], [c, d]] (el cuerpo de gate_q) actua sobre la
+# mitad con el control a 1. CNOT es U = X, CZ es U = Z, una fase controlada es U = diag(1, e^(i phi)).
+# Las copias van al final del cuerpo para que sus cargas no esten vivas durante las cadenas de fma:
+# en Unibit eso decide si el cuerpo cabe en los registros.
+kernel cu_q(n: u32, wc: u32, wt: u32,
+            ar: f32, ai: f32, br: f32, bi: f32,
+            cr: f32, ci: f32, dr: f32, di: f32,
+            re: [f32; n], im: [f32; n], qr: [f32; n], qi: [f32; n])
+    intensity 0.4375
+
+    split re into hr0, hr1 : blocks wc
+    split hr0 into pr00, pr01 : blocks wt
+    split hr1 into pr10, pr11 : blocks wt
+    split im into hi0, hi1 : blocks wc
+    split hi0 into pi00, pi01 : blocks wt
+    split hi1 into pi10, pi11 : blocks wt
+    split qr into gr0, gr1 : blocks wc
+    split gr0 into qr_00, qr_01 : blocks wt
+    split gr1 into qr_10, qr_11 : blocks wt
+    split qi into gi0, gi1 : blocks wc
+    split gi0 into qi_00, qi_01 : blocks wt
+    split gi1 into qi_10, qi_11 : blocks wt
+
+    stream pr00 : dram -> reg
+    stream pi00 : dram -> reg
+    stream pr01 : dram -> reg
+    stream pi01 : dram -> reg
+    stream pr10 : dram -> reg
+    stream pi10 : dram -> reg
+    stream pr11 : dram -> reg
+    stream pi11 : dram -> reg
+    stream qr_00 : dram -> reg, drain
+    stream qi_00 : dram -> reg, drain
+    stream qr_01 : dram -> reg, drain
+    stream qi_01 : dram -> reg, drain
+    stream qr_10 : dram -> reg, drain
+    stream qi_10 : dram -> reg, drain
+    stream qr_11 : dram -> reg, drain
+    stream qi_11 : dram -> reg, drain
+
+    at reg:
+        qr_10 = ar * pr10 + ((-ai) * pi10 + (br * pr11 + (-bi) * pi11))
+        qi_10 = ar * pi10 + (ai * pr10 + (br * pi11 + bi * pr11))
+        qr_11 = cr * pr10 + ((-ci) * pi10 + (dr * pr11 + (-di) * pi11))
+        qi_11 = cr * pi10 + (ci * pr10 + (dr * pi11 + di * pr11))
+        qr_00 = pr00
+        qi_00 = pi00
+        qr_01 = pr01
+        qi_01 = pi01

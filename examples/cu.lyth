@@ -1,0 +1,38 @@
+machine sm_120
+
+# El CONTROL de la medicion de ADR-0029: el cuerpo de cu_q, byte a byte, sobre dieciseis buffers
+# contiguos de n elementos (n = quads), sin split. Nada de lo que hace puede depender de la
+# maquinaria del split; si cu_q a (c, t) se aparta de esto, es el split lo que se mide.
+kernel cu(n: u32,
+          ar: f32, ai: f32, br: f32, bi: f32,
+          cr: f32, ci: f32, dr: f32, di: f32,
+          pr00: [f32; n], pi00: [f32; n], pr01: [f32; n], pi01: [f32; n], pr10: [f32; n], pi10: [f32; n], pr11: [f32; n], pi11: [f32; n],
+          qr00: [f32; n], qi00: [f32; n], qr01: [f32; n], qi01: [f32; n], qr10: [f32; n], qi10: [f32; n], qr11: [f32; n], qi11: [f32; n])
+    intensity 0.4375
+
+    stream pr00 : dram -> reg
+    stream pi00 : dram -> reg
+    stream pr01 : dram -> reg
+    stream pi01 : dram -> reg
+    stream pr10 : dram -> reg
+    stream pi10 : dram -> reg
+    stream pr11 : dram -> reg
+    stream pi11 : dram -> reg
+    stream qr00 : dram -> reg, drain
+    stream qi00 : dram -> reg, drain
+    stream qr01 : dram -> reg, drain
+    stream qi01 : dram -> reg, drain
+    stream qr10 : dram -> reg, drain
+    stream qi10 : dram -> reg, drain
+    stream qr11 : dram -> reg, drain
+    stream qi11 : dram -> reg, drain
+
+    at reg:
+        qr10 = ar * pr10 + ((-ai) * pi10 + (br * pr11 + (-bi) * pi11))
+        qi10 = ar * pi10 + (ai * pr10 + (br * pi11 + bi * pr11))
+        qr11 = cr * pr10 + ((-ci) * pi10 + (dr * pr11 + (-di) * pi11))
+        qi11 = cr * pi10 + (ci * pr10 + (dr * pi11 + di * pr11))
+        qr00 = pr00
+        qi00 = pi00
+        qr01 = pr01
+        qi01 = pi01
