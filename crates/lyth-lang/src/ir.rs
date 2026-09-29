@@ -80,8 +80,29 @@ pub fn view_index(w: u32, part: u8, k: u32) -> u64 {
     (k / w) * 2 * w + u64::from(part) * w + (k % w)
 }
 
-/// The deepest split ADR-0029 claims: a split of a view of a buffer.
-pub const MAX_SPLIT_DEPTH: u32 = 2;
+/// The deepest split claimed: five levels, a fused pass over five qubits, 32 amplitudes a thread
+/// (ADR-0030; ADR-0029 claimed 2).
+pub const MAX_SPLIT_DEPTH: u32 = 5;
+
+/// Every name an expression reads, in order, repeats included.
+fn names_in<'e>(e: &'e crate::ast::Expr, out: &mut Vec<&'e str>) {
+    use crate::ast::Expr;
+    match e {
+        Expr::Name(n, _) => out.push(n),
+        Expr::At { buffer, .. } => out.push(buffer),
+        Expr::Const(..) => {}
+        Expr::Bin { lhs, rhs, .. } => {
+            names_in(lhs, out);
+            names_in(rhs, out);
+        }
+        Expr::Neg(x, _) => names_in(x, out),
+        Expr::Zipper2 { acc, ket, bra, .. } => {
+            names_in(acc, out);
+            names_in(ket, out);
+            names_in(bra, out);
+        }
+    }
+}
 
 /// Warps sampled when deriving a view's sector figure. 2^14 warps is 524,288 pairs: every warp
 /// of anything smaller, and the pattern repeats or saturates long before that for anything
@@ -979,7 +1000,7 @@ pub enum LowerError {
     SplitExtentsDiffer { span: Span, base: String, dim: String, other: String, other_dim: String },
     #[error("{span}: `{name}` is split twice. A split is into two at one width, so one name has one split; to split its halves again, split the views (ADR-0029).")]
     SplitTwice { span: Span, name: String },
-    #[error("{span}: `split {name}` would be a split at depth {depth}. Depth 2 -- a split of a view, the two-qubit gates -- is what ADR-0029 tests and claims; deeper is a three-qubit gate and its own amendment.")]
+    #[error("{span}: `split {name}` would be a split at depth {depth}. Depth 5 -- a fused pass over five qubits -- is the deepest ADR-0030 tests and claims.")]
     SplitTooDeep { span: Span, name: String, depth: u32 },
     #[error("{span}: `stream {name}` is a view at depth {depth} and `{other}` is at depth {other_depth}. A split kernel walks one count -- pairs at depth 1, quads at depth 2 -- so every view it streams is at the same depth (ADR-0029).")]
     SplitDepthsDiffer { span: Span, name: String, depth: u32, other: String, other_depth: u32 },
@@ -1098,7 +1119,7 @@ pub enum LowerError {
         to: &'static str,
     },
     #[error(
-        "{span}: `{name}` is computed and then discarded. A local is only useful as the source of a reduction; either reduce it, or assign to a drained buffer."
+        "{span}: `{name}` is computed and then discarded. A local is only useful if a later statement reads it or a reduction consumes it; use it, reduce it, or assign to a drained buffer."
     )]
     DeadLocal { span: Span, name: String },
     #[error(
@@ -1522,6 +1543,13 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
     let mut locals: BTreeMap<String, Span> = BTreeMap::new();
     for block in &kernel.blocks {
         for stmt in &block.stmts {
+            // A local a later statement reads is not dead work: a fused pass chains its gates
+            // through locals (ADR-0030). Consumed here, before this statement may redefine it.
+            let mut read = Vec::new();
+            names_in(&stmt.value, &mut read);
+            for name in read {
+                locals.remove(name);
+            }
             let value = ctx.expr(&stmt.value)?;
             // A write is an address like a read, so the target's index is recorded the same
             // way -- and a local, which has no address, must not carry one.
@@ -1548,8 +1576,8 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
                 });
             }
             match params.get(stmt.target.as_str()) {
-                // Not a parameter: a local. Legal only if a reduction consumes it, which is
-                // checked once the whole body is known.
+                // Not a parameter: a local. Legal only if a later statement or a reduction
+                // consumes it, which is checked once the whole body is known.
                 None => {
                     locals.insert(stmt.target.clone(), stmt.target_span);
                 }

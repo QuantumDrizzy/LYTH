@@ -143,7 +143,12 @@ fn split_plan(ir: &KernelIr, p: &Program) -> Result<Option<SplitPlan>, EmitError
             }
             (a, vec![(b / a, a), (len / (4 * b), 2 * b)])
         }
-        _ => unreachable!("lowering refuses depth 3"),
+        _ => {
+            return Err(refuse(format!(
+                "kernel `{}` splits to depth {depth}. This back end walks depth 1 and 2 with a hand-derived                  nest; deeper nests are derived from `base_index` in ADR-0030 step 4, and until then                  they are refused rather than guessed.",
+                ir.name
+            )))
+        }
     };
     Ok(Some(SplitPlan { run, levels, vector: run % LANES == 0 }))
 }

@@ -144,10 +144,13 @@ fn the_rules_of_the_split_of_a_view_refuse_with_the_reason() {
     let quad_body = "        q00 = p11\n        q11 = p00\n";
     lower(&kernel(TWO_LEVELS, quad_streams, quad_body)).expect("the fixture lowers");
 
-    // Depth 3 is its own amendment.
-    let deep = format!("{TWO_LEVELS}\n    split p00 into x, y : blocks wt");
+    // ADR-0030 raised the ceiling to depth 5 (a fused pass over five qubits); a sixth level is
+    // refused. p00 is at depth 2, so a chain of four more reaches 6.
+    let deep = format!(
+        "{TWO_LEVELS}\n    split p00 into a1, b1 : blocks wt\n    split a1 into a2, b2 : blocks wt\n    split a2 into a3, b3 : blocks wt\n    split a3 into a4, b4 : blocks wt"
+    );
     let err = lower(&kernel(&deep, quad_streams, quad_body)).unwrap_err();
-    assert!(err.contains("depth 3"), "{err}");
+    assert!(err.contains("depth 6"), "{err}");
 
     // A pair and a quad in one kernel: two walks.
     let mixed = "    stream h1 : dram -> reg\n    stream p00 : dram -> reg\n    stream q00 : dram -> reg, drain\n    stream q11 : dram -> reg, drain";
