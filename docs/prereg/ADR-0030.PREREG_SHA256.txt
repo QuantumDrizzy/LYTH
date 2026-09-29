@@ -1,0 +1,5 @@
+sha256=d9a8327966dfd4e54ca0a1b9bb04e0449df02dcd0352e098643513713b5aad20
+file=docs/prereg/ADR-0030.prereg-frozen.md
+frozen_at=2026-09-29T18:20:16+02:00
+git_head=ba52c4dcb5e4ad7a4b03f69ffb800a7b507580b0
+note=ADR-0030 as accepted, frozen before any code for it; Q1-Q5 are its predictions
