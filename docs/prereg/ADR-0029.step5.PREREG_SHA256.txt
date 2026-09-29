@@ -1,0 +1,7 @@
+protocol_sha256=b0be2b69869f6f9018ec1e09df6744e2f6496581958e54a67bfe5b0c9f1178fb
+protocol_file=docs/prereg/ADR-0029.step5-protocol.md
+tool_sha256=dff8297c5b599d9dcbe8212f892ff4af2aa0cefbc8e2be7f6bf8e0ab0bb3ecc9
+tool_file=tools/cu_sweep.py
+frozen_at=2026-09-29T15:43:07+02:00
+git_head=d1c1a44811732e15c5adac49123a6a9f9eb3b103
+note=ADR-0029 step 5 protocol and the tool that implements it, frozen before the first sweep launch
