@@ -110,14 +110,16 @@ fn refuse(msg: impl Into<String>) -> EmitError {
     EmitError(msg.into())
 }
 
-/// Hand out one of the seven temporaries.
+/// Hand out a free register from the loop body's pool.
 fn take(free: &mut Vec<usize>) -> Result<usize, EmitError> {
     free.pop().ok_or_else(|| {
-        refuse(format!(
-            "the body needs more than {} values live at the same moment, and this back end              does not spill.
-  That is `t0..t6` plus `a0..a7`; the rest of the register file              holds the buffer base pointers and the loop counters, so reaching further means              spilling rather than renaming.",
-            TEMPS.len()
-        ))
+        refuse(
+            "the body needs more values live at the same moment than this back end has \
+             registers for, and it does not spill.\n  The pool is `t0..t6`, `a0..a7` and every \
+             `s1..s7` no buffer base pointer holds; the rest of the register file is `zero`, \
+             `ra`, `sp`, `gp`, `tp`, the base pointers and the loop counters, so reaching \
+             further means spilling rather than renaming.",
+        )
     })
 }
 
@@ -128,10 +130,33 @@ fn take(free: &mut Vec<usize>) -> Result<usize, EmitError> {
 /// inside a loop**. The only syscalls are in the print epilogue, which runs after every loop
 /// has finished, so nothing in the body can be clobbered by one. Anything that later emits a
 /// syscall mid-loop has to shorten this list.
-const TEMPS: [&str; 15] = [
+///
+/// `s1..s7` are offered when they are **not** a buffer's base pointer: buffer `i` lives in
+/// `s{i}`, so a kernel with four buffers leaves `s4..s7` idle for the whole loop. They were left
+/// out until `gate_q` (eight scalars, four loads, outputs held to the store) needed more than 15
+/// at once and was refused -- the shape of the allocator that never freed: the machine had the
+/// registers and the pool did not offer them. `s8`, `s9` are the loop counters and `s10`, `s11`
+/// the epilogue's; none of those is offered. Every register is 256 bits (`Reg256`), so any of
+/// them holds a vector.
+const TEMPS: [&str; 22] = [
     "t0", "t1", "t2", "t3", "t4", "t5", "t6", //
-    "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7",
+    "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", //
+    "s1", "s2", "s3", "s4", "s5", "s6", "s7",
 ];
+
+/// The pool for a kernel with `buffers` base pointers: `s{i}` for `i < buffers` is taken. In
+/// the order `take` hands them out (t, then a, then s), so short-lived values stay in the
+/// registers they always had and only a body that needs more reaches the saved ones.
+fn pool(buffers: usize) -> Vec<usize> {
+    (0..TEMPS.len())
+        .filter(|&i| match TEMPS[i].strip_prefix('s') {
+            Some(k) => k.parse::<usize>().is_ok_and(|k| k >= buffers),
+            None => true,
+        })
+        .rev()
+        .collect()
+}
+
 
 fn tname(i: usize) -> String {
     TEMPS[i].to_string()
@@ -436,7 +461,7 @@ fn emit_text(ir: &KernelIr, prog: &Program, plan: Option<&SplitPlan>, out: &mut 
         .chain(ir.reduction.iter().map(|r| r.value))
         .collect();
 
-    let mut free: Vec<usize> = (0..TEMPS.len()).rev().collect();
+    let mut free: Vec<usize> = pool(buffers.len());
     // Which temporary holds each body value, so it can be handed back at its last read.
     // `Op::Param` is absent on purpose: a scalar's register is broadcast before the loop and
     // lives for the whole of it, so it is not the body's to free.
@@ -717,4 +742,24 @@ fn emit_text(ir: &KernelIr, prog: &Program, plan: Option<&SplitPlan>, out: &mut 
 
     let _ = writeln!(out, "        halt");
     Ok(())
+}
+
+#[cfg(test)]
+mod pool_tests {
+    use super::*;
+
+    #[test]
+    fn a_base_pointer_is_never_offered_as_a_temporary() {
+        for n in 0..=8 {
+            let names: Vec<&str> = pool(n).into_iter().map(|i| TEMPS[i]).collect();
+            for i in 0..n {
+                assert!(!names.contains(&format!("s{i}").as_str()), "{n} buffers: s{i} offered");
+            }
+            // t0..t6, a0..a7, and the saved registers from s{max(n, 1)} to s7.
+            assert_eq!(names.len(), 15 + (8 - n.max(1)), "{n} buffers");
+            // `take` pops from the end, so the hand-out order is the reverse of the vector.
+            let handed: Vec<&str> = names.iter().rev().take(15).copied().collect();
+            assert_eq!(handed, TEMPS[..15], "t and a first, in their old order");
+        }
+    }
 }

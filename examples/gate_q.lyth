@@ -1,0 +1,40 @@
+machine sm_120
+
+# Cualquier puerta de un qubit, U = [[a, b], [c, d]] compleja, sobre CUALQUIER qubit q
+# de un vector de estado (ADR-0028). Con w = 2^q, las vistas son las amplitudes cuyo bit q
+# vale 0 (p0) y 1 (p1):
+#
+#       q0 = a * p0 + b * p1
+#       q1 = c * p0 + d * p1
+#
+# Cada componente es una cadena de fma en un orden fijo, escrito con parentesis para que el
+# orden sea el del codigo y no una decision del compilador: el oraculo del host y la
+# referencia la reproducen con `mul_add` en el mismo orden, y por eso la comparacion es bit a
+# bit. La negacion es un cambio de signo, no un flop.
+#
+# Amplitudes complejas, layout separado re/im; n amplitudes, n/2 pares.
+kernel gate_q(n: u32, w: u32,
+              ar: f32, ai: f32, br: f32, bi: f32,
+              cr: f32, ci: f32, dr: f32, di: f32,
+              re: [f32; n], im: [f32; n], qr: [f32; n], qi: [f32; n])
+    intensity 0.875
+
+    split re into p0r, p1r : blocks w
+    split im into p0i, p1i : blocks w
+    split qr into q0r, q1r : blocks w
+    split qi into q0i, q1i : blocks w
+
+    stream p0r : dram -> reg
+    stream p0i : dram -> reg
+    stream p1r : dram -> reg
+    stream p1i : dram -> reg
+    stream q0r : dram -> reg, drain
+    stream q0i : dram -> reg, drain
+    stream q1r : dram -> reg, drain
+    stream q1i : dram -> reg, drain
+
+    at reg:
+        q0r = ar * p0r + ((-ai) * p0i + (br * p1r + (-bi) * p1i))
+        q0i = ar * p0i + (ai * p0r + (br * p1i + bi * p1r))
+        q1r = cr * p0r + ((-ci) * p0i + (dr * p1r + (-di) * p1i))
+        q1i = cr * p0i + (ci * p0r + (dr * p1i + di * p1r))
