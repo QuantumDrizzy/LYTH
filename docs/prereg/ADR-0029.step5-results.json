@@ -1,0 +1,3377 @@
+{
+ "protocol": "docs/prereg/ADR-0029.step5-protocol.md",
+ "git_head": "f7cf533435791cb07773de26e689c996fe60ff8e",
+ "quads": 2097152,
+ "n_split": 8388608,
+ "reps": 200,
+ "seed": 29,
+ "ncu_rounds": 3,
+ "time_rounds": 7,
+ "ncu": {
+  "control": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67125760,
+     "dram__bytes_op_write.sum": 59641088,
+     "lts__t_bytes.sum": 134254304
+    },
+    "bit_exact": true,
+    "derived_isolated": null
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67114496,
+     "dram__bytes_op_write.sum": 60599296,
+     "lts__t_bytes.sum": 134244704
+    },
+    "bit_exact": true,
+    "derived_isolated": null
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67115520,
+     "dram__bytes_op_write.sum": 61017088,
+     "lts__t_bytes.sum": 134246624
+    },
+    "bit_exact": true,
+    "derived_isolated": null
+   }
+  ],
+  "c=0,t=1": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67329280,
+     "dram__bytes_op_write.sum": 59497728,
+     "lts__t_bytes.sum": 248972576
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67329792,
+     "dram__bytes_op_write.sum": 59272704,
+     "lts__t_bytes.sum": 246936224
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67326976,
+     "dram__bytes_op_write.sum": 59090944,
+     "lts__t_bytes.sum": 244644224
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   }
+  ],
+  "c=0,t=2": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67130368,
+     "dram__bytes_op_write.sum": 59066624,
+     "lts__t_bytes.sum": 247823968
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67172864,
+     "dram__bytes_op_write.sum": 59546624,
+     "lts__t_bytes.sum": 248534784
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67319040,
+     "dram__bytes_op_write.sum": 59850496,
+     "lts__t_bytes.sum": 245419136
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   }
+  ],
+  "c=0,t=3": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67123968,
+     "dram__bytes_op_write.sum": 59220224,
+     "lts__t_bytes.sum": 178227840
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67351296,
+     "dram__bytes_op_write.sum": 58157824,
+     "lts__t_bytes.sum": 178245056
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 70798080,
+     "dram__bytes_op_write.sum": 58691840,
+     "lts__t_bytes.sum": 182831872
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=0,t=4": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67246080,
+     "dram__bytes_op_write.sum": 59222784,
+     "lts__t_bytes.sum": 179287680
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67120640,
+     "dram__bytes_op_write.sum": 58145792,
+     "lts__t_bytes.sum": 178891008
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67286272,
+     "dram__bytes_op_write.sum": 59224064,
+     "lts__t_bytes.sum": 180254592
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=0,t=8": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67126272,
+     "dram__bytes_op_write.sum": 58317824,
+     "lts__t_bytes.sum": 185285312
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67281920,
+     "dram__bytes_op_write.sum": 58161408,
+     "lts__t_bytes.sum": 184801664
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67575296,
+     "dram__bytes_op_write.sum": 58818304,
+     "lts__t_bytes.sum": 185008704
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=0,t=16": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67365376,
+     "dram__bytes_op_write.sum": 58537472,
+     "lts__t_bytes.sum": 185958144
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67274496,
+     "dram__bytes_op_write.sum": 58701824,
+     "lts__t_bytes.sum": 185485472
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67351296,
+     "dram__bytes_op_write.sum": 58352384,
+     "lts__t_bytes.sum": 187415200
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=0,t=22": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67356160,
+     "dram__bytes_op_write.sum": 58199040,
+     "lts__t_bytes.sum": 186420800
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67382016,
+     "dram__bytes_op_write.sum": 58475264,
+     "lts__t_bytes.sum": 186069760
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67294464,
+     "dram__bytes_op_write.sum": 57792768,
+     "lts__t_bytes.sum": 186440800
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=1,t=0": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67119616,
+     "dram__bytes_op_write.sum": 47037440,
+     "lts__t_bytes.sum": 242686304
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67268864,
+     "dram__bytes_op_write.sum": 59646464,
+     "lts__t_bytes.sum": 246660320
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67332608,
+     "dram__bytes_op_write.sum": 59110144,
+     "lts__t_bytes.sum": 247085344
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   }
+  ],
+  "c=1,t=2": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67138304,
+     "dram__bytes_op_write.sum": 56088832,
+     "lts__t_bytes.sum": 247342816
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67633920,
+     "dram__bytes_op_write.sum": 59876352,
+     "lts__t_bytes.sum": 250164320
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67293952,
+     "dram__bytes_op_write.sum": 59461632,
+     "lts__t_bytes.sum": 247188384
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   }
+  ],
+  "c=1,t=3": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67160576,
+     "dram__bytes_op_write.sum": 58200064,
+     "lts__t_bytes.sum": 179000640
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67264768,
+     "dram__bytes_op_write.sum": 58422016,
+     "lts__t_bytes.sum": 180604256
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67312640,
+     "dram__bytes_op_write.sum": 59182080,
+     "lts__t_bytes.sum": 180158880
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=1,t=4": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67120128,
+     "dram__bytes_op_write.sum": 57816320,
+     "lts__t_bytes.sum": 177633120
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67382272,
+     "dram__bytes_op_write.sum": 59289856,
+     "lts__t_bytes.sum": 179880768
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67415296,
+     "dram__bytes_op_write.sum": 58382592,
+     "lts__t_bytes.sum": 179100320
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=1,t=8": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67511296,
+     "dram__bytes_op_write.sum": 56594176,
+     "lts__t_bytes.sum": 185235200
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67127808,
+     "dram__bytes_op_write.sum": 58757376,
+     "lts__t_bytes.sum": 184710176
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67285760,
+     "dram__bytes_op_write.sum": 58116352,
+     "lts__t_bytes.sum": 185317120
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=1,t=16": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67350272,
+     "dram__bytes_op_write.sum": 58748160,
+     "lts__t_bytes.sum": 185621440
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67126016,
+     "dram__bytes_op_write.sum": 58338048,
+     "lts__t_bytes.sum": 185400096
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67260672,
+     "dram__bytes_op_write.sum": 58171904,
+     "lts__t_bytes.sum": 185689088
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=1,t=22": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67144448,
+     "dram__bytes_op_write.sum": 57978112,
+     "lts__t_bytes.sum": 185910400
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67142912,
+     "dram__bytes_op_write.sum": 57686272,
+     "lts__t_bytes.sum": 186530816
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 70328064,
+     "dram__bytes_op_write.sum": 58072576,
+     "lts__t_bytes.sum": 189220032
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=2,t=0": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67125760,
+     "dram__bytes_op_write.sum": 58784000,
+     "lts__t_bytes.sum": 246352928
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67297536,
+     "dram__bytes_op_write.sum": 58657280,
+     "lts__t_bytes.sum": 247721408
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67309568,
+     "dram__bytes_op_write.sum": 59145728,
+     "lts__t_bytes.sum": 246036896
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   }
+  ],
+  "c=2,t=1": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67132928,
+     "dram__bytes_op_write.sum": 59070208,
+     "lts__t_bytes.sum": 246613632
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67254528,
+     "dram__bytes_op_write.sum": 59737856,
+     "lts__t_bytes.sum": 246476192
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67277824,
+     "dram__bytes_op_write.sum": 59635200,
+     "lts__t_bytes.sum": 245610080
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   }
+  ],
+  "c=2,t=3": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67298048,
+     "dram__bytes_op_write.sum": 59896320,
+     "lts__t_bytes.sum": 180495392
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67315968,
+     "dram__bytes_op_write.sum": 59201792,
+     "lts__t_bytes.sum": 180264480
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67322112,
+     "dram__bytes_op_write.sum": 59058176,
+     "lts__t_bytes.sum": 179430368
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=2,t=4": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67365376,
+     "dram__bytes_op_write.sum": 58732800,
+     "lts__t_bytes.sum": 179091872
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67122688,
+     "dram__bytes_op_write.sum": 58915840,
+     "lts__t_bytes.sum": 179682752
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67364608,
+     "dram__bytes_op_write.sum": 58386688,
+     "lts__t_bytes.sum": 178795232
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=2,t=8": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67260160,
+     "dram__bytes_op_write.sum": 59510784,
+     "lts__t_bytes.sum": 185533504
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67203328,
+     "dram__bytes_op_write.sum": 58409472,
+     "lts__t_bytes.sum": 185362944
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67259904,
+     "dram__bytes_op_write.sum": 59065344,
+     "lts__t_bytes.sum": 184820480
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=2,t=16": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67124224,
+     "dram__bytes_op_write.sum": 59474432,
+     "lts__t_bytes.sum": 183820096
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67129856,
+     "dram__bytes_op_write.sum": 58152704,
+     "lts__t_bytes.sum": 186041472
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67275264,
+     "dram__bytes_op_write.sum": 58350336,
+     "lts__t_bytes.sum": 185461088
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=2,t=22": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67149056,
+     "dram__bytes_op_write.sum": 58209024,
+     "lts__t_bytes.sum": 186622720
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67150336,
+     "dram__bytes_op_write.sum": 58507264,
+     "lts__t_bytes.sum": 186582432
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67351296,
+     "dram__bytes_op_write.sum": 58582528,
+     "lts__t_bytes.sum": 186304896
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=3,t=0": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67119360,
+     "dram__bytes_op_write.sum": 58831616,
+     "lts__t_bytes.sum": 179795104
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67142912,
+     "dram__bytes_op_write.sum": 58463232,
+     "lts__t_bytes.sum": 178027968
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67438080,
+     "dram__bytes_op_write.sum": 58636800,
+     "lts__t_bytes.sum": 179749984
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=3,t=1": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67753472,
+     "dram__bytes_op_write.sum": 59100160,
+     "lts__t_bytes.sum": 179008800
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67251712,
+     "dram__bytes_op_write.sum": 58612992,
+     "lts__t_bytes.sum": 178682528
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67335424,
+     "dram__bytes_op_write.sum": 58956800,
+     "lts__t_bytes.sum": 179290688
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=3,t=2": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67333632,
+     "dram__bytes_op_write.sum": 59064064,
+     "lts__t_bytes.sum": 179189536
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67135488,
+     "dram__bytes_op_write.sum": 58240256,
+     "lts__t_bytes.sum": 180068960
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67345664,
+     "dram__bytes_op_write.sum": 58691328,
+     "lts__t_bytes.sum": 179176640
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=3,t=4": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67250944,
+     "dram__bytes_op_write.sum": 59344128,
+     "lts__t_bytes.sum": 134380224
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67254272,
+     "dram__bytes_op_write.sum": 59123200,
+     "lts__t_bytes.sum": 134384416
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67298304,
+     "dram__bytes_op_write.sum": 58788352,
+     "lts__t_bytes.sum": 134431008
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   }
+  ],
+  "c=3,t=8": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67116032,
+     "dram__bytes_op_write.sum": 58676992,
+     "lts__t_bytes.sum": 134246176
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67116800,
+     "dram__bytes_op_write.sum": 58818816,
+     "lts__t_bytes.sum": 134248352
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 69943040,
+     "dram__bytes_op_write.sum": 58406912,
+     "lts__t_bytes.sum": 137076192
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   }
+  ],
+  "c=3,t=16": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67280896,
+     "dram__bytes_op_write.sum": 57698560,
+     "lts__t_bytes.sum": 134411552
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67370752,
+     "dram__bytes_op_write.sum": 58648064,
+     "lts__t_bytes.sum": 134504800
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67252992,
+     "dram__bytes_op_write.sum": 58423808,
+     "lts__t_bytes.sum": 134385184
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   }
+  ],
+  "c=3,t=22": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67117312,
+     "dram__bytes_op_write.sum": 58472704,
+     "lts__t_bytes.sum": 134249344
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67328256,
+     "dram__bytes_op_write.sum": 58675712,
+     "lts__t_bytes.sum": 134458208
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67282944,
+     "dram__bytes_op_write.sum": 58190592,
+     "lts__t_bytes.sum": 134426432
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   }
+  ],
+  "c=4,t=0": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67301888,
+     "dram__bytes_op_write.sum": 58795776,
+     "lts__t_bytes.sum": 178903936
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67258112,
+     "dram__bytes_op_write.sum": 59331328,
+     "lts__t_bytes.sum": 178611488
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67282688,
+     "dram__bytes_op_write.sum": 58925056,
+     "lts__t_bytes.sum": 179500416
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=4,t=1": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67140608,
+     "dram__bytes_op_write.sum": 59724288,
+     "lts__t_bytes.sum": 178345760
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67288576,
+     "dram__bytes_op_write.sum": 58838016,
+     "lts__t_bytes.sum": 178812448
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67233536,
+     "dram__bytes_op_write.sum": 58608896,
+     "lts__t_bytes.sum": 178480768
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=4,t=2": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67399936,
+     "dram__bytes_op_write.sum": 58523648,
+     "lts__t_bytes.sum": 179188864
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67117824,
+     "dram__bytes_op_write.sum": 58597632,
+     "lts__t_bytes.sum": 177904832
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67312128,
+     "dram__bytes_op_write.sum": 58463232,
+     "lts__t_bytes.sum": 177736800
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=4,t=3": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67115776,
+     "dram__bytes_op_write.sum": 59042048,
+     "lts__t_bytes.sum": 134247424
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67116544,
+     "dram__bytes_op_write.sum": 58872576,
+     "lts__t_bytes.sum": 134248736
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67116288,
+     "dram__bytes_op_write.sum": 58810112,
+     "lts__t_bytes.sum": 134248256
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   }
+  ],
+  "c=4,t=8": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67115776,
+     "dram__bytes_op_write.sum": 58607616,
+     "lts__t_bytes.sum": 134247616
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67279616,
+     "dram__bytes_op_write.sum": 58206208,
+     "lts__t_bytes.sum": 134412736
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67330048,
+     "dram__bytes_op_write.sum": 58480128,
+     "lts__t_bytes.sum": 134492544
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   }
+  ],
+  "c=4,t=16": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67269376,
+     "dram__bytes_op_write.sum": 58494720,
+     "lts__t_bytes.sum": 134399232
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67547136,
+     "dram__bytes_op_write.sum": 59454976,
+     "lts__t_bytes.sum": 134710432
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67278080,
+     "dram__bytes_op_write.sum": 58863616,
+     "lts__t_bytes.sum": 134408064
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   }
+  ],
+  "c=4,t=22": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67251968,
+     "dram__bytes_op_write.sum": 58277632,
+     "lts__t_bytes.sum": 134383520
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67250176,
+     "dram__bytes_op_write.sum": 58917376,
+     "lts__t_bytes.sum": 134381472
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67115776,
+     "dram__bytes_op_write.sum": 58184704,
+     "lts__t_bytes.sum": 134247072
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   }
+  ],
+  "c=8,t=0": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67301120,
+     "dram__bytes_op_write.sum": 57692160,
+     "lts__t_bytes.sum": 155021696
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67313920,
+     "dram__bytes_op_write.sum": 57759488,
+     "lts__t_bytes.sum": 155354144
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67118336,
+     "dram__bytes_op_write.sum": 57920000,
+     "lts__t_bytes.sum": 155232256
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=8,t=1": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67229184,
+     "dram__bytes_op_write.sum": 57610240,
+     "lts__t_bytes.sum": 154375744
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67119104,
+     "dram__bytes_op_write.sum": 58197248,
+     "lts__t_bytes.sum": 154952128
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67313408,
+     "dram__bytes_op_write.sum": 58828800,
+     "lts__t_bytes.sum": 155404608
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=8,t=2": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67119360,
+     "dram__bytes_op_write.sum": 57942528,
+     "lts__t_bytes.sum": 154783744
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67310080,
+     "dram__bytes_op_write.sum": 58659584,
+     "lts__t_bytes.sum": 155487872
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67255296,
+     "dram__bytes_op_write.sum": 57747968,
+     "lts__t_bytes.sum": 155211904
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=8,t=3": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67260672,
+     "dram__bytes_op_write.sum": 58276864,
+     "lts__t_bytes.sum": 134392608
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67115520,
+     "dram__bytes_op_write.sum": 57297408,
+     "lts__t_bytes.sum": 134247392
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 69036544,
+     "dram__bytes_op_write.sum": 57964800,
+     "lts__t_bytes.sum": 136175296
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   }
+  ],
+  "c=8,t=4": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67214080,
+     "dram__bytes_op_write.sum": 58855936,
+     "lts__t_bytes.sum": 134362560
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67328256,
+     "dram__bytes_op_write.sum": 58696704,
+     "lts__t_bytes.sum": 134458176
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67115776,
+     "dram__bytes_op_write.sum": 57816320,
+     "lts__t_bytes.sum": 134247680
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   }
+  ],
+  "c=8,t=16": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67320576,
+     "dram__bytes_op_write.sum": 57700096,
+     "lts__t_bytes.sum": 134450208
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67331328,
+     "dram__bytes_op_write.sum": 58385664,
+     "lts__t_bytes.sum": 134464096
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67254784,
+     "dram__bytes_op_write.sum": 56462080,
+     "lts__t_bytes.sum": 134399328
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   }
+  ],
+  "c=8,t=22": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67116288,
+     "dram__bytes_op_write.sum": 58089728,
+     "lts__t_bytes.sum": 134247584
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67342080,
+     "dram__bytes_op_write.sum": 57933568,
+     "lts__t_bytes.sum": 134472704
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67265024,
+     "dram__bytes_op_write.sum": 57518080,
+     "lts__t_bytes.sum": 134396000
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   }
+  ],
+  "c=16,t=0": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67325440,
+     "dram__bytes_op_write.sum": 58149632,
+     "lts__t_bytes.sum": 153398912
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67351552,
+     "dram__bytes_op_write.sum": 58912256,
+     "lts__t_bytes.sum": 154188096
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67186688,
+     "dram__bytes_op_write.sum": 58556416,
+     "lts__t_bytes.sum": 154232064
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=16,t=1": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67121152,
+     "dram__bytes_op_write.sum": 58162688,
+     "lts__t_bytes.sum": 153280640
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67333120,
+     "dram__bytes_op_write.sum": 58352640,
+     "lts__t_bytes.sum": 154372256
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67269120,
+     "dram__bytes_op_write.sum": 58066688,
+     "lts__t_bytes.sum": 154768224
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=16,t=2": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67135232,
+     "dram__bytes_op_write.sum": 58914048,
+     "lts__t_bytes.sum": 154649600
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67286016,
+     "dram__bytes_op_write.sum": 58642432,
+     "lts__t_bytes.sum": 154456352
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67120896,
+     "dram__bytes_op_write.sum": 58343424,
+     "lts__t_bytes.sum": 154344896
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=16,t=3": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67250944,
+     "dram__bytes_op_write.sum": 59403520,
+     "lts__t_bytes.sum": 134380928
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67270656,
+     "dram__bytes_op_write.sum": 58601472,
+     "lts__t_bytes.sum": 134401344
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67263744,
+     "dram__bytes_op_write.sum": 57966848,
+     "lts__t_bytes.sum": 134395136
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   }
+  ],
+  "c=16,t=4": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67276544,
+     "dram__bytes_op_write.sum": 57898752,
+     "lts__t_bytes.sum": 134407040
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67618048,
+     "dram__bytes_op_write.sum": 58041856,
+     "lts__t_bytes.sum": 134752416
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67301120,
+     "dram__bytes_op_write.sum": 58304512,
+     "lts__t_bytes.sum": 134433536
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   }
+  ],
+  "c=16,t=8": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67115776,
+     "dram__bytes_op_write.sum": 58001408,
+     "lts__t_bytes.sum": 134247712
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67320064,
+     "dram__bytes_op_write.sum": 58020864,
+     "lts__t_bytes.sum": 134450336
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67279616,
+     "dram__bytes_op_write.sum": 57889792,
+     "lts__t_bytes.sum": 134409376
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   }
+  ],
+  "c=16,t=22": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67293440,
+     "dram__bytes_op_write.sum": 57803520,
+     "lts__t_bytes.sum": 134431360
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67116032,
+     "dram__bytes_op_write.sum": 57636352,
+     "lts__t_bytes.sum": 134246976
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67318016,
+     "dram__bytes_op_write.sum": 58156288,
+     "lts__t_bytes.sum": 134447808
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   }
+  ],
+  "c=22,t=0": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67301888,
+     "dram__bytes_op_write.sum": 57577216,
+     "lts__t_bytes.sum": 154448800
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67125248,
+     "dram__bytes_op_write.sum": 57451776,
+     "lts__t_bytes.sum": 154061632
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67419648,
+     "dram__bytes_op_write.sum": 58489600,
+     "lts__t_bytes.sum": 154525728
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=22,t=1": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67303936,
+     "dram__bytes_op_write.sum": 58132480,
+     "lts__t_bytes.sum": 155072320
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67257600,
+     "dram__bytes_op_write.sum": 57980672,
+     "lts__t_bytes.sum": 154306304
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67125504,
+     "dram__bytes_op_write.sum": 58580224,
+     "lts__t_bytes.sum": 153976640
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=22,t=2": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67118848,
+     "dram__bytes_op_write.sum": 58537216,
+     "lts__t_bytes.sum": 153620608
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67274496,
+     "dram__bytes_op_write.sum": 57830656,
+     "lts__t_bytes.sum": 154868672
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67283456,
+     "dram__bytes_op_write.sum": 57942528,
+     "lts__t_bytes.sum": 154435552
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "c=22,t=3": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67116288,
+     "dram__bytes_op_write.sum": 57288448,
+     "lts__t_bytes.sum": 134248896
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67115776,
+     "dram__bytes_op_write.sum": 57602048,
+     "lts__t_bytes.sum": 134246784
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67367680,
+     "dram__bytes_op_write.sum": 58536960,
+     "lts__t_bytes.sum": 134506208
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   }
+  ],
+  "c=22,t=4": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67162624,
+     "dram__bytes_op_write.sum": 58295296,
+     "lts__t_bytes.sum": 134304576
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67313152,
+     "dram__bytes_op_write.sum": 58126336,
+     "lts__t_bytes.sum": 134442912
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67115520,
+     "dram__bytes_op_write.sum": 57875712,
+     "lts__t_bytes.sum": 134248544
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   }
+  ],
+  "c=22,t=8": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67115520,
+     "dram__bytes_op_write.sum": 58629888,
+     "lts__t_bytes.sum": 134247200
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67282176,
+     "dram__bytes_op_write.sum": 58017024,
+     "lts__t_bytes.sum": 134411872
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67307776,
+     "dram__bytes_op_write.sum": 57562112,
+     "lts__t_bytes.sum": 134438208
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   }
+  ],
+  "c=22,t=16": [
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67344640,
+     "dram__bytes_op_write.sum": 58578944,
+     "lts__t_bytes.sum": 134474432
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 70959360,
+     "dram__bytes_op_write.sum": 57102336,
+     "lts__t_bytes.sum": 138093696
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "dram__bytes_op_read.sum": 67116544,
+     "dram__bytes_op_write.sum": 57688832,
+     "lts__t_bytes.sum": 134248960
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   }
+  ]
+ },
+ "time": {
+  "control": [
+   {
+    "ms_median": 0.35046398639678955,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35049599409103394,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3495839983224869,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3494879901409149,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3533119857311249,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34988799691200256,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35102400183677673,
+    "bit_exact": true
+   }
+  ],
+  "c=0,t=1": [
+   {
+    "ms_median": 0.34995201230049133,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35046400129795074,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35014399886131287,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35047999024391174,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3516159951686859,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35174399614334106,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3500800132751465,
+    "bit_exact": true
+   }
+  ],
+  "c=0,t=2": [
+   {
+    "ms_median": 0.3516480028629303,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3506239950656891,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35158398747444153,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35020801424980164,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3517119884490967,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3514080047607422,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35182400047779083,
+    "bit_exact": true
+   }
+  ],
+  "c=0,t=3": [
+   {
+    "ms_median": 0.34998399019241333,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3497599959373474,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3492160141468048,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3498240113258362,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34968000650405884,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3497759997844696,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.349808007478714,
+    "bit_exact": true
+   }
+  ],
+  "c=0,t=4": [
+   {
+    "ms_median": 0.3495039939880371,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3490560054779053,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34939199686050415,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34969601035118103,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3498240113258362,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3495999872684479,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.349727988243103,
+    "bit_exact": true
+   }
+  ],
+  "c=0,t=8": [
+   {
+    "ms_median": 0.35067199170589447,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3493439853191376,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.349263995885849,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3497920036315918,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3500960022211075,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3500480055809021,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34969601035118103,
+    "bit_exact": true
+   }
+  ],
+  "c=0,t=16": [
+   {
+    "ms_median": 0.3532480001449585,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35175999999046326,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3524319976568222,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35097599029541016,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3521119952201843,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.351967990398407,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35204800963401794,
+    "bit_exact": true
+   }
+  ],
+  "c=0,t=22": [
+   {
+    "ms_median": 0.3476159870624542,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34913599491119385,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34854400157928467,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34915199875831604,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3494559973478317,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3502559959888458,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34832000732421875,
+    "bit_exact": true
+   }
+  ],
+  "c=1,t=0": [
+   {
+    "ms_median": 0.3521760106086731,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3500159978866577,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35017600655555725,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3501119911670685,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3513279855251312,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35179200768470764,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35148799419403076,
+    "bit_exact": true
+   }
+  ],
+  "c=1,t=2": [
+   {
+    "ms_median": 0.3500159978866577,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35040000081062317,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3516800105571747,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3515999913215637,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35153600573539734,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3516959995031357,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3507999926805496,
+    "bit_exact": true
+   }
+  ],
+  "c=1,t=3": [
+   {
+    "ms_median": 0.3498400002717972,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34912000596523285,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3494400084018707,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3497920036315918,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.349808007478714,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3498559892177582,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34860800206661224,
+    "bit_exact": true
+   }
+  ],
+  "c=1,t=4": [
+   {
+    "ms_median": 0.3497280031442642,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3492159992456436,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34916800260543823,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3495999872684479,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34969601035118103,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3497599959373474,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3490400016307831,
+    "bit_exact": true
+   }
+  ],
+  "c=1,t=8": [
+   {
+    "ms_median": 0.34940800070762634,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3494400084018707,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.348224014043808,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34993600845336914,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3500320017337799,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34988799691200256,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3489280045032501,
+    "bit_exact": true
+   }
+  ],
+  "c=1,t=16": [
+   {
+    "ms_median": 0.35020801424980164,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35177600383758545,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.352400004863739,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.351952001452446,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35203200578689575,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3513119965791702,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34963199496269226,
+    "bit_exact": true
+   }
+  ],
+  "c=1,t=22": [
+   {
+    "ms_median": 0.3479680120944977,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3490239977836609,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34988799691200256,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3490079939365387,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34942400455474854,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3479360044002533,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3492960035800934,
+    "bit_exact": true
+   }
+  ],
+  "c=2,t=0": [
+   {
+    "ms_median": 0.35017600655555725,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3516480028629303,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3516159951686859,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3514239937067032,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34998399019241333,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3519040048122406,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35153600573539734,
+    "bit_exact": true
+   }
+  ],
+  "c=2,t=1": [
+   {
+    "ms_median": 0.3498559892177582,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.350271999835968,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.351855993270874,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35123200714588165,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35155200958251953,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3500640094280243,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3515999913215637,
+    "bit_exact": true
+   }
+  ],
+  "c=2,t=3": [
+   {
+    "ms_median": 0.34880000352859497,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3493120074272156,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3501119911670685,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3495680093765259,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3498400002717972,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3495999872684479,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.349263995885849,
+    "bit_exact": true
+   }
+  ],
+  "c=2,t=4": [
+   {
+    "ms_median": 0.3494400084018707,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34968000650405884,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.349727988243103,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3495680093765259,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34988799691200256,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.349808007478714,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3481920063495636,
+    "bit_exact": true
+   }
+  ],
+  "c=2,t=8": [
+   {
+    "ms_median": 0.3506079912185669,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34935998916625977,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35065600275993347,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3494720011949539,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3501279950141907,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34961599111557007,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3493279963731766,
+    "bit_exact": true
+   }
+  ],
+  "c=2,t=16": [
+   {
+    "ms_median": 0.353520005941391,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35227200388908386,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3521279990673065,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3518880009651184,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3521920144557953,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35183998942375183,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3513279855251312,
+    "bit_exact": true
+   }
+  ],
+  "c=2,t=22": [
+   {
+    "ms_median": 0.3475840091705322,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3490560054779053,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34809601306915283,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34889599680900574,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3492479920387268,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34891200065612793,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3490239977836609,
+    "bit_exact": true
+   }
+  ],
+  "c=3,t=0": [
+   {
+    "ms_median": 0.3502880036830902,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34961599111557007,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3500159978866577,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35014399886131287,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3498240113258362,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35019201040267944,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3495039939880371,
+    "bit_exact": true
+   }
+  ],
+  "c=3,t=1": [
+   {
+    "ms_median": 0.3493120074272156,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3487519919872284,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34992000460624695,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3499999940395355,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3498240113258362,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3498240113258362,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34988799691200256,
+    "bit_exact": true
+   }
+  ],
+  "c=3,t=2": [
+   {
+    "ms_median": 0.34942400455474854,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34961599111557007,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3495199978351593,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34988799691200256,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3500320017337799,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3497759997844696,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34969601035118103,
+    "bit_exact": true
+   }
+  ],
+  "c=3,t=4": [
+   {
+    "ms_median": 0.3503679931163788,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3505919873714447,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3503040075302124,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3522080034017563,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3519200086593628,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35183998942375183,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35150399804115295,
+    "bit_exact": true
+   }
+  ],
+  "c=3,t=8": [
+   {
+    "ms_median": 0.3495360016822815,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.349263995885849,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34836798906326294,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34968000650405884,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34971199929714203,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3493439853191376,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34907200932502747,
+    "bit_exact": true
+   }
+  ],
+  "c=3,t=16": [
+   {
+    "ms_median": 0.3518719971179962,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3511680066585541,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3515999913215637,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3513119965791702,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3514399975538254,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3505600094795227,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34992000460624695,
+    "bit_exact": true
+   }
+  ],
+  "c=3,t=22": [
+   {
+    "ms_median": 0.349727988243103,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3490400016307831,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34809601306915283,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3500960022211075,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34966400265693665,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3499999940395355,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34966400265693665,
+    "bit_exact": true
+   }
+  ],
+  "c=4,t=0": [
+   {
+    "ms_median": 0.3499999940395355,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3498559892177582,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3502880036830902,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.349727988243103,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35014399886131287,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3498559892177582,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3481599986553192,
+    "bit_exact": true
+   }
+  ],
+  "c=4,t=1": [
+   {
+    "ms_median": 0.35014399886131287,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3495680093765259,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35065600275993347,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3501279950141907,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34992000460624695,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34969601035118103,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34963199496269226,
+    "bit_exact": true
+   }
+  ],
+  "c=4,t=2": [
+   {
+    "ms_median": 0.3495039939880371,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3497439920902252,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3494400084018707,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3508799970149994,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34968000650405884,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3495680093765259,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34964799880981445,
+    "bit_exact": true
+   }
+  ],
+  "c=4,t=3": [
+   {
+    "ms_median": 0.3519040048122406,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35156799852848053,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3524639904499054,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3519200086593628,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3518880009651184,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3518719971179962,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35150399804115295,
+    "bit_exact": true
+   }
+  ],
+  "c=4,t=8": [
+   {
+    "ms_median": 0.34860798716545105,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3481760025024414,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35016000270843506,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3486720025539398,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3500159978866577,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3495360016822815,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3483999967575073,
+    "bit_exact": true
+   }
+  ],
+  "c=4,t=16": [
+   {
+    "ms_median": 0.35209599137306213,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35119999945163727,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3502400070428848,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3503040075302124,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35126399993896484,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35139200091362,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35139200091362,
+    "bit_exact": true
+   }
+  ],
+  "c=4,t=22": [
+   {
+    "ms_median": 0.34993600845336914,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3478879928588867,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3500480055809021,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3502880036830902,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3500480055809021,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3497599959373474,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3497599959373474,
+    "bit_exact": true
+   }
+  ],
+  "c=8,t=0": [
+   {
+    "ms_median": 0.349727988243103,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34811200201511383,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34801599383354187,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3500159978866577,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34971199929714203,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3497920036315918,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34806400537490845,
+    "bit_exact": true
+   }
+  ],
+  "c=8,t=1": [
+   {
+    "ms_median": 0.3485119938850403,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3481599986553192,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3481760025024414,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34860800206661224,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3487839996814728,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3497439920902252,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34806400537490845,
+    "bit_exact": true
+   }
+  ],
+  "c=8,t=2": [
+   {
+    "ms_median": 0.3495839983224869,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3490560054779053,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34812799096107483,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3500640094280243,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.349727988243103,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3490079939365387,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34971199929714203,
+    "bit_exact": true
+   }
+  ],
+  "c=8,t=3": [
+   {
+    "ms_median": 0.3501279950141907,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34828799962997437,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34833599627017975,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34863999485969543,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3498560041189194,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34968000650405884,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3478879928588867,
+    "bit_exact": true
+   }
+  ],
+  "c=8,t=4": [
+   {
+    "ms_median": 0.3503040075302124,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34940800070762634,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3500480055809021,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3497759997844696,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34998399019241333,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3479680120944977,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3485119938850403,
+    "bit_exact": true
+   }
+  ],
+  "c=8,t=16": [
+   {
+    "ms_median": 0.35206401348114014,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3516800105571747,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3516959995031357,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35123199224472046,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3511680066585541,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3508159965276718,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3503040075302124,
+    "bit_exact": true
+   }
+  ],
+  "c=8,t=22": [
+   {
+    "ms_median": 0.349727988243103,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3476479947566986,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35152000188827515,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3513759970664978,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35094399750232697,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3505919873714447,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3508960008621216,
+    "bit_exact": true
+   }
+  ],
+  "c=16,t=0": [
+   {
+    "ms_median": 0.35252799093723297,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35049599409103394,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35175999999046326,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35148799419403076,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3517119884490967,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3500480055809021,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34966400265693665,
+    "bit_exact": true
+   }
+  ],
+  "c=16,t=1": [
+   {
+    "ms_median": 0.3519040048122406,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35044799745082855,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35153600573539734,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35128000378608704,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3516959995031357,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3500640094280243,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35126399993896484,
+    "bit_exact": true
+   }
+  ],
+  "c=16,t=2": [
+   {
+    "ms_median": 0.3498240113258362,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34988799691200256,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.351840004324913,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35153600573539734,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3513439893722534,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35121600329875946,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3498240113258362,
+    "bit_exact": true
+   }
+  ],
+  "c=16,t=3": [
+   {
+    "ms_median": 0.3505919873714447,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35044799745082855,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35096000134944916,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3505920022726059,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35126399993896484,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35051199793815613,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.350816011428833,
+    "bit_exact": true
+   }
+  ],
+  "c=16,t=4": [
+   {
+    "ms_median": 0.3526879996061325,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3511680066585541,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35123199224472046,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3516800105571747,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3513279855251312,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34998399019241333,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34969601035118103,
+    "bit_exact": true
+   }
+  ],
+  "c=16,t=8": [
+   {
+    "ms_median": 0.3481599986553192,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3516319990158081,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35152000188827515,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35047999024391174,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35097599029541016,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3510880023241043,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3494720011949539,
+    "bit_exact": true
+   }
+  ],
+  "c=16,t=22": [
+   {
+    "ms_median": 0.3495039939880371,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3503199964761734,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3494559973478317,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34998399019241333,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3497920036315918,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35183998942375183,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34988799691200256,
+    "bit_exact": true
+   }
+  ],
+  "c=22,t=0": [
+   {
+    "ms_median": 0.34996800124645233,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34835198521614075,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3481599986553192,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3495680093765259,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3493439853191376,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34937599301338196,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3495680093765259,
+    "bit_exact": true
+   }
+  ],
+  "c=22,t=1": [
+   {
+    "ms_median": 0.3474560081958771,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34806400537490845,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.348224014043808,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3487040102481842,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34940798580646515,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3491999953985214,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34777599573135376,
+    "bit_exact": true
+   }
+  ],
+  "c=22,t=2": [
+   {
+    "ms_median": 0.3475999981164932,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3472000062465668,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3495679944753647,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3490079939365387,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3494719862937927,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34939199686050415,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34961599111557007,
+    "bit_exact": true
+   }
+  ],
+  "c=22,t=3": [
+   {
+    "ms_median": 0.3490239977836609,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34907200932502747,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3484639972448349,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3492320030927658,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34964799880981445,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34971199929714203,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3492479920387268,
+    "bit_exact": true
+   }
+  ],
+  "c=22,t=4": [
+   {
+    "ms_median": 0.34859199821949005,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34942400455474854,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3485119938850403,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34937599301338196,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34964799880981445,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35096000134944916,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3484639972448349,
+    "bit_exact": true
+   }
+  ],
+  "c=22,t=8": [
+   {
+    "ms_median": 0.34971199929714203,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34990400075912476,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35043200850486755,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35073599219322205,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3510720133781433,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35230399668216705,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.35023999214172363,
+    "bit_exact": true
+   }
+  ],
+  "c=22,t=16": [
+   {
+    "ms_median": 0.3494719862937927,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3498559892177582,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3510719984769821,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.350383996963501,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.3503040075302124,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34913600981235504,
+    "bit_exact": true
+   },
+   {
+    "ms_median": 0.34964799880981445,
+    "bit_exact": true
+   }
+  ]
+ }
+}
