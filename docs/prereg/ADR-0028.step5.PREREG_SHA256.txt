@@ -1,0 +1,7 @@
+protocol_sha256=eaaf44eaa68db530353b15c8b2bfc5569db214b11a7771be7d5f728f9eaf1627
+protocol_file=docs/prereg/ADR-0028.step5-protocol.md
+tool_sha256=81fbed365937ecb8de299590d2032a41e654b103badc6789a3f409ddd1e8d268
+tool_file=tools/split_sweep.py
+frozen_at=2026-09-29T05:49:05+02:00
+git_head=b1e4c4e172c2c37f76e2b1e812bf7007af1182c8
+note=ADR-0028 step 5 protocol and the tool that implements it, frozen before the first sweep launch; the verdict rules in the tool are the protocol's
