@@ -204,3 +204,67 @@ to amend — not the refusal table.
   to see the harness work: both about 388 GB/s (93.6% of the 414.5 GB/s baseline), spread 76-78%.
   That spread is too wide to say anything with, the clocks are unlocked, and it is a single
   run: it decides nothing about P3. Step 5 fixes its repetitions and its order first.
+
+## Step 5 -- the sweep, as measured (2026-09-29)
+
+Protocol and analyzer frozen before the first launch (`docs/prereg/ADR-0028.step5-protocol.md`,
+`tools/split_sweep.py`, hashes in `ADR-0028.step5.PREREG_SHA256.txt`); run at commit `ed73546`; every
+raw number in `docs/prereg/ADR-0028.step5-results.json`; the verdicts below are the output of
+`tools/split_sweep.py analyze`, unedited. RTX 5060 Ti, `sm_120`, 2^22 pairs, 128 MB touched, 3 `ncu`
+launches and 7 timing processes per configuration, all 23 widths against the contiguous `hadamard`.
+
+| | DRAM B/pair | L2 B/pair | L2 / control | ms | time / control | spread |
+|---|---|---|---|---|---|---|
+| control (`hadamard`) | 29.96 | 32.01 | | 0.3492 | | 0.6% |
+| w = 1 | 29.89 | 34.12 | 1.066 | 0.3456 | 0.990 | 0.4% |
+| w = 2 | 29.97 | 34.14 | 1.067 | 0.3456 | 0.990 | 0.1% |
+| w = 4 | 29.90 | 34.11 | 1.066 | 0.3455 | 0.989 | 0.1% |
+| w = 8 | 30.00 | 32.04 | 1.001 | 0.3461 | 0.991 | 0.3% |
+| w = 64 | 29.93 | 32.01 | 1.000 | 0.3452 | 0.989 | 0.2% |
+| w = 1024 | 30.01 | 32.01 | 1.000 | 0.3458 | 0.990 | 0.1% |
+| w = 65536 | 29.91 | 32.01 | 1.000 | 0.3456 | 0.990 | 0.3% |
+| w = 2^22 (top qubit) | 29.90 | 32.04 | 1.001 | 0.3456 | 0.990 | 0.7% |
+
+The other 15 widths sit in the same band: L2 ratio 1.000-1.002, time ratio 0.986-0.996, DRAM 29.9-31.1
+B/pair (the highest, 31.13 at w = 2^20, is the L2 keeping fewer writes; still within 5%).
+
+| prediction | verdict |
+|---|---|
+| **P1**, invariance: DRAM bytes per pair within 5% of the control at every `w` | **PASS** |
+| **P1 as stated**: the control at 32 B/pair | **NOT confirmed as stated**: the control itself moves 29.96 B/pair; the L2 keeps about 2 B/pair of the writes, ADR-0015's known limit |
+| **P2 shape**: equal to the payload at `w >= 8`, above it at `w < 8`, non-increasing in `w` | **PASS**, and narrowly: the step below 8 is 6.6%, over a 5% tolerance |
+| **P2 magnitude, refined 2x** (the progress note above) | **FAIL**: 1.066, not 2 |
+| **P2 bound, frozen 8x** | **PASS** (1.067 at worst) |
+| **P3**, time equal to the control at `w >= 8`, within the bus ratio below | **PASS**: every width, `w = 1` included, is 0.986-0.996 of the control |
+| **P4**, bit-exact on PTX at this size | **PASS**: every one of the 24 configurations, 10 launches each |
+
+What this says, and what it does not:
+
+* **The refinement I wrote before the measurement is falsified.** I derived 2x at `w < 8` by walking
+  `view_index` and counting the sectors a warp touches **per view in isolation**, and said the partner
+  view and the drain share those sectors and that the measurement would decide. It decided: the bus
+  carries 1.066x the payload, not 2x, so the L1 absorbs most of the collision the isolated count
+  charged. The isolated figure is a bound on what one view alone would ask of the L2, and it
+  over-predicts the bus by about 15x in its excess (6.6% against 100%). The frozen P2 text stands as
+  written: it exceeds the payload below 8, on a plateau (w = 1, 2, 4 all at 1.066) and not as a
+  staircase that keeps rising, which the "monotonically" reading was written to allow.
+* **The mechanism is not shown.** `lts__t_bytes` does not split reads from writes, so "the L1 serves
+  the partner view" is the hypothesis this is consistent with, not something measured. A
+  `lts__t_sectors_op_read` / `_write` split would say which half carries the 2 B/pair; that is a new
+  measurement and outside this protocol.
+* **The extra 2 B/pair at the bus costs no time here.** Time is flat across all 23 widths, so at this
+  size the kernel is bound by DRAM, which did not move. P3's bus-ratio clause was never tested hard:
+  it needed a bus that binds, and this one did not. A case where it would (a smaller working set in
+  L2, or a wider kernel) is not covered by this result.
+* **The control is 1% slower than every split width**, a little over its own 0.6% spread and inside
+  the 5% floor the protocol fixed. Not explained; the control has eight buffers and the split has
+  four, which is the obvious difference and not a demonstrated cause.
+* **The printed per-launch figure is now known to be an upper bound on this device.** `lyth check` and
+  `lyth run` print, for `w < 8`, 64 B/pair (coalescence 0.500) with the caveat that each view is taken
+  alone. That caveat stands and this is the measurement it was pointing at. Whether the printed figure
+  should carry a machine-file L1 factor (ADR-0023) is open and not decided here.
+* Not measured here: the Unibit back end's speed (its `w < 8` path is one f32 per instruction), any
+  `N` other than 2^23, any device but this one.
+
+One erratum, from the protocol and not an edit of the frozen text: ADR-0028 says "16 MB re + 16 MB
+im"; at 2^23 amplitudes each buffer is 32 MB. The 128 MB working set is what the argument needed.
