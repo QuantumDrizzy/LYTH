@@ -349,6 +349,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "lyth-circuit"
+version = "0.1.0"
+dependencies = [
+ "lyth-cuda",
+ "lyth-lang",
+ "lyth-ptx",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "lyth-cuda"
 version = "0.1.0"
 dependencies = [
