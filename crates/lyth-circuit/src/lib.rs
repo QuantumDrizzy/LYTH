@@ -248,35 +248,132 @@ fn launch_grid(walk: usize) -> u32 {
     (walk as u32).div_ceil(256).max(1)
 }
 
-/// The fused circuit on the GPU, from |0...0>, ping-ponging two state buffers. Returns the state
-/// and the number of passes.
-pub fn run_fused_gpu(ctx: &Context, qubits: u32, gates: &[Gate], k: usize) -> Result<(Vec<f32>, Vec<f32>, usize), CudaError> {
+/// One launch of a prepared circuit: which module, its extents, its scalars, what it walks.
+struct Step {
+    module: usize,
+    extents: Vec<(String, u32)>,
+    scalars: BTreeMap<String, f32>,
+    walk: usize,
+}
+
+/// How a circuit is run: fused at `k`, or one launch per gate.
+#[derive(Clone, Copy, Debug)]
+pub enum Mode {
+    Fused(usize),
+    Unfused,
+}
+
+/// A circuit's launches, and the kernels they use.
+fn plan(qubits: u32, gates: &[Gate], mode: Mode) -> Result<(Vec<ir::KernelIr>, Vec<Step>), CudaError> {
     let n = 1usize << qubits;
-    let groups = fuse(gates, k);
-    let msg = |e: String| CudaError::Message(e);
-    let modules: Vec<_> = groups
+    match mode {
+        Mode::Fused(k) => {
+            let groups = fuse(gates, k);
+            let kernels = groups
+                .iter()
+                .enumerate()
+                .map(|(gi, g)| g.lower(&format!("fused{gi}")).map_err(CudaError::Message))
+                .collect::<Result<Vec<_>, _>>()?;
+            let steps = groups
+                .iter()
+                .enumerate()
+                .map(|(gi, g)| Step {
+                    module: gi,
+                    extents: g.widths().into_iter().enumerate().map(|(l, w)| (format!("w{l}"), w)).collect(),
+                    scalars: BTreeMap::new(),
+                    walk: n >> g.qubits.len(),
+                })
+                .collect();
+            Ok((kernels, steps))
+        }
+        Mode::Unfused => {
+            let kernels = ["gate_q", "cu_q", "swap_q"].into_iter().map(example).collect::<Result<Vec<_>, _>>()?;
+            let names = ["ar", "ai", "br", "bi", "cr", "ci", "dr", "di"];
+            let sc = |m: &M| names.iter().map(|s| s.to_string()).zip(f32s(m)).collect::<BTreeMap<_, _>>();
+            let steps = gates
+                .iter()
+                .map(|g| match g {
+                    Gate::U(q, m) => Step { module: 0, extents: vec![("w".into(), 1 << q)], scalars: sc(m), walk: n / 2 },
+                    Gate::CU(c, t, m) => {
+                        let (wc, wt) = widths_ct(*c, *t);
+                        Step { module: 1, extents: vec![("wc".into(), wc), ("wt".into(), wt)], scalars: sc(m), walk: n / 4 }
+                    }
+                    Gate::Swap(a, b) => {
+                        let (wc, wt) = widths_ct(*a, *b);
+                        Step { module: 2, extents: vec![("wc".into(), wc), ("wt".into(), wt)], scalars: BTreeMap::new(), walk: n / 4 }
+                    }
+                })
+                .collect();
+            Ok((kernels, steps))
+        }
+    }
+}
+
+/// The result of [`execute`]: the final state, the number of launches, and the wall time of each
+/// timed repetition in milliseconds.
+pub struct Execution {
+    pub re: Vec<f32>,
+    pub im: Vec<f32>,
+    pub passes: usize,
+    pub ms: Vec<f64>,
+}
+
+/// Run a circuit from |0...0> on the GPU, ping-ponging two state buffers.
+///
+/// Every module is JIT-loaded first and is not timed. Then `1 + reps` runs of the whole circuit,
+/// each starting from |0...0> (the upload is outside the timed region); the first is a warm-up and
+/// is discarded. A timed run is the wall time from the first launch to the `synchronize` after the
+/// last, so launch overhead is **in** it: it is what a caller of the circuit pays.
+pub fn execute(ctx: &Context, qubits: u32, gates: &[Gate], mode: Mode, reps: usize) -> Result<Execution, CudaError> {
+    let n = 1usize << qubits;
+    let (kernels, steps) = plan(qubits, gates, mode)?;
+    let modules: Vec<_> = kernels
         .iter()
-        .enumerate()
-        .map(|(gi, g)| {
-            let kir = g.lower(&format!("fused{gi}")).map_err(msg)?;
-            let m = lyth_ptx::emit(&kir, "sm_120").map_err(|e| msg(e.to_string()))?;
+        .map(|k| {
+            let m = lyth_ptx::emit(k, "sm_120").map_err(|e| CudaError::Message(e.to_string()))?;
             ctx.load_ptx(&m.ptx).map(|module| (module, m.entry))
         })
         .collect::<Result<_, _>>()?;
     let funcs: Vec<_> = modules.iter().map(|(m, e)| m.function(e)).collect::<Result<_, _>>()?;
     let (re0, im0) = initial(qubits);
-    let mut a: (Buffer, Buffer) = (ctx.upload(&re0)?, ctx.upload(&im0)?);
-    let mut b: (Buffer, Buffer) = (ctx.alloc(n)?, ctx.alloc(n)?);
-    for (g, f) in groups.iter().zip(&funcs) {
-        let mut args = vec![Arg::U32(n as u32)];
-        args.extend(g.widths().into_iter().map(Arg::U32));
-        args.extend([Arg::Buf(&a.0), Arg::Buf(&a.1), Arg::Buf(&b.0), Arg::Buf(&b.1)]);
-        f.launch(launch_grid(n >> g.qubits.len()), 256, &args)?;
-        drop(args);
-        std::mem::swap(&mut a, &mut b);
+    let (mut a, mut b): ((Buffer, Buffer), (Buffer, Buffer)) = ((ctx.alloc(n)?, ctx.alloc(n)?), (ctx.alloc(n)?, ctx.alloc(n)?));
+    let mut ms = Vec::with_capacity(reps);
+    for rep in 0..=reps {
+        a = (ctx.upload(&re0)?, ctx.upload(&im0)?);
+        ctx.synchronize()?;
+        let t0 = std::time::Instant::now();
+        for st in &steps {
+            let args: Vec<Arg> = kernels[st.module]
+                .params
+                .iter()
+                .map(|p| match p.name.as_str() {
+                    "n" => Arg::U32(n as u32),
+                    "re" => Arg::Buf(&a.0),
+                    "im" => Arg::Buf(&a.1),
+                    "qr" => Arg::Buf(&b.0),
+                    "qi" => Arg::Buf(&b.1),
+                    other => match st.extents.iter().find(|(e, _)| e == other) {
+                        Some((_, v)) => Arg::U32(*v),
+                        None => Arg::F32(st.scalars[other]),
+                    },
+                })
+                .collect();
+            funcs[st.module].launch(launch_grid(st.walk), 256, &args)?;
+            drop(args);
+            std::mem::swap(&mut a, &mut b);
+        }
+        ctx.synchronize()?;
+        if rep > 0 {
+            ms.push(t0.elapsed().as_secs_f64() * 1e3);
+        }
     }
-    ctx.synchronize()?;
-    Ok((a.0.download()?, a.1.download()?, groups.len()))
+    Ok(Execution { re: a.0.download()?, im: a.1.download()?, passes: steps.len(), ms })
+}
+
+/// The fused circuit on the GPU. Returns the state and the number of passes.
+pub fn run_fused_gpu(ctx: &Context, qubits: u32, gates: &[Gate], k: usize) -> Result<(Vec<f32>, Vec<f32>, usize), CudaError> {
+    let e = execute(ctx, qubits, gates, Mode::Fused(k), 0)?;
+    Ok((e.re, e.im, e.passes))
 }
 
 fn example(name: &str) -> Result<ir::KernelIr, CudaError> {
@@ -293,56 +390,8 @@ pub fn widths_ct(c: u32, t: u32) -> (u32, u32) {
 
 /// The unfused circuit on the GPU: one launch of `gate_q`, `cu_q` or `swap_q` per gate.
 pub fn run_unfused_gpu(ctx: &Context, qubits: u32, gates: &[Gate]) -> Result<(Vec<f32>, Vec<f32>), CudaError> {
-    let n = 1usize << qubits;
-    let kernels: Vec<ir::KernelIr> = ["gate_q", "cu_q", "swap_q"].into_iter().map(example).collect::<Result<_, _>>()?;
-    let modules: Vec<_> = kernels
-        .iter()
-        .map(|k| {
-            let m = lyth_ptx::emit(k, "sm_120").map_err(|e| CudaError::Message(e.to_string()))?;
-            ctx.load_ptx(&m.ptx).map(|module| (module, m.entry))
-        })
-        .collect::<Result<_, _>>()?;
-    let funcs: Vec<_> = modules.iter().map(|(m, e)| m.function(e)).collect::<Result<_, _>>()?;
-    let (re0, im0) = initial(qubits);
-    let mut a: (Buffer, Buffer) = (ctx.upload(&re0)?, ctx.upload(&im0)?);
-    let mut b: (Buffer, Buffer) = (ctx.alloc(n)?, ctx.alloc(n)?);
-    for g in gates {
-        let (which, extents, m): (usize, Vec<(&str, u32)>, Option<&M>) = match g {
-            Gate::U(q, m) => (0, vec![("w", 1 << q)], Some(m)),
-            Gate::CU(c, t, m) => {
-                let (wc, wt) = widths_ct(*c, *t);
-                (1, vec![("wc", wc), ("wt", wt)], Some(m))
-            }
-            Gate::Swap(x, y) => {
-                let (wc, wt) = widths_ct(*x, *y);
-                (2, vec![("wc", wc), ("wt", wt)], None)
-            }
-        };
-        let s: BTreeMap<&str, f32> = m
-            .map(|m| ["ar", "ai", "br", "bi", "cr", "ci", "dr", "di"].into_iter().zip(f32s(m)).collect())
-            .unwrap_or_default();
-        let args: Vec<Arg> = kernels[which]
-            .params
-            .iter()
-            .map(|p| match p.name.as_str() {
-                "n" => Arg::U32(n as u32),
-                "re" => Arg::Buf(&a.0),
-                "im" => Arg::Buf(&a.1),
-                "qr" => Arg::Buf(&b.0),
-                "qi" => Arg::Buf(&b.1),
-                other => match extents.iter().find(|(e, _)| *e == other) {
-                    Some((_, v)) => Arg::U32(*v),
-                    None => Arg::F32(s[other]),
-                },
-            })
-            .collect();
-        let walk = n >> if which == 0 { 1 } else { 2 };
-        funcs[which].launch(launch_grid(walk), 256, &args)?;
-        drop(args);
-        std::mem::swap(&mut a, &mut b);
-    }
-    ctx.synchronize()?;
-    Ok((a.0.download()?, a.1.download()?))
+    let e = execute(ctx, qubits, gates, Mode::Unfused, 0)?;
+    Ok((e.re, e.im))
 }
 
 /// Circuits the tests and the measurement share, with a fixed generator.
