@@ -1,0 +1,7 @@
+protocol_sha256=35ef6dda65f396743c4a98726619c3192fcc43b7fed08f21e91791384e109dc1
+protocol_file=docs/prereg/ADR-0029.p2-followup-protocol.md
+tool_sha256=5b0b3a49f2d2df866593dba171d061c803d560df03d0980ce7a816e4062d4d99
+tool_file=tools/p2_followup.py
+frozen_at=2026-09-29T17:55:26+02:00
+git_head=b1aca70297904f0b73bdf15c9257ca54eb71d574
+note=ADR-0029 P2 follow-up, frozen before the measurement; the (0,1) probe at 2^20 and the SASS store order were seen first and are disclosed in the protocol
