@@ -465,5 +465,5 @@ fn unibit_refuses_widths_whose_runs_do_not_tile_rather_than_divide_per_element()
         },
     )
     .expect_err("refused");
-    assert!(err.to_string().contains("2 * wt = 4 divides 3, but 3 mod 4 = 3"), "{err}");
+    assert!(err.to_string().contains("is not a loop nest at these widths"), "{err}");
 }

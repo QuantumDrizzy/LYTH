@@ -107,3 +107,20 @@ cuStateVec, which does not run on this Windows machine and is not measured here.
   ratio is 0.958 - 1.050. **Q4 PASS**, and at `(0, 8)` only just: 1.0499 against a 5% bound. The tree
   order (00, 01, 10, 11) is not the order `cu_q_grouped` measured with (00, 10, 01, 11); grouping by
   buffer is what mattered, which is what the pass shows and no more. Every bit-exact test unchanged.
+- **Step 3** (`a9390e5`): `lyth-circuit`. **Q1 holds on the GPU and the host oracle, Q5 holds.**
+  GHZ(12), QFT(10), random(10, depth 20) and random(20, depth 10), fused at every `k` from 1 to 5,
+  equal the unfused run bit for bit. Passes at `k` = 1..5: GHZ 12/11/6/4/3, QFT 69/54/32/21/15,
+  random-10 300/198/157/96/81, random-20 300/200/161/100/88. Against Qiskit: max |diff| <= 6.6e-8,
+  infidelity <= 3.5e-13, the 20-qubit circuit included. Reassociating one fma chain in the generator
+  breaks the equality, so the check has teeth.
+- **Step 4.** Unibit reads its loop nest off `base_index` and checks it element by element before
+  emitting; every ADR-0028/0029 emulator test passes on the derived nest, and the irregular case is
+  refused as "not a loop nest". **Q1 on Unibit holds where Unibit can hold the group -- and I named
+  the wrong limit.** The ADR said the limit would be the nest; it is the **register pool**. Unibit
+  does not spill, and a group over three qubits keeps 16 amplitudes live plus a chain's working
+  values, past its 19 registers. Storing each drained leaf as soon as it exists (split kernels only;
+  same stores, earlier) brought GHZ's three-qubit groups inside; general three-qubit groups still do
+  not fit. So on Unibit every group of at most two qubits fuses, groups of three to five fuse when
+  they fit (QFT(10) at `k = 3`: 24 of 32; random at `k = 3`: 20 of 32), and a refused group runs
+  unfused on the emulator. Every mixed run equals the GPU's, bit for bit. Spilling is what would
+  close the gap; it is not built. `[KNOWN_LIMIT]`.

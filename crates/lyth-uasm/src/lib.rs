@@ -116,46 +116,111 @@ fn split_plan(ir: &KernelIr, p: &Program) -> Result<Option<SplitPlan>, EmitError
             p.n
         )));
     }
-    let len = p.n << depth;
-    let (run, levels) = match width[..] {
-        [(_, w)] => (w, vec![(p.n / w, w)]),
-        [(an, a), (bn, b)] if b < a => {
-            if a % (2 * b) != 0 {
+    let _ = width;
+    // The nest is read off the address rule itself, not derived by hand per depth (ADR-0030
+    // step 4): the first leaf's `base_index` sequence gives the run and, level by level, how many
+    // runs share a hop. Then every element of every streamed leaf is checked against the nest
+    // before anything is emitted, so a nest that does not reproduce `base_index` is a refusal,
+    // never a program that reads the wrong amplitudes.
+    let leaves: Vec<&str> = ir.streams.iter().map(|s| s.buffer.as_str()).filter(|b| ir.view(b).is_some()).collect();
+    let at = |leaf: &str, k: u64| ir.base_index(leaf, &p.extents, k).expect("split_pairs checked every width");
+    let walk = u64::from(p.n);
+    let first = leaves[0];
+    let (run, levels) = derive_nest(|k| at(first, k), walk);
+    if levels.len() > LEVEL_COUNTERS.len() {
+        return Err(refuse(format!(
+            "kernel `{}` walks a nest of {} levels at these widths; this back end has {} loop counters \
+             besides the run's. Refused rather than spilled.",
+            ir.name,
+            levels.len(),
+            LEVEL_COUNTERS.len()
+        )));
+    }
+    let walked = walk_nest(run, &levels, walk);
+    for leaf in &leaves {
+        let base = at(leaf, 0);
+        for (k, &off) in walked.iter().enumerate() {
+            let want = at(leaf, k as u64);
+            if base + off != want {
                 return Err(refuse(format!(
-                    "`{bn} = {b}` runs inside `{an} = {a}` blocks only when 2 * {bn} = {} divides \
-                     {a}, but {a} mod {} = {}. The other back ends address this with a division per \
-                     element; this one walks a loop nest and refuses it.",
-                    2 * b,
-                    2 * b,
-                    a % (2 * b)
+                    "the address sequence of `{leaf}` is not a loop nest at these widths: element {k} is \
+                     buffer element {want}, and the nest derived from the first leaf walks {}. The \
+                     other back ends address this with a division per element; this one walks a loop \
+                     nest and refuses it.",
+                    base + off
                 )));
             }
-            (b, vec![(a / (2 * b), b), (len / (2 * a), a)])
         }
-        [(an, a), (bn, b)] => {
-            if b % a != 0 {
-                return Err(refuse(format!(
-                    "`{an} = {a}` runs tile `{bn} = {b}` only when {a} divides {b}, but {b} mod {a} \
-                     = {}. The other back ends address this with a division per element; this one \
-                     walks a loop nest and refuses it.",
-                    b % a
-                )));
-            }
-            (a, vec![(b / a, a), (len / (4 * b), 2 * b)])
-        }
-        _ => {
-            return Err(refuse(format!(
-                "kernel `{}` splits to depth {depth}. This back end walks depth 1 and 2 with a hand-derived                  nest; deeper nests are derived from `base_index` in ADR-0030 step 4, and until then                  they are refused rather than guessed.",
-                ir.name
-            )))
-        }
-    };
+    }
+    let narrow = |x: u64| u32::try_from(x).expect("below the buffer length, a u32");
+    let run = narrow(run);
+    let levels: Vec<(u32, u32)> = levels.into_iter().map(|(c, h)| (narrow(c), narrow(h))).collect();
     Ok(Some(SplitPlan { run, levels, vector: run % LANES == 0 }))
 }
 
+/// Read a loop nest off an address sequence `a(0 .. walk)`: the contiguous run, then per level
+/// `(count, hop)` -- after `count` iterations of the level inside, the pointer skips `hop` more
+/// elements. A level of count 1 folds its hop into the next, since both are added together.
+/// Not a proof that the sequence *is* this nest: [`walk_nest`] is compared with it afterwards.
+fn derive_nest(a: impl Fn(u64) -> u64, walk: u64) -> (u64, Vec<(u64, u64)>) {
+    let mut run = 1;
+    while run < walk && a(run) == a(run - 1) + 1 {
+        run += 1;
+    }
+    let runs = walk / run;
+    let start = |j: u64| a(j * run);
+    let gap = |j: u64| start(j) - start(j - 1);
+    let (mut levels, mut span, mut cum, mut pending) = (Vec::new(), 1u64, 0u64, 0u64);
+    while span < runs {
+        let h = gap(span).saturating_sub(run + cum);
+        // The level holds groups of `span` runs until a boundary whose gap is not this level's.
+        let mut c = 1;
+        while c * span < runs && gap(c * span) == run + cum + h {
+            c += 1;
+        }
+        cum += h;
+        if c == 1 {
+            pending += h;
+        } else {
+            levels.push((c, h + pending));
+            pending = 0;
+        }
+        span *= c;
+    }
+    if levels.is_empty() {
+        levels.push((runs, 0));
+    }
+    (run, levels)
+}
+
+/// The offsets the emitted loops visit, element by element, from the leaf's first element.
+fn walk_nest(run: u64, levels: &[(u64, u64)], walk: u64) -> Vec<u64> {
+    let mut out = Vec::with_capacity(walk as usize);
+    let mut ptr = 0u64;
+    let mut counters: Vec<u64> = levels.iter().map(|(c, _)| *c).collect();
+    'outer: loop {
+        for i in 0..run {
+            out.push(ptr + i);
+        }
+        ptr += run;
+        // Innermost level first: its hop after each iteration; when it wraps, the next one's too.
+        for (l, (count, hop)) in levels.iter().enumerate() {
+            ptr += hop;
+            counters[l] -= 1;
+            if counters[l] > 0 {
+                continue 'outer;
+            }
+            counters[l] = *count;
+        }
+        break;
+    }
+    out.truncate(walk as usize);
+    out
+}
+
 /// The counter and the label of each level of a split's loop nest, innermost first.
-const LEVEL_COUNTERS: [&str; 2] = ["s9", "s10"];
-const LEVEL_LABELS: [&str; 2] = ["outer", "outer2"];
+const LEVEL_COUNTERS: [&str; 3] = ["s9", "s10", "s11"];
+const LEVEL_LABELS: [&str; 3] = ["outer", "outer2", "outer3"];
 
 /// The value `lyth run` gives a scalar that was not `--set`, so the emitted program and the
 /// host oracle agree about it. Duplicated from `main.rs` and asserted equal in the tests,
@@ -514,12 +579,22 @@ fn emit_text(ir: &KernelIr, prog: &Program, plan: Option<&SplitPlan>, out: &mut 
     };
     // Values the loop's tail still needs after the last op: what is stored, and what the
     // reduction folds. Freeing these would hand out a register holding a result.
+    //
+    // A split kernel stores each drained leaf **as soon as its value exists** (ADR-0030 step 4),
+    // so its register can be handed back: a fused pass over three qubits holds sixteen results,
+    // and keeping them all to the end of the iteration is what overflowed the pool. It is the same
+    // store to the same address, earlier: a leaf is defined once, and a split kernel cannot read
+    // a buffer it writes (in-place is refused), so nothing in the iteration can observe the
+    // difference. Other kernels keep storing at the end, as they always have.
+    let early_stores = plan.is_some();
     let live_to_end: Vec<RegId> = ir
         .drains
         .iter()
+        .filter(|_| !early_stores)
         .map(|(_, r)| *r)
         .chain(ir.reduction.iter().map(|r| r.value))
         .collect();
+    let mut stored: Vec<bool> = vec![false; ir.drains.len()];
 
     let mut free: Vec<usize> = pool(buffers.len());
     // Which temporary holds each body value, so it can be handed back at its last read.
@@ -708,6 +783,24 @@ fn emit_text(ir: &KernelIr, prog: &Program, plan: Option<&SplitPlan>, out: &mut 
             }
         }
 
+        // A drained leaf whose value this op defined: store it now.
+        if early_stores {
+            let d = op.dst();
+            for (k, (buffer, src)) in ir.drains.iter().enumerate() {
+                if *src == d && !stored[k] {
+                    let (bi, off) = slot(buffer);
+                    let _ = writeln!(out, "        {store:<7} {}, {off}(s{bi})", get(&regs, d));
+                    stored[k] = true;
+                }
+            }
+            // Stored and read by nothing later: hand it back now.
+            if last_use.get(&d).is_none_or(|&u| u <= i) && ir.drains.iter().any(|(_, r)| *r == d) {
+                if let Some(t) = owner.remove(&d) {
+                    free.push(t);
+                }
+            }
+        }
+
         // Hand back every register whose last read was this instruction.
         //
         // After the whole op is written, never during it: `vfsub rd, rs1, rs2` reads before it
@@ -738,7 +831,10 @@ fn emit_text(ir: &KernelIr, prog: &Program, plan: Option<&SplitPlan>, out: &mut 
         let _ = writeln!(out, "        {m}   {a}, {a}, {v}");
     }
 
-    for (buffer, src) in &ir.drains {
+    for (k, (buffer, src)) in ir.drains.iter().enumerate() {
+        if stored[k] {
+            continue;
+        }
         let (i, off) = slot(buffer);
         let _ = writeln!(out, "        {store:<7} {}, {off}(s{i})", get(&regs, *src));
     }
