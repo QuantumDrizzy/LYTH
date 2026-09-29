@@ -49,8 +49,17 @@ pub struct SplitSpec {
     pub views: [String; 2],
     /// The `u32` parameter holding the block width.
     pub width: String,
-    /// The base's own extent: `2 * width` must divide it, or the launch is refused.
+    /// The buffer's extent. `2 * width` must divide the length of what is split -- `extent`
+    /// itself, or `extent / 2^depth` for a split of a view -- or the launch is refused.
     pub extent: String,
+    /// How many splits lie above this one (ADR-0029): 0 for a split of a buffer, 1 for a split
+    /// of a view. Absent at 0, so ADR-0028's manifests are unchanged.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub depth: u32,
+}
+
+fn is_zero(v: &u32) -> bool {
+    *v == 0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -138,7 +147,7 @@ impl GridRule {
             _ => GridRule::Elementwise {
                 extents,
                 min_elements_per_thread: min_elements_per_thread(ir),
-                pairs: !ir.views.is_empty(),
+                split_depth: if ir.views.is_empty() { 0 } else { ir.walk_depth().max(1) },
             },
         }
     }
@@ -154,11 +163,12 @@ impl GridRule {
             GridRule::Elementwise {
                 extents,
                 min_elements_per_thread,
-                pairs,
+                split_depth,
             } => {
                 let total: u64 = extents.iter().map(|e| extent(e) as u64).product();
-                // A kernel that splits walks pairs, half of every base (ADR-0028).
-                let total = if *pairs { total / 2 } else { total };
+                // A kernel that splits walks pairs, half of every buffer (ADR-0028), or quads, a
+                // quarter (ADR-0029).
+                let total = total >> split_depth;
                 // In 64 bits, because a rank-2 product of 32-bit extents does not fit in 32.
                 let per_block = (block as u64) * (*min_elements_per_thread as u64);
                 total.div_ceil(per_block.max(1))
@@ -201,12 +211,12 @@ pub enum GridRule {
     Elementwise {
         extents: Vec<String>,
         min_elements_per_thread: u32,
-        /// The kernel splits, so it walks **pairs**: the element count is half the extent
-        /// (ADR-0028). A field, not a variant, for the reason `min_elements_per_thread` is: a
-        /// generator that did not know about it would emit the plain rule and launch twice the
-        /// blocks. Absent from every manifest that does not split.
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        pairs: bool,
+        /// The kernel splits, so it walks `extent / 2^split_depth` elements: pairs at 1
+        /// (ADR-0028), quads at 2 (ADR-0029). A field, not a variant, for the reason
+        /// `min_elements_per_thread` is: a generator that did not know about it would emit the
+        /// plain rule and launch too many blocks. Absent from every manifest that does not split.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        split_depth: u32,
     },
     /// `product(ceil(extent[d] / tile[d]))`, one block per tile.
     Tiled { tile: Vec<u32>, extents: Vec<String> },
@@ -355,7 +365,7 @@ impl Manifest {
                 let view_streams = || {
                     ir.streams
                         .iter()
-                        .filter(|s| ir.view(&s.buffer).is_some_and(|v| v.base == p.name))
+                        .filter(|s| ir.view(&s.buffer).is_some() && ir.root_of(&s.buffer) == p.name)
                 };
                 ParamSpec {
                     name: p.name.clone(),
@@ -395,10 +405,11 @@ impl Manifest {
                     extent: ir
                         .params
                         .iter()
-                        .find(|p| p.name == v.base)
+                        .find(|p| p.name == ir.root_of(&v.base))
                         .and_then(|p| p.shape.first())
                         .cloned()
                         .unwrap_or_default(),
+                    depth: ir.depth(&v.base),
                 });
             }
             out

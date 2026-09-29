@@ -47,8 +47,6 @@ pub(crate) fn isa_for(arch: &str) -> Result<&'static str, EmitError> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum EmitError {
-    #[error("{0}")]
-    Unsupported(String),
     #[error(
         "kernel `{0}` has no parameter that bounds the index space; add an `n: u32` parameter"
     )]
@@ -92,9 +90,6 @@ pub fn emit(ir: &KernelIr, arch: &str) -> Result<Module, EmitError> {
 /// that must conflict. It is correct and slow, and it is not reachable from the language --
 /// only from the fixture that falsifies the claim.
 pub fn emit_with_skew(ir: &KernelIr, arch: &str, skewed: bool) -> Result<Module, EmitError> {
-    if ir.walk_depth() > 1 {
-        return Err(EmitError::Unsupported("ADR-0029 step 1 lowers a split of a view; this back end walks it from step 3. Refused rather than addressed as depth 1.".into()));
-    }
     if ir.ops.iter().any(|op| matches!(op, Op::Zipper2 { .. })) {
         return zipper_emit::emit(ir, arch);
     }
@@ -341,11 +336,12 @@ impl Emitter {
         };
 
         let r_bound = match &ir.space {
-            // A split kernel walks pairs: half of every base (ADR-0028). The launch check has
-            // already made the length even (2w divides it).
+            // A split kernel walks pairs -- half of every buffer (ADR-0028) -- or at depth 2 quads,
+            // a quarter (ADR-0029). The launch check has made the length divisible at every level.
             None if !ir.views.is_empty() => {
                 let pairs = self.b32();
-                line(out, &format!("shr.u32 {pairs}, {}, 1;", u32_of(bound)));
+                let depth = ir.walk_depth().max(1);
+                line(out, &format!("shr.u32 {pairs}, {}, {depth};", u32_of(bound)));
                 pairs
             }
             None => u32_of(bound),
@@ -497,52 +493,70 @@ impl Emitter {
         // distinct (width, part, element width) gets one byte offset, so the eight streams of
         // `hadamard_q` pay for two index computations and not eight. These are integer work:
         // they move no bytes and retire no flops, so the traffic model does not see them.
+        //
+        // At depth 2 (ADR-0029) the same step is applied once per level, from the leaf up:
+        // `KernelIr::base_index` in instructions. Each step is memoized by (width, input
+        // register), so the sixteen leaves of `cu_q` share one inner division per input and two
+        // outer ones, and each distinct (index, element width) gets one byte offset.
         if !ir.views.is_empty() {
-            let mut widths: Vec<(String, String, String)> = Vec::new(); // (name, w, idx0)
-            let mut offsets: Vec<(String, u8, u32, String)> = Vec::new(); // (width, part, elem, off)
-            for v in &ir.views {
-                if !widths.iter().any(|(n, _, _)| *n == v.width) {
+            let mut idx0s: Vec<(String, String, String)> = Vec::new(); // (width, input, idx0)
+            let mut odds: Vec<(String, String, String)> = Vec::new(); // (width, input, idx0 + w)
+            let mut offsets: Vec<(String, u32, String)> = Vec::new(); // (index, elem, off)
+            for st in ir.streams.iter().filter(|st| ir.view(&st.buffer).is_some()) {
+                let mut cur = idx.clone();
+                let mut at = st.buffer.as_str();
+                while let Some(v) = ir.view(at) {
                     let w = u32_of(&v.width);
-                    let w2 = self.b32();
-                    let blk = self.b32();
-                    let blk_w = self.b32();
-                    let rem = self.b32();
-                    let idx0 = self.b32();
-                    line(out, &format!("shl.b32 {w2}, {w}, 1;"));
-                    line(out, &format!("div.u32 {blk}, {idx}, {w};"));
-                    line(out, &format!("mul.lo.u32 {blk_w}, {blk}, {w};"));
-                    line(out, &format!("sub.u32 {rem}, {idx}, {blk_w};"));
-                    line(out, &format!("mad.lo.u32 {idx0}, {blk}, {w2}, {rem};"));
-                    widths.push((v.width.clone(), w, idx0));
+                    let idx0 = match idx0s.iter().find(|(wn, inp, _)| *wn == v.width && *inp == cur) {
+                        Some((_, _, r)) => r.clone(),
+                        None => {
+                            let w2 = self.b32();
+                            let blk = self.b32();
+                            let blk_w = self.b32();
+                            let rem = self.b32();
+                            let idx0 = self.b32();
+                            line(out, &format!("shl.b32 {w2}, {w}, 1;"));
+                            line(out, &format!("div.u32 {blk}, {cur}, {w};"));
+                            line(out, &format!("mul.lo.u32 {blk_w}, {blk}, {w};"));
+                            line(out, &format!("sub.u32 {rem}, {cur}, {blk_w};"));
+                            line(out, &format!("mad.lo.u32 {idx0}, {blk}, {w2}, {rem};"));
+                            idx0s.push((v.width.clone(), cur.clone(), idx0.clone()));
+                            idx0
+                        }
+                    };
+                    cur = if v.part == 0 {
+                        idx0
+                    } else {
+                        match odds.iter().find(|(wn, inp, _)| *wn == v.width && *inp == idx0) {
+                            Some((_, _, r)) => r.clone(),
+                            None => {
+                                let t = self.b32();
+                                line(out, &format!("add.u32 {t}, {idx0}, {w};"));
+                                odds.push((v.width.clone(), idx0, t.clone()));
+                                t
+                            }
+                        }
+                    };
+                    at = &v.base;
                 }
-            }
-            for v in &ir.views {
-                let (_, w, idx0) = widths.iter().find(|(n, _, _)| *n == v.width).expect("just added");
-                let elem = width_of(&v.name);
-                let off = match offsets.iter().find(|(n, p, e, _)| *n == v.width && *p == v.part && *e == elem) {
-                    Some((_, _, _, off)) => off.clone(),
+                let elem = width_of(&st.buffer);
+                let off = match offsets.iter().find(|(i, e, _)| *i == cur && *e == elem) {
+                    Some((_, _, off)) => off.clone(),
                     None => {
-                        let at = if v.part == 0 {
-                            idx0.clone()
-                        } else {
-                            let t = self.b32();
-                            line(out, &format!("add.u32 {t}, {idx0}, {w};"));
-                            t
-                        };
                         let off = self.b64();
-                        line(out, &format!("mul.wide.u32 {off}, {at}, {elem};"));
-                        offsets.push((v.width.clone(), v.part, elem, off.clone()));
+                        line(out, &format!("mul.wide.u32 {off}, {cur}, {elem};"));
+                        offsets.push((cur.clone(), elem, off.clone()));
                         off
                     }
                 };
                 let base = buffers
                     .iter()
-                    .find(|(n, _)| *n == v.base)
+                    .find(|(n, _)| *n == at)
                     .map(|(_, b)| b.clone())
-                    .expect("a view's base is a buffer parameter");
+                    .expect("a view's root is a buffer parameter");
                 let a = self.b64();
                 line(out, &format!("add.s64 {a}, {base}, {off};"));
-                addrs.push((v.name.clone(), a));
+                addrs.push((st.buffer.clone(), a));
             }
         }
         for (name, base) in buffers.iter().filter(|_| ir.views.is_empty()) {

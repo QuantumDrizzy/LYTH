@@ -57,9 +57,19 @@ pub const LANES: u32 = 8;
 /// instructions** the cost model derived for bytes: `[KNOWN_LIMIT]`, stated rather than hidden.
 /// The derived traffic and intensity hold; the ceiling ADR-0022 computes for this machine does
 /// not, at those widths.
+///
+/// **A loop nest (ADR-0029).** At depth 1 a view is `run = w` contiguous elements, then a hop of
+/// `w`, `pairs / w` times. At depth 2 -- outer width `A` in the buffer, inner width `B` in the
+/// parent view -- it is a third level: when `B < A` (and `2B | A`) runs of `B`, hop `B`,
+/// `A / 2B` times, then hop `A`; when `B >= A` (and `A | B`) runs of `A`, hop `A`, `B / A` times,
+/// then hop `2B`. Every leaf walks the same nest from its own first element, `base_index(leaf,
+/// 0)`. Anything else -- widths whose runs do not tile -- is refused with the arithmetic rather
+/// than walked with a division per element.
 struct SplitPlan {
-    /// The block width, from the launch.
-    w: u32,
+    /// Contiguous elements before the first hop.
+    run: u32,
+    /// (iterations, hop in elements after them), innermost first.
+    levels: Vec<(u32, u32)>,
     /// Whole-register loads and stores, or one f32 at a time.
     vector: bool,
 }
@@ -68,37 +78,79 @@ fn split_plan(ir: &KernelIr, p: &Program) -> Result<Option<SplitPlan>, EmitError
     if ir.views.is_empty() {
         return Ok(None);
     }
-    if ir.walk_depth() > 1 {
-        return Err(refuse("ADR-0029 step 1 lowers a split of a view; this back end walks it from step 3. Refused rather than addressed as depth 1."));
+    // One width per level: a loop nest has one counter per level, shared by every leaf.
+    let depth = ir.walk_depth().max(1);
+    let mut per_level: Vec<Vec<&str>> = vec![Vec::new(); depth as usize];
+    for v in &ir.views {
+        let lvl = ir.depth(&v.name) as usize - 1;
+        if !per_level[lvl].contains(&v.width.as_str()) {
+            per_level[lvl].push(v.width.as_str());
+        }
     }
-    let mut widths: Vec<&str> = ir.views.iter().map(|v| v.width.as_str()).collect();
-    widths.sort_unstable();
-    widths.dedup();
-    if widths.len() > 1 {
-        return Err(refuse(format!(
-            "kernel `{}` splits at more than one width ({}). This back end walks every base with \
-             one pair of loop counters, so it takes one.",
-            ir.name,
-            widths.join(", ")
-        )));
+    let mut width = Vec::new();
+    for (lvl, names) in per_level.iter().enumerate() {
+        if names.len() != 1 {
+            return Err(refuse(format!(
+                "kernel `{}` splits at more than one width at depth {} ({}). This back end walks \
+                 every buffer with one loop nest, so it takes one width per level.",
+                ir.name,
+                lvl + 1,
+                names.join(", ")
+            )));
+        }
+        let Some(&w) = p.extents.get(names[0]) else {
+            return Err(refuse(format!(
+                "kernel `{}` splits at width `{}` and this launch gives none. A kernel that splits \
+                 needs its width from a `main`: `emit_program` has no way to invent one.",
+                ir.name, names[0]
+            )));
+        };
+        width.push((names[0], w));
     }
-    let Some(&w) = p.extents.get(widths[0]) else {
+    // The launch check, not a second copy of it: every level covers its parent, and the walk is
+    // the buffer over 2^depth.
+    let walk = ir.split_pairs(&p.extents).map_err(|e| refuse(e.to_string()))?;
+    if walk != Some(p.n) {
         return Err(refuse(format!(
-            "kernel `{}` splits at width `{}` and this launch gives none. A kernel that splits \
-             needs its width from a `main`: `emit_program` has no way to invent one.",
-            ir.name, widths[0]
-        )));
-    };
-    // The launch check, not a second copy of it: 2w divides every base, and the pairs are half.
-    let pairs = ir.split_pairs(&p.extents).map_err(|e| refuse(e.to_string()))?;
-    if pairs != Some(p.n) {
-        return Err(refuse(format!(
-            "this launch walks {} elements, but a split kernel walks {pairs:?} pairs",
+            "this launch walks {} elements, but a split kernel at depth {depth} walks {walk:?}",
             p.n
         )));
     }
-    Ok(Some(SplitPlan { w, vector: w % LANES == 0 }))
+    let len = p.n << depth;
+    let (run, levels) = match width[..] {
+        [(_, w)] => (w, vec![(p.n / w, w)]),
+        [(an, a), (bn, b)] if b < a => {
+            if a % (2 * b) != 0 {
+                return Err(refuse(format!(
+                    "`{bn} = {b}` runs inside `{an} = {a}` blocks only when 2 * {bn} = {} divides \
+                     {a}, but {a} mod {} = {}. The other back ends address this with a division per \
+                     element; this one walks a loop nest and refuses it.",
+                    2 * b,
+                    2 * b,
+                    a % (2 * b)
+                )));
+            }
+            (b, vec![(a / (2 * b), b), (len / (2 * a), a)])
+        }
+        [(an, a), (bn, b)] => {
+            if b % a != 0 {
+                return Err(refuse(format!(
+                    "`{an} = {a}` runs tile `{bn} = {b}` only when {a} divides {b}, but {b} mod {a} \
+                     = {}. The other back ends address this with a division per element; this one \
+                     walks a loop nest and refuses it.",
+                    b % a
+                )));
+            }
+            (a, vec![(b / a, a), (len / (4 * b), 2 * b)])
+        }
+        _ => unreachable!("lowering refuses depth 3"),
+    };
+    Ok(Some(SplitPlan { run, levels, vector: run % LANES == 0 }))
 }
+
+/// The counter and the label of each level of a split's loop nest, innermost first.
+const LEVEL_COUNTERS: [&str; 2] = ["s9", "s10"];
+const LEVEL_LABELS: [&str; 2] = ["outer", "outer2"];
 
 /// The value `lyth run` gives a scalar that was not `--set`, so the emitted program and the
 /// host oracle agree about it. Duplicated from `main.rs` and asserted equal in the tests,
@@ -363,7 +415,7 @@ fn check_scope(ir: &KernelIr, n: u32, splits: bool) -> Result<(), EmitError> {
 
 fn emit_data(ir: &KernelIr, prog: &Program, out: &mut String) -> Result<(), EmitError> {
     // A split kernel walks `n` pairs and its buffers are the whole vectors (ADR-0028).
-    let n = if ir.views.is_empty() { prog.n } else { 2 * prog.n };
+    let n = if ir.views.is_empty() { prog.n } else { prog.n << ir.walk_depth().max(1) };
     let _ = writeln!(out, "        .data");
     for p in &ir.params {
         if !p.ty.is_buffer() {
@@ -526,12 +578,13 @@ fn emit_text(ir: &KernelIr, prog: &Program, plan: Option<&SplitPlan>, out: &mut 
         Some(sp) if !sp.vector => ("lw", "sw", 4),
         _ => ("lq", "sq", 32),
     };
-    // Where a streamed name lives: the base's pointer, and the byte offset of its view.
+    // Where a streamed name lives: its buffer's pointer, and the byte offset of the view's first
+    // element -- `base_index(view, 0)`, at any depth.
     let slot = |name: &str| -> (usize, u64) {
         match (ir.view(name), plan) {
-            (Some(v), Some(sp)) => (
-                buffers.iter().position(|b| *b == v.base).expect("a view's base is a parameter"),
-                u64::from(v.part) * u64::from(sp.w) * 4,
+            (Some(_), Some(_)) => (
+                buffers.iter().position(|b| *b == ir.root_of(name)).expect("a view's root is a parameter"),
+                ir.base_index(name, &prog.extents, 0).expect("split_plan checked every width") * 4,
             ),
             _ => (
                 buffers.iter().position(|b| b == &name).expect("a streamed buffer is a parameter"),
@@ -545,11 +598,15 @@ fn emit_text(ir: &KernelIr, prog: &Program, plan: Option<&SplitPlan>, out: &mut 
             let _ = writeln!(out, "        li      s8, {iters}");
         }
         Some(sp) => {
-            // Runs of `w` elements: `w / 8` register iterations, or `w` single ones.
-            let inner = if sp.vector { sp.w / LANES } else { sp.w };
-            let _ = writeln!(out, "        li      s9, {}   ; runs of {} elements", n / sp.w, sp.w);
-            let _ = writeln!(out, "outer:");
-            let _ = writeln!(out, "        li      s8, {inner}");
+            // Outermost level first; `s9` is the level around the run, `s10` the one around it.
+            // `s10` is the epilogue's too, and the epilogue runs after every loop has finished.
+            for (depth, (count, _)) in sp.levels.iter().enumerate().rev() {
+                let _ = writeln!(out, "        li      {}, {count}", LEVEL_COUNTERS[depth]);
+                let _ = writeln!(out, "{}:", LEVEL_LABELS[depth]);
+            }
+            // Runs of `run` elements: `run / 8` register iterations, or `run` single ones.
+            let inner = if sp.vector { sp.run / LANES } else { sp.run };
+            let _ = writeln!(out, "        li      s8, {inner}   ; runs of {} elements", sp.run);
         }
     }
     let _ = writeln!(out, "loop:");
@@ -689,11 +746,14 @@ fn emit_text(ir: &KernelIr, prog: &Program, plan: Option<&SplitPlan>, out: &mut 
     // The end of a run: hop over the other block. After `w` elements the pointer has advanced
     // `4w` bytes and the next run starts `8w` past where this one did.
     if let Some(sp) = plan {
-        for (i, _) in buffers.iter().enumerate() {
-            let _ = writeln!(out, "        addi    s{i}, s{i}, {}", 4 * sp.w);
+        for (depth, (_, hop)) in sp.levels.iter().enumerate() {
+            for (i, _) in buffers.iter().enumerate() {
+                let _ = writeln!(out, "        addi    s{i}, s{i}, {}", 4 * u64::from(*hop));
+            }
+            let c = LEVEL_COUNTERS[depth];
+            let _ = writeln!(out, "        addi    {c}, {c}, -1");
+            let _ = writeln!(out, "        bne     {c}, zero, {}", LEVEL_LABELS[depth]);
         }
-        let _ = writeln!(out, "        addi    s9, s9, -1");
-        let _ = writeln!(out, "        bne     s9, zero, outer");
     }
 
     // The tree, and then the one store that leaves. `VFREDUCE` is specified as stride 4, then

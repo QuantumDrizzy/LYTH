@@ -1247,6 +1247,8 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
     };
     // What the kernel walks: pairs for a split (rank 1, so `n` above is still `-n`), else `n`.
     let walked = split_walked.unwrap_or(n);
+    // What one thread of a split kernel walks: a pair at depth 1, a quad at depth 2 (ADR-0029).
+    let tuple = if ir.walk_depth() > 1 { "quad" } else { "pair" };
     // The contracted extent is not one the space walks, so the loop above never sees it. It is
     // still a length the caller has to supply: `k` decides how much work each output costs and
     // there is nothing in the buffers to infer it from.
@@ -1448,7 +1450,7 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
     if !ir.views.is_empty() {
         if let Ok(Some(sec)) = ir.split_sector(&split_extents) {
             println!(
-                "  exact    {} byte per pair at this width (coalescence {:.3}), against the {} byte bound",
+                "  exact    {} byte per {tuple} at this width (coalescence {:.3}), against the {} byte bound",
                 sec.sectors,
                 sec.coalescence(),
                 ir.cost.sector_read_per_element + ir.cost.sector_write_per_element
@@ -1481,7 +1483,7 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
     if ir.views.is_empty() {
         println!("  launch   grid {grid} x block {block} over {n} elements, {shared} B shared");
     } else {
-        println!("  launch   grid {grid} x block {block} over {walked} pairs of {n} elements, {shared} B shared");
+        println!("  launch   grid {grid} x block {block} over {walked} {tuple}s of {n} elements, {shared} B shared");
     }
     // One shape, from the compiler, used by the verified launch and by the timed one. The
     // only thing a caller may override is the shared bytes, and only for ADR-0017's bypass
@@ -1504,7 +1506,7 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
         let is_drain = ir
             .drains
             .iter()
-            .any(|(b, _)| b == name || ir.view(b).is_some_and(|v| v.base == *name));
+            .any(|(b, _)| b == name || (ir.view(b).is_some() && ir.root_of(b) == name.as_str()));
         let is_partial = Some(name) == reduce_target.as_ref();
         if !is_drain && !is_partial {
             continue;
@@ -1730,7 +1732,7 @@ fn report_timing(
         });
         if !ir.views.is_empty() {
             // `elements` is what the kernel walked: pairs, for a split (ADR-0028).
-            record["walks"] = serde_json::json!("pairs");
+            record["walks"] = serde_json::json!(if ir.walk_depth() > 1 { "quads" } else { "pairs" });
         }
         std::fs::write(
             path,

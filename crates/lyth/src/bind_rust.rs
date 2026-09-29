@@ -214,12 +214,19 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
     match &m.launch.grid {
         crate::manifest::GridRule::Elementwise {
             min_elements_per_thread,
-            pairs,
+            split_depth,
             ..
         } => {
-            if *pairs {
-                push(&mut out, "/// A kernel that splits walks PAIRS: half of the extent, one pair per thread.");
-                push(&mut out, "/// The extent must be even; both launchers refuse an extent its width does not divide.");
+            match split_depth {
+                0 => {}
+                1 => {
+                    push(&mut out, "/// A kernel that splits walks PAIRS: half of the extent, one pair per thread.");
+                    push(&mut out, "/// The extent must be even; both launchers refuse an extent its width does not divide.");
+                }
+                _ => {
+                    push(&mut out, "/// A kernel that splits a view walks QUADS: a quarter of the extent, one per thread.");
+                    push(&mut out, "/// Both launchers refuse widths that do not divide what each level splits.");
+                }
             }
             if *min_elements_per_thread > 1 {
                 push(&mut out, &format!(
@@ -240,10 +247,10 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
                 "BLOCK".to_string()
             };
             push(&mut out, &format!("pub fn grid({extent_args}) -> Option<u32> {{"));
-            let walked = if *pairs {
-                format!("(elements({extent_pass})? / 2)")
-            } else {
-                format!("elements({extent_pass})?")
+            let walked = match split_depth {
+                0 => format!("elements({extent_pass})?"),
+                1 => format!("(elements({extent_pass})? / 2)"),
+                d => format!("(elements({extent_pass})? >> {d})"),
             };
             push(
                 &mut out,
@@ -304,14 +311,18 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
             .map(|n| format!("{n}: u32"))
             .collect();
         push(&mut out, &format!("pub fn check_splits({}) -> Result<(), CudaError> {{", params.join(", ")));
-        let mut facts: Vec<(&String, &String, Vec<&str>)> = Vec::new();
+        // One check per (extent, width, depth): the four splits of `hadamard_q` are one
+        // arithmetic fact, and so are the eight inner splits of `cu_q`. A split of a view is
+        // checked against its own length, `extent / 2^depth` (ADR-0029): checking it against
+        // the whole extent would pass a width that runs past the end of the view.
+        let mut facts: Vec<(&String, &String, u32, Vec<&str>)> = Vec::new();
         for s in &m.splits {
-            match facts.iter_mut().find(|(e, w, _)| **e == s.extent && **w == s.width) {
-                Some((_, _, bases)) => bases.push(&s.base),
-                None => facts.push((&s.extent, &s.width, vec![&s.base])),
+            match facts.iter_mut().find(|(e, w, d, _)| **e == s.extent && **w == s.width && *d == s.depth) {
+                Some((_, _, _, bases)) => bases.push(&s.base),
+                None => facts.push((&s.extent, &s.width, s.depth, vec![&s.base])),
             }
         }
-        for (e, w, bases) in facts {
+        for (e, w, d, bases) in facts {
             let b = bases.iter().map(|b| format!("`{b}`")).collect::<Vec<_>>().join(", ");
             push(&mut out, &format!("    if {w} == 0 {{"));
             push(&mut out, &format!(
@@ -319,12 +330,23 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
             ));
             push(&mut out, "    }");
             push(&mut out, &format!("    let block = 2u64 * u64::from({w});"));
-            push(&mut out, &format!("    if u64::from({e}) % block != 0 {{"));
-            push(&mut out, "        return Err(CudaError::Message(format!(");
-            push(&mut out, &format!(
-                "            \"split of {b}: 2 * {w} = {{block}} must divide {e} = {{}}, but {{}} mod {{block}} = {{}}\","
-            ));
-            push(&mut out, &format!("            {e}, {e}, u64::from({e}) % block"));
+            if d == 0 {
+                push(&mut out, &format!("    if u64::from({e}) % block != 0 {{"));
+                push(&mut out, "        return Err(CudaError::Message(format!(");
+                push(&mut out, &format!(
+                    "            \"split of {b}: 2 * {w} = {{block}} must divide {e} = {{}}, but {{}} mod {{block}} = {{}}\","
+                ));
+                push(&mut out, &format!("            {e}, {e}, u64::from({e}) % block"));
+            } else {
+                let div = 1u64 << d;
+                push(&mut out, &format!("    let len = u64::from({e}) >> {d};"));
+                push(&mut out, "    if len % block != 0 {");
+                push(&mut out, "        return Err(CudaError::Message(format!(");
+                push(&mut out, &format!(
+                    "            \"split of {b}: 2 * {w} = {{block}} must divide {e} / {div} = {{len}}, but {{len}} mod {{block}} = {{}}\","
+                ));
+                push(&mut out, "            len % block");
+            }
             push(&mut out, "        )));");
             push(&mut out, "    }");
         }

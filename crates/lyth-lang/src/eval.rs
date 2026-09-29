@@ -33,8 +33,6 @@ pub enum EvalError {
     },
     #[error("zipper2 is one 256-bit step: n must be 8 and the body is that one op, got n = {0}")]
     Zipper2(usize),
-    #[error("{0}")]
-    Unsupported(String),
 }
 
 /// Host-side inputs, keyed by parameter name.
@@ -69,9 +67,6 @@ pub fn eval_with_launch(
     grid: usize,
     block: usize,
 ) -> Result<Inputs, EvalError> {
-    if ir.walk_depth() > 1 {
-        return Err(EvalError::Unsupported("ADR-0029 step 1 lowers a split of a view; this back end walks it from step 3. Refused rather than addressed as depth 1.".into()));
-    }
     // Before the parameter check, not after: a contraction sizes each buffer by its own shape
     // -- `a` is `m x k` where `c` is `m x n` -- and the check below asks every buffer for `n`
     // elements, which is a rule from the time when one linear index addressed them all.
@@ -94,7 +89,8 @@ pub fn eval_with_launch(
                 let want = match &ir.reduction {
                     Some(r) if r.into == p.name => grid,
                     // A split kernel walks `n` pairs, and its buffers are the whole vectors.
-                    _ if !ir.views.is_empty() => 2 * n,
+                    // At depth `d` it walks `n` of `2^d`-tuples (ADR-0029).
+                    _ if !ir.views.is_empty() => n << ir.walk_depth().max(1),
                     _ => n,
                 };
                 if b.len() < want {
@@ -168,20 +164,33 @@ pub fn eval_with_launch(
     // cannot resolve is an error rather than a dropped drain. `drain_cols` above filters on
     // `index_of`, which knows no view names, so without this a split kernel would compute its
     // gate and quietly store nothing.
-    let view_of = |name: &str| -> Result<Option<(usize, u32, u8)>, EvalError> {
-        let Some(v) = ir.view(name) else { return Ok(None) };
-        let col = index_of(&v.base).ok_or_else(|| EvalError::MissingBuffer(v.base.clone()))?;
-        let w = inputs
-            .extents
-            .get(&v.width)
-            .copied()
-            .ok_or_else(|| EvalError::MissingExtent(v.width.clone()))?;
-        Ok(Some((col, w, v.part)))
+    //
+    // At depth 2 (ADR-0029) a view's base is itself a view, so it resolves to the buffer at the
+    // root and the chain of (width, part) from the leaf up: `view_index` once per level, which is
+    // `KernelIr::base_index` with the widths looked up here, once, instead of per element.
+    let view_of = |name: &str| -> Result<Option<(usize, Chain)>, EvalError> {
+        if ir.view(name).is_none() {
+            return Ok(None);
+        }
+        let root = ir.root_of(name);
+        let col = index_of(root).ok_or_else(|| EvalError::MissingBuffer(root.to_string()))?;
+        let mut chain = Chain::new();
+        let mut at = name;
+        while let Some(v) = ir.view(at) {
+            let w = inputs
+                .extents
+                .get(&v.width)
+                .copied()
+                .ok_or_else(|| EvalError::MissingExtent(v.width.clone()))?;
+            chain.push((w, v.part));
+            at = &v.base;
+        }
+        Ok(Some((col, chain)))
     };
-    let drain_views: Vec<(usize, u32, u8, RegId)> = ir
+    let drain_views: Vec<(usize, Chain, RegId)> = ir
         .drains
         .iter()
-        .filter_map(|(b, r)| view_of(b).transpose().map(|v| v.map(|(c, w, p)| (c, w, p, *r))))
+        .filter_map(|(b, r)| view_of(b).transpose().map(|v| v.map(|(c, ch)| (c, ch, *r))))
         .collect::<Result<_, _>>()?;
 
     // How each buffer's element index is computed from the linear one.
@@ -255,8 +264,8 @@ pub fn eval_with_launch(
             let v = match op {
                 Op::Load { dst, buffer } => {
                     let _ = dst;
-                    if let Some((col, w, part)) = view_of(buffer)? {
-                        columns[col][ir_view_index(w, part, i)]
+                    if let Some((col, chain)) = view_of(buffer)? {
+                        columns[col][chain_index(&chain, i)]
                     } else {
                         let col = index_of(buffer)
                             .ok_or_else(|| EvalError::MissingBuffer(buffer.clone()))?;
@@ -290,8 +299,8 @@ pub fn eval_with_launch(
             // is walked by its own permutation, which for a transpose is the whole point.
             columns[*col][at(*col, i)] = regs[*reg as usize];
         }
-        for (col, w, part, reg) in &drain_views {
-            columns[*col][ir_view_index(*w, *part, i)] = regs[*reg as usize];
+        for (col, chain, reg) in &drain_views {
+            columns[*col][chain_index(chain, i)] = regs[*reg as usize];
         }
         if let Some(r) = &ir.reduction {
             reduced.push(regs[r.value as usize]);
@@ -339,10 +348,14 @@ pub fn eval_with_launch(
 }
 
 
-/// `view_index` at the oracle's `usize` index.
+/// A view's (width, part) per level, from the leaf up to its buffer.
+type Chain = Vec<(u32, u8)>;
+
+/// `view_index` once per level, leaf first: [`crate::ir::KernelIr::base_index`] with the widths
+/// already looked up, at the oracle's `usize` index.
 #[inline]
-fn ir_view_index(w: u32, part: u8, k: usize) -> usize {
-    crate::ir::view_index(w, part, k as u32) as usize
+fn chain_index(chain: &Chain, k: usize) -> usize {
+    chain.iter().fold(k, |idx, &(w, part)| crate::ir::view_index(w, part, idx as u32) as usize)
 }
 
 /// The host oracle for a contraction (ADR-0018 step 3).

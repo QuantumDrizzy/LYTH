@@ -339,7 +339,7 @@ fn the_manifest_says_which_bases_are_written_and_that_the_grid_walks_pairs() {
     let splits = m["splits"].as_array().expect("a kernel that splits publishes its splits");
     assert_eq!(splits.len(), 4);
     assert!(splits.iter().all(|s| s["width"] == "w" && s["extent"] == "n"));
-    assert_eq!(m["launch"]["grid"]["pairs"], true);
+    assert_eq!(m["launch"]["grid"]["split_depth"], 1);
 }
 
 #[test]
@@ -363,7 +363,7 @@ fn a_kernel_that_does_not_split_publishes_no_trace_of_one() {
         .expect("the compiler should run");
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
     let text = std::fs::read_to_string(out.path()).unwrap();
-    assert!(!text.contains("\"splits\"") && !text.contains("\"pairs\""), "{text}");
+    assert!(!text.contains("\"splits\"") && !text.contains("\"split_depth\""), "{text}");
 }
 
 #[test]
