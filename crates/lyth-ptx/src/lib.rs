@@ -104,12 +104,7 @@ pub fn emit_with_skew(ir: &KernelIr, arch: &str, skewed: bool) -> Result<Module,
         None => ir
             .streams
             .iter()
-            .find_map(|s| {
-                ir.params
-                    .iter()
-                    .find(|p| p.name == s.buffer)
-                    .and_then(|p| p.shape.first())
-            })
+            .find_map(|s| ir.buffer_param(&s.buffer).and_then(|p| p.shape.first()))
             .cloned()
             .ok_or_else(|| EmitError::NoBound(ir.name.clone()))?,
     };
@@ -323,6 +318,8 @@ impl Emitter {
         } else {
             needed.insert(bound);
         }
+        // A split's block widths (ADR-0028) are launch extents like any other.
+        needed.extend(ir.views.iter().map(|v| v.width.as_str()));
         let mut u32s: Vec<(String, String)> = Vec::new();
         for p in &ir.params {
             if p.ty == Ty::U32 && needed.contains(p.name.as_str()) {
@@ -339,6 +336,13 @@ impl Emitter {
         };
 
         let r_bound = match &ir.space {
+            // A split kernel walks pairs: half of every base (ADR-0028). The launch check has
+            // already made the length even (2w divides it).
+            None if !ir.views.is_empty() => {
+                let pairs = self.b32();
+                line(out, &format!("shr.u32 {pairs}, {}, 1;", u32_of(bound)));
+                pairs
+            }
             None => u32_of(bound),
             Some(sp) => {
                 // rows * cols, the flattened extent.
@@ -451,9 +455,7 @@ impl Emitter {
         // How wide one element of a buffer is. `Ty::bytes()` is the single definition and the
         // emitter asks it rather than assuming 4, which it did until ADR-0024.
         let width_of = |name: &str| -> u32 {
-            ir.params
-                .iter()
-                .find(|p| p.name == name)
+            ir.buffer_param(name)
                 .expect("a streamed buffer is a parameter")
                 .ty
                 .bytes()
@@ -480,7 +482,65 @@ impl Emitter {
             off
         };
         let mut addrs: Vec<(String, String)> = Vec::new();
-        for (name, base) in &buffers {
+
+        // --- a split's views (ADR-0028) ------------------------------------------------
+        //
+        // Element `k` of view `part` is element `(k / w) * 2w + part * w + k % w` of its base:
+        // `lyth_lang::ir::view_index`, the one definition, in the integer instructions the
+        // hardware has. `blk = k / w`, `rem = k - blk * w`, `idx0 = blk * 2w + rem`, and the
+        // block-1 index is `idx0 + w`. All the views of one width share one `idx0`, and each
+        // distinct (width, part, element width) gets one byte offset, so the eight streams of
+        // `hadamard_q` pay for two index computations and not eight. These are integer work:
+        // they move no bytes and retire no flops, so the traffic model does not see them.
+        if !ir.views.is_empty() {
+            let mut widths: Vec<(String, String, String)> = Vec::new(); // (name, w, idx0)
+            let mut offsets: Vec<(String, u8, u32, String)> = Vec::new(); // (width, part, elem, off)
+            for v in &ir.views {
+                if !widths.iter().any(|(n, _, _)| *n == v.width) {
+                    let w = u32_of(&v.width);
+                    let w2 = self.b32();
+                    let blk = self.b32();
+                    let blk_w = self.b32();
+                    let rem = self.b32();
+                    let idx0 = self.b32();
+                    line(out, &format!("shl.b32 {w2}, {w}, 1;"));
+                    line(out, &format!("div.u32 {blk}, {idx}, {w};"));
+                    line(out, &format!("mul.lo.u32 {blk_w}, {blk}, {w};"));
+                    line(out, &format!("sub.u32 {rem}, {idx}, {blk_w};"));
+                    line(out, &format!("mad.lo.u32 {idx0}, {blk}, {w2}, {rem};"));
+                    widths.push((v.width.clone(), w, idx0));
+                }
+            }
+            for v in &ir.views {
+                let (_, w, idx0) = widths.iter().find(|(n, _, _)| *n == v.width).expect("just added");
+                let elem = width_of(&v.name);
+                let off = match offsets.iter().find(|(n, p, e, _)| *n == v.width && *p == v.part && *e == elem) {
+                    Some((_, _, _, off)) => off.clone(),
+                    None => {
+                        let at = if v.part == 0 {
+                            idx0.clone()
+                        } else {
+                            let t = self.b32();
+                            line(out, &format!("add.u32 {t}, {idx0}, {w};"));
+                            t
+                        };
+                        let off = self.b64();
+                        line(out, &format!("mul.wide.u32 {off}, {at}, {elem};"));
+                        offsets.push((v.width.clone(), v.part, elem, off.clone()));
+                        off
+                    }
+                };
+                let base = buffers
+                    .iter()
+                    .find(|(n, _)| *n == v.base)
+                    .map(|(_, b)| b.clone())
+                    .expect("a view's base is a buffer parameter");
+                let a = self.b64();
+                line(out, &format!("add.s64 {a}, {base}, {off};"));
+                addrs.push((v.name.clone(), a));
+            }
+        }
+        for (name, base) in buffers.iter().filter(|_| ir.views.is_empty()) {
             // The reduction's target is indexed by block, never by element: computing an
             // element address for it would put an instruction in the listing nothing uses.
             if Some(name.as_str()) == reduce_target {
@@ -530,9 +590,7 @@ impl Emitter {
         // second `match` that could disagree with this one.
         let narrow_of = |name: &str| -> Option<&'static str> {
             match ir
-                .params
-                .iter()
-                .find(|p| p.name == name)
+                .buffer_param(name)
                 .expect("a streamed buffer is a parameter")
                 .ty
             {

@@ -176,3 +176,31 @@ to amend — not the refusal table.
   it as `w` halves below that) stands; the magnitude below 8 is predicted at 2×, not 8×. The
   partner view and the drain share those sectors, so what the bus actually shows is for step 5
   to say, and it is published either way.
+
+- **Step 4 landed.** `hadamard_q` (a Hadamard on any qubit, eight views over `re, im, qr, qi`)
+  is bit-exact against a dense reference that shares no code with the implementation, on all
+  three machines: the host oracle and PTX on `sm_120` (20 launches: every qubit of a
+  4096-amplitude register, the top qubit `w = n/2`, and widths that are not powers of two), and
+  the Unibit emulator (the same 20). **P4 holds.** Both new tests were mutation-checked: a wrong
+  `2w` in the PTX and a wrong run skip in the MTLB emission each make them fail.
+- **MTLB below eight elements is one f32 per instruction.** `LQ` reads eight contiguous
+  floats, so a view is whole registers only when `w` is a multiple of 8; for the low qubits
+  (`w = 1, 2, 4`) the emission is `LW`/`SW` through lane 0 with the same packed `VF*` ops. It is
+  bit-exact and it is 8x the instructions the cost model counted. The derived traffic and
+  intensity hold; the ceiling ADR-0022 computes for this machine does **not** at those widths.
+  `[KNOWN_LIMIT]`, in the emitter and here.
+- **Deviation from the step-4 row: only the Rust binding.** The manifest carries the splits
+  (`splits`, and `grid.pairs`), and it now marks a split base written or read from its views;
+  reading the streams by the base name called the outputs read-only. The **C and Python
+  generators refuse** a kernel that splits, with the reason, rather than emit a grid twice as
+  large and no divisibility check: without that check a bad width writes past the buffer. The
+  Rust binding refuses it before the launch, with the arithmetic, and a refused launch is shown
+  to write nothing. Manifests of kernels that do not split are byte-identical to before.
+- **`lyth run` takes a split.** `-n` is the buffer length, `--set w=<u32>` the width, and the
+  kernel walks `n/2` pairs; a missing, fractional or non-dividing width is refused before any
+  device is touched. It compares the views base (the buffer that holds the answer), and a
+  mutation of the PTX fails it, so it does not report bit-exact over nothing.
+- **Exploratory, not step 5.** One smoke run each at `N = 2^23`, `w = 8` and `w = 1`, `--time 50`,
+  to see the harness work: both about 388 GB/s (93.6% of the 414.5 GB/s baseline), spread 76-78%.
+  That spread is too wide to say anything with, the clocks are unlocked, and it is a single
+  run: it decides nothing about P3. Step 5 fixes its repetitions and its order first.

@@ -88,6 +88,8 @@ pub fn eval_with_launch(
                 // `n` of it would force the caller to allocate `n` slots for `n / block` results.
                 let want = match &ir.reduction {
                     Some(r) if r.into == p.name => grid,
+                    // A split kernel walks `n` pairs, and its buffers are the whole vectors.
+                    _ if !ir.views.is_empty() => 2 * n,
                     _ => n,
                 };
                 if b.len() < want {
@@ -155,6 +157,27 @@ pub fn eval_with_launch(
         .collect();
     let _ = &loads;
     let _ = &drain_cols;
+
+    // A split view is a name for half of a base column (ADR-0028). It resolves to the base's
+    // column plus the width and part that `view_index` needs, once, here -- and a view that
+    // cannot resolve is an error rather than a dropped drain. `drain_cols` above filters on
+    // `index_of`, which knows no view names, so without this a split kernel would compute its
+    // gate and quietly store nothing.
+    let view_of = |name: &str| -> Result<Option<(usize, u32, u8)>, EvalError> {
+        let Some(v) = ir.view(name) else { return Ok(None) };
+        let col = index_of(&v.base).ok_or_else(|| EvalError::MissingBuffer(v.base.clone()))?;
+        let w = inputs
+            .extents
+            .get(&v.width)
+            .copied()
+            .ok_or_else(|| EvalError::MissingExtent(v.width.clone()))?;
+        Ok(Some((col, w, v.part)))
+    };
+    let drain_views: Vec<(usize, u32, u8, RegId)> = ir
+        .drains
+        .iter()
+        .filter_map(|(b, r)| view_of(b).transpose().map(|v| v.map(|(c, w, p)| (c, w, p, *r))))
+        .collect::<Result<_, _>>()?;
 
     // How each buffer's element index is computed from the linear one.
     //
@@ -226,10 +249,14 @@ pub fn eval_with_launch(
         for op in &ir.ops {
             let v = match op {
                 Op::Load { dst, buffer } => {
-                    let col =
-                        index_of(buffer).ok_or_else(|| EvalError::MissingBuffer(buffer.clone()))?;
                     let _ = dst;
-                    columns[col][at(col, i)]
+                    if let Some((col, w, part)) = view_of(buffer)? {
+                        columns[col][ir_view_index(w, part, i)]
+                    } else {
+                        let col = index_of(buffer)
+                            .ok_or_else(|| EvalError::MissingBuffer(buffer.clone()))?;
+                        columns[col][at(col, i)]
+                    }
                 }
                 Op::Param { name, .. } => *out
                     .scalars
@@ -257,6 +284,9 @@ pub fn eval_with_launch(
             // The write is the same address as a read would be: a drained buffer at rank 2
             // is walked by its own permutation, which for a transpose is the whole point.
             columns[*col][at(*col, i)] = regs[*reg as usize];
+        }
+        for (col, w, part, reg) in &drain_views {
+            columns[*col][ir_view_index(*w, *part, i)] = regs[*reg as usize];
         }
         if let Some(r) = &ir.reduction {
             reduced.push(regs[r.value as usize]);
@@ -303,6 +333,12 @@ pub fn eval_with_launch(
     Ok(out)
 }
 
+
+/// `view_index` at the oracle's `usize` index.
+#[inline]
+fn ir_view_index(w: u32, part: u8, k: usize) -> usize {
+    crate::ir::view_index(w, part, k as u32) as usize
+}
 
 /// The host oracle for a contraction (ADR-0018 step 3).
 ///

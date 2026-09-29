@@ -29,11 +29,28 @@ pub struct Manifest {
     /// The PTX entry point, which is also the kernel name in source.
     pub kernel: String,
     pub params: Vec<ParamSpec>,
+    /// The kernel's splits (ADR-0028). Absent, not empty, for every kernel that does not split,
+    /// so a manifest written before the split existed is byte-identical to one written now.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub splits: Vec<SplitSpec>,
     pub launch: LaunchSpec,
     pub contract: ContractSpec,
     /// Carried verbatim from the compiler so a caller reads the same warnings the compiler
     /// prints, rather than a summary of them.
     pub known_limits: Vec<String>,
+}
+
+/// `split re into p0, p1 : blocks w`, as a caller needs it (ADR-0028): which buffer, at which
+/// width, and which extent it must divide. The views themselves are not parameters and do not
+/// appear in the signature; the caller passes the base and the width and never an address.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SplitSpec {
+    pub base: String,
+    pub views: [String; 2],
+    /// The `u32` parameter holding the block width.
+    pub width: String,
+    /// The base's own extent: `2 * width` must divide it, or the launch is refused.
+    pub extent: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -121,6 +138,7 @@ impl GridRule {
             _ => GridRule::Elementwise {
                 extents,
                 min_elements_per_thread: min_elements_per_thread(ir),
+                pairs: !ir.views.is_empty(),
             },
         }
     }
@@ -136,8 +154,11 @@ impl GridRule {
             GridRule::Elementwise {
                 extents,
                 min_elements_per_thread,
+                pairs,
             } => {
                 let total: u64 = extents.iter().map(|e| extent(e) as u64).product();
+                // A kernel that splits walks pairs, half of every base (ADR-0028).
+                let total = if *pairs { total / 2 } else { total };
                 // In 64 bits, because a rank-2 product of 32-bit extents does not fit in 32.
                 let per_block = (block as u64) * (*min_elements_per_thread as u64);
                 total.div_ceil(per_block.max(1))
@@ -180,6 +201,12 @@ pub enum GridRule {
     Elementwise {
         extents: Vec<String>,
         min_elements_per_thread: u32,
+        /// The kernel splits, so it walks **pairs**: the element count is half the extent
+        /// (ADR-0028). A field, not a variant, for the reason `min_elements_per_thread` is: a
+        /// generator that did not know about it would emit the plain rule and launch twice the
+        /// blocks. Absent from every manifest that does not split.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        pairs: bool,
     },
     /// `product(ceil(extent[d] / tile[d]))`, one block per tile.
     Tiled { tile: Vec<u32>, extents: Vec<String> },
@@ -322,6 +349,14 @@ impl Manifest {
             .map(|p| {
                 let stream = ir.streams.iter().find(|s| s.buffer == p.name);
                 let is_partial = Some(p.name.as_str()) == reduce_target;
+                // A split base is streamed only through its views, so no stream carries its
+                // name. Without this it would be published as neither read nor written, and a
+                // generated binding would take an output as `&Buffer` (Rust) or `const` (C).
+                let view_streams = || {
+                    ir.streams
+                        .iter()
+                        .filter(|s| ir.view(&s.buffer).is_some_and(|v| v.base == p.name))
+                };
                 ParamSpec {
                     name: p.name.clone(),
                     ty: match p.ty {
@@ -336,17 +371,44 @@ impl Manifest {
                     is_extent: p.ty == Ty::U32 && named.contains(p.name.as_str()),
                     written: is_partial
                         || stream.map(|s| s.drain).unwrap_or(false)
-                        || ir.drains.iter().any(|(b, _)| *b == p.name),
-                    read: stream.map(|s| s.read).unwrap_or(false),
+                        || ir.drains.iter().any(|(b, _)| *b == p.name)
+                        || view_streams().any(|s| s.drain),
+                    read: stream.map(|s| s.read).unwrap_or(false) || view_streams().any(|s| s.read),
                     sized_by_grid: is_partial,
                 }
             })
             .collect();
 
+        let splits = {
+            let mut seen: Vec<&str> = Vec::new();
+            let mut out = Vec::new();
+            for v in &ir.views {
+                if seen.contains(&v.base.as_str()) {
+                    continue;
+                }
+                seen.push(v.base.as_str());
+                let pair: Vec<&str> = ir.views.iter().filter(|w| w.base == v.base).map(|w| w.name.as_str()).collect();
+                out.push(SplitSpec {
+                    base: v.base.clone(),
+                    views: [pair[0].to_string(), pair[1].to_string()],
+                    width: v.width.clone(),
+                    extent: ir
+                        .params
+                        .iter()
+                        .find(|p| p.name == v.base)
+                        .and_then(|p| p.shape.first())
+                        .cloned()
+                        .unwrap_or_default(),
+                });
+            }
+            out
+        };
+
         Manifest {
             schema: SCHEMA.to_string(),
             kernel: ir.name.clone(),
             params,
+            splits,
             launch: LaunchSpec {
                 // A tile fixes the block: one thread per element of the tile, divided by
                 // what `coarsen` gives each thread. One definition, in the IR, because this

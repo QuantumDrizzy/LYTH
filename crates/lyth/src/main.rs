@@ -883,6 +883,18 @@ fn cmd_build(
         }
         println!("  wrote    {} (Rust binding over lyth-cuda)", p.display());
     }
+    // C and Python do not yet emit the pair-walking grid or the `2 * w | n` launch check
+    // (ADR-0028 step 4). Emitting without them would launch twice the blocks and never refuse a
+    // width that does not divide, which writes past the buffer -- so they refuse to generate.
+    if !m.splits.is_empty() && (bind_c.is_some() || bind_py.is_some()) {
+        eprintln!(
+            "error[bind]: kernel `{}` splits, and only the Rust binding emits the launch check for a split (ADR-0028).",
+            f.ir.name
+        );
+        eprintln!("  The C and Python generators would launch twice the blocks and never refuse a width that does");
+        eprintln!("  not divide the buffer, which writes past its end. Use --bind-rust for this kernel.");
+        return ExitCode::from(EXIT_REFUSED);
+    }
     if let Some(p) = bind_c {
         let name = file
             .file_name()
@@ -1097,6 +1109,40 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
         }
     }
 
+    // A kernel that splits walks PAIRS (ADR-0028): `-n` is the length of its buffers, the block
+    // width comes from `--set`, and the launch is refused with the arithmetic unless `2 * w`
+    // divides every base. Refused here, not launched: a width that does not divide reaches past
+    // the end of the buffer.
+    let mut split_extents: BTreeMap<String, u32> = BTreeMap::new();
+    let split_walked: Option<u32> = if ir.views.is_empty() {
+        None
+    } else {
+        for e in crate::manifest::extent_params(ir) {
+            split_extents.insert(e, n);
+        }
+        for v in &ir.views {
+            let Some(w) = scalars.get(&v.width).copied() else {
+                eprintln!(
+                    "error[launch]: `split` at width `{0}`, but no value was given for it. Pass `--set {0}=<u32>`.",
+                    v.width
+                );
+                return ExitCode::from(EXIT_UNUSABLE);
+            };
+            if w < 0.0 || w.fract() != 0.0 || w > u32::MAX as f32 {
+                eprintln!("error[launch]: width `{}` must be a whole number of elements, got {w}", v.width);
+                return ExitCode::from(EXIT_UNUSABLE);
+            }
+            split_extents.insert(v.width.clone(), w as u32);
+        }
+        match ir.split_pairs(&split_extents) {
+            Ok(pairs) => pairs,
+            Err(e) => {
+                eprintln!("error[launch]: {e}");
+                return ExitCode::from(EXIT_REFUSED);
+            }
+        }
+    };
+
     let ctx = match Context::new(0) {
         Ok(c) => c,
         Err(e) => {
@@ -1150,7 +1196,7 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
         MAX_GRID,
     );
     let grid = grid_arg.unwrap_or_else(|| want.clamp(1, MAX_GRID));
-    let per_thread = (n as f64 / (grid as f64 * block as f64)).ceil() as u64;
+    let per_thread = (split_walked.unwrap_or(n) as f64 / (grid as f64 * block as f64)).ceil() as u64;
     println!(
         "  grid     {grid} blocks of {block} on {} SMs, {per_thread} element(s) per thread",
         ctx.sm_count
@@ -1162,6 +1208,7 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
     // Deterministic inputs. A fixed generator rather than random ones so a disagreement is
     // reproducible from the command line alone, and so the same bytes are compared every run.
     let mut inputs = Inputs::default();
+    inputs.extents.extend(split_extents.clone());
 
     // A rank-2 kernel is walked by its space, so `-n` does not describe it: the extents do,
     // and their product is the element count. They come from `--set`, like any other value
@@ -1198,6 +1245,8 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
     } else {
         n
     };
+    // What the kernel walks: pairs for a split (rank 1, so `n` above is still `-n`), else `n`.
+    let walked = split_walked.unwrap_or(n);
     // The contracted extent is not one the space walks, so the loop above never sees it. It is
     // still a length the caller has to supply: `k` decides how much work each output costs and
     // there is nothing in the buffers to infer it from.
@@ -1254,7 +1303,7 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
         }
     }
 
-    let expected = match eval_with_launch(ir, n as usize, &inputs, grid as usize, block as usize) {
+    let expected = match eval_with_launch(ir, walked as usize, &inputs, grid as usize, block as usize) {
         Ok(o) => o,
         Err(e) => {
             eprintln!("error[reference]: {e}");
@@ -1394,6 +1443,31 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
         }
     }
 
+    // The same question for a split: the static figure is the bound, a sector per element, and
+    // the exact one is derived by walking the address rule at this width (ADR-0028 step 3).
+    if !ir.views.is_empty() {
+        if let Ok(Some(sec)) = ir.split_sector(&split_extents) {
+            println!(
+                "  exact    {} byte per pair at this width (coalescence {:.3}), against the {} byte bound",
+                sec.sectors,
+                sec.coalescence(),
+                ir.cost.sector_read_per_element + ir.cost.sector_write_per_element
+            );
+            println!("           each view taken alone; the partner view and the drain share these sectors,");
+            println!("           and whether the L1 serves them is what a measurement decides, not this line.");
+        }
+        let buffers_touched = ir.params.iter().filter(|p| p.ty.is_buffer()).count() as u64;
+        let working = u64::from(n) * 4 * buffers_touched;
+        if working <= ctx.l2_bytes {
+            println!(
+                "  [LIMIT]  the {:.0} MB working set fits in {:.0} MB of L2, so DRAM will",
+                working as f64 / 1e6,
+                ctx.l2_bytes as f64 / 1e6
+            );
+            println!("           show less than this. Raise -n to measure it.");
+        }
+    }
+
     // One f32 slot per thread for the reduction tree; nothing without a reduction.
     // A tile's shared memory is sized by the TILE, not by the problem: the same block walks
     // however many tiles the grid-stride gives it, reusing one staging buffer.
@@ -1404,7 +1478,11 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
         println!("  [BYPASS] launching with {shared} B instead of the derived {derived_shared} B.");
         println!("           A tiled kernel that is still correct here never staged anything.");
     }
-    println!("  launch   grid {grid} x block {block} over {n} elements, {shared} B shared");
+    if ir.views.is_empty() {
+        println!("  launch   grid {grid} x block {block} over {n} elements, {shared} B shared");
+    } else {
+        println!("  launch   grid {grid} x block {block} over {walked} pairs of {n} elements, {shared} B shared");
+    }
     // One shape, from the compiler, used by the verified launch and by the timed one. The
     // only thing a caller may override is the shared bytes, and only for ADR-0017's bypass
     // control, which announces itself above.
@@ -1423,7 +1501,10 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
     let mut mismatches = 0usize;
     let mut first: Option<(String, usize, f32, f32)> = None;
     for (name, buf) in &buffers {
-        let is_drain = ir.drains.iter().any(|(b, _)| b == name);
+        let is_drain = ir
+            .drains
+            .iter()
+            .any(|(b, _)| b == name || ir.view(b).is_some_and(|v| v.base == *name));
         let is_partial = Some(name) == reduce_target.as_ref();
         if !is_drain && !is_partial {
             continue;
@@ -1468,7 +1549,7 @@ fn cmd_run(file: &Path, machine: Option<&Path>, o: RunOpts) -> ExitCode {
     }
 
     if mismatches == 0 && reps > 0 {
-        if let Err(e) = report_timing(&ctx, &func, shape, &args, reps, n, ir, &f.machine, json) {
+        if let Err(e) = report_timing(&ctx, &func, shape, &args, reps, walked, ir, &f.machine, json) {
             eprintln!("error[timing]: {e}");
             return ExitCode::from(EXIT_UNUSABLE);
         }
@@ -1627,7 +1708,7 @@ fn report_timing(
         // Every sample, not just the summary: a median whose raw runs were discarded cannot
         // be re-analysed, and a sweep that can only read summaries cannot tell a slow drift
         // from a real difference.
-        let record = serde_json::json!({
+        let mut record = serde_json::json!({
             "kernel": ir.name,
             "machine": ir.machine,
             "elements": n,
@@ -1647,6 +1728,10 @@ fn report_timing(
             "clock_state": "unlocked",
             "cache_state": "buffers resident across runs; L2 not controlled",
         });
+        if !ir.views.is_empty() {
+            // `elements` is what the kernel walked: pairs, for a split (ADR-0028).
+            record["walks"] = serde_json::json!("pairs");
+        }
         std::fs::write(
             path,
             serde_json::to_string_pretty(&record)?

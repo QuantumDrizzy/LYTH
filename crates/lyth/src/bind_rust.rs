@@ -44,6 +44,13 @@ fn fence(ptx: &str) -> String {
     "#".repeat(hashes)
 }
 
+/// `check_splits(n, w)?;` with the arguments in the order the function declares them.
+fn split_call(m: &Manifest) -> String {
+    let names: std::collections::BTreeSet<String> =
+        m.splits.iter().flat_map(|s| [s.extent.clone(), s.width.clone()]).collect();
+    format!("check_splits({})?;", names.into_iter().collect::<Vec<_>>().join(", "))
+}
+
 pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
     let ty = type_name(&m.kernel);
     let f = fence(ptx);
@@ -207,8 +214,13 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
     match &m.launch.grid {
         crate::manifest::GridRule::Elementwise {
             min_elements_per_thread,
+            pairs,
             ..
         } => {
+            if *pairs {
+                push(&mut out, "/// A kernel that splits walks PAIRS: half of the extent, one pair per thread.");
+                push(&mut out, "/// The extent must be even; both launchers refuse an extent its width does not divide.");
+            }
             if *min_elements_per_thread > 1 {
                 push(&mut out, &format!(
                     "/// Blocks the default launch uses: at least {min_elements_per_thread} elements per thread, capped."
@@ -228,11 +240,14 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
                 "BLOCK".to_string()
             };
             push(&mut out, &format!("pub fn grid({extent_args}) -> Option<u32> {{"));
+            let walked = if *pairs {
+                format!("(elements({extent_pass})? / 2)")
+            } else {
+                format!("elements({extent_pass})?")
+            };
             push(
                 &mut out,
-                &format!(
-                    "    Some(elements({extent_pass})?.div_ceil({per_block}).max(1).min(MAX_GRID))"
-                ),
+                &format!("    Some({walked}.div_ceil({per_block}).max(1).min(MAX_GRID))"),
             );
             push(&mut out, "}");
         }
@@ -274,6 +289,49 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
         push(&mut out, "");
     }
 
+    if !m.splits.is_empty() {
+        // ADR-0028: a wrong width is a refusal with the arithmetic printed, not a wrong answer.
+        // Without it the views hang past the end of the buffer and the launch writes there.
+        push(&mut out, "/// The launch check of the splits (ADR-0028): `2 * width` must divide the extent.");
+        push(&mut out, "/// Refused before anything runs, with the arithmetic, because a width that does not");
+        push(&mut out, "/// divide leaves elements in neither view or writes past the end of the buffer.");
+        let params: Vec<String> = m
+            .splits
+            .iter()
+            .flat_map(|s| [s.extent.clone(), s.width.clone()])
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .map(|n| format!("{n}: u32"))
+            .collect();
+        push(&mut out, &format!("pub fn check_splits({}) -> Result<(), CudaError> {{", params.join(", ")));
+        let mut facts: Vec<(&String, &String, Vec<&str>)> = Vec::new();
+        for s in &m.splits {
+            match facts.iter_mut().find(|(e, w, _)| **e == s.extent && **w == s.width) {
+                Some((_, _, bases)) => bases.push(&s.base),
+                None => facts.push((&s.extent, &s.width, vec![&s.base])),
+            }
+        }
+        for (e, w, bases) in facts {
+            let b = bases.iter().map(|b| format!("`{b}`")).collect::<Vec<_>>().join(", ");
+            push(&mut out, &format!("    if {w} == 0 {{"));
+            push(&mut out, &format!(
+                "        return Err(CudaError::Message(\"`{w} = 0`: a block of no elements splits nothing\".into()));"
+            ));
+            push(&mut out, "    }");
+            push(&mut out, &format!("    let block = 2u64 * u64::from({w});"));
+            push(&mut out, &format!("    if u64::from({e}) % block != 0 {{"));
+            push(&mut out, "        return Err(CudaError::Message(format!(");
+            push(&mut out, &format!(
+                "            \"split of {b}: 2 * {w} = {{block}} must divide {e} = {{}}, but {{}} mod {{block}} = {{}}\","
+            ));
+            push(&mut out, &format!("            {e}, {e}, u64::from({e}) % block"));
+            push(&mut out, "        )));");
+            push(&mut out, "    }");
+        }
+        push(&mut out, "    Ok(())");
+        push(&mut out, "}");
+        push(&mut out, "");
+    }
     push(&mut out, "/// Load the embedded PTX. The module must outlive every launcher.");
     push(&mut out, "pub fn module(ctx: &Context) -> Result<Module<'_>, CudaError> {");
     push(&mut out, "    ctx.load_ptx(PTX)");
@@ -314,6 +372,9 @@ pub fn generate(m: &Manifest, ptx: &str, source: &str) -> String {
             sig.join(", ")
         ),
     );
+    if !m.splits.is_empty() {
+        push(&mut out, &format!("        {}", split_call(m)));
+    }
     push(
         &mut out,
         &format!(
