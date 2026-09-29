@@ -1,0 +1,8 @@
+fcd27ade4ed90473438f899012d1ad65c0c096d392b7ebe4a2ef23818e36f6b5  docs/prereg/ADR-0030.step5-protocol.md
+d39f7e8c26bd4ceca7eac94eb303d42e1198e5dd50092e288d0f0c280fce8ed0  tools/fusion_sweep.py
+ea75bd2fd312e71cd31fc23970abaf038b7732d3f770b8fa32efa11ade5a9e07  crates/lyth-circuit/examples/circuit_time.rs
+32c2ac5f04a69d4c81b63274b24c02891312ea387b15e46db208d56d9301946c  crates/lyth-circuit/examples/q2_group.rs
+8b5880a595b4ff93e041d966d2a67112d67446a6e2abf36553a3c59747e96f36  crates/lyth-circuit/src/lib.rs
+frozen_at=2026-09-29T22:21:59+02:00
+git_head=3c15e66b1bd0469d2787dd6fc45913bfee15b6d0
+note=frozen after the executor tests passed (fusion 5/5, unibit 1/1), before the first sweep launch
