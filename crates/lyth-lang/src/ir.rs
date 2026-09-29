@@ -69,7 +69,97 @@ pub struct ViewIr {
     pub width: String,
 }
 
+/// Element `k` of a split view: `(k / w) * 2w + part * w + (k % w)` in its base (ADR-0028).
+///
+/// **The one definition.** The host oracle, both back ends and the launch check derive an
+/// element's address from this and nowhere else: block `b = k / w` of a view is block
+/// `2b + part` of the base. In u64 because `2 * w` and the product both overflow u32 long
+/// before the base does.
+pub fn view_index(w: u32, part: u8, k: u32) -> u64 {
+    let (w, k) = (u64::from(w), u64::from(k));
+    (k / w) * 2 * w + u64::from(part) * w + (k % w)
+}
+
+/// Why a launch cannot use a split (ADR-0028: "a wrong `w` is a refusal with the arithmetic
+/// printed, not a wrong answer").
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum ViewLaunchError {
+    #[error("`{width} = 0`: a block of no elements splits nothing. The width is at least 1.")]
+    WidthZero { width: String },
+    #[error("`split {base}` needs the extent `{extent}` at launch, and none was given.")]
+    ExtentMissing { base: String, extent: String },
+    #[error(
+        "`split {base} ... : blocks {width}` with `{width} = {w}` cannot cover `{base}`: `{base}` has \
+         {extent} = {len} elements, and 2 * {width} = {block} must divide {len} but {len} mod {block} = {rem}. \
+         The views would {what}, so this launch is refused (ADR-0028)."
+    )]
+    NotDivisible {
+        base: String,
+        width: String,
+        w: u32,
+        extent: String,
+        len: u32,
+        block: u64,
+        rem: u64,
+        what: &'static str,
+    },
+}
+
 impl KernelIr {
+    /// For a kernel that splits: how many **pairs** it walks (`len / 2`), after checking that
+    /// every split covers its base exactly and without overlap. `None` for a kernel that does
+    /// not split.
+    ///
+    /// Views of one base are the two residue classes of its blocks: block `b` of view `part`
+    /// is block `2b + part` of the base. That is a bijection from `(part, b)` onto the base's
+    /// blocks exactly when `2 * w` divides the base's length; otherwise the last block is
+    /// either missing from both views or hangs past the end. Cover and disjointness are
+    /// therefore one arithmetic check, and it is made here, at launch, where the numbers are
+    /// known -- the compiler cannot make it because `w` is the caller's.
+    pub fn split_pairs(&self, extents: &BTreeMap<String, u32>) -> Result<Option<u32>, ViewLaunchError> {
+        let mut pairs: Option<u32> = None;
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        for v in &self.views {
+            if !seen.insert(v.base.as_str()) {
+                continue; // the two views of one base are checked once
+            }
+            let w = extents.get(&v.width).copied().unwrap_or(0);
+            if w == 0 {
+                return Err(ViewLaunchError::WidthZero { width: v.width.clone() });
+            }
+            let extent = self
+                .params
+                .iter()
+                .find(|p| p.name == v.base)
+                .and_then(|p| p.shape.first())
+                .cloned()
+                .unwrap_or_default();
+            let Some(len) = extents.get(&extent).copied() else {
+                return Err(ViewLaunchError::ExtentMissing { base: v.base.clone(), extent });
+            };
+            let block = 2 * u64::from(w);
+            let rem = u64::from(len) % block;
+            if rem != 0 {
+                return Err(ViewLaunchError::NotDivisible {
+                    base: v.base.clone(),
+                    width: v.width.clone(),
+                    w,
+                    extent,
+                    len,
+                    block,
+                    rem,
+                    what: if u64::from(len) < block {
+                        "hang past the end of the buffer"
+                    } else {
+                        "leave the last elements in neither view"
+                    },
+                });
+            }
+            pairs = Some(len / 2);
+        }
+        Ok(pairs)
+    }
+
     /// The parameter a streamed name reads and writes: the buffer itself, or for a split view
     /// the base it is a view of. Every back end asks this rather than searching `params` by the
     /// stream's name, which would find nothing for a view.
@@ -724,6 +814,8 @@ pub enum LowerError {
     SplitWidthNotU32 { span: Span, base: String, width: String },
     #[error("{span}: `split {base} into ...`: the view name `{name}` is already taken. A view is a new name for half a buffer, and one name means one address rule (ADR-0028).")]
     SplitNameTaken { span: Span, base: String, name: String },
+    #[error("{span}: `split {base}` is `[f32; {dim}]` but `{other}` is split with `{other_dim}`. The views are walked by one loop over pairs, so every split buffer is the same length (ADR-0028).")]
+    SplitExtentsDiffer { span: Span, base: String, dim: String, other: String, other_dim: String },
     #[error("{span}: `{name}` is split twice. A split is into two at one width; re-splitting a buffer or a view is a nested split, which needs its own ADR (ADR-0028).")]
     SplitTwice { span: Span, name: String },
     #[error("{span}: `{name}` is split, so the body names its views, never the base. Streaming the base as well would give one buffer two address rules (ADR-0028).")]
@@ -991,6 +1083,10 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
     let mut params = params;
     let mut views: Vec<ViewIr> = Vec::new();
     let mut split_bases: BTreeSet<&str> = BTreeSet::new();
+    // The views are walked by one loop over pairs, so every split base must be the same length.
+    // Checked here, by name, for the reason rank-1 streams are: nothing at run time compares two
+    // lengths against each other.
+    let mut split_extent: Option<(&str, &str)> = None;
     for sp in &kernel.splits {
         let unsupported = [
             (kernel.space.is_some(), "space"),
@@ -1020,6 +1116,22 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
         }
         if !split_bases.insert(sp.base.as_str()) {
             return Err(LowerError::SplitTwice { span: sp.span, name: sp.base.clone() });
+        }
+        let dim = kernel.params.iter().find(|p| p.name == sp.base).and_then(|p| p.shape.first());
+        if let Some(dim) = dim {
+            match split_extent {
+                None => split_extent = Some((sp.base.as_str(), dim.as_str())),
+                Some((other, other_dim)) if other_dim != dim => {
+                    return Err(LowerError::SplitExtentsDiffer {
+                        span: sp.span,
+                        base: sp.base.clone(),
+                        dim: dim.clone(),
+                        other: other.to_string(),
+                        other_dim: other_dim.to_string(),
+                    });
+                }
+                Some(_) => {}
+            }
         }
         for (part, name) in sp.views.iter().enumerate() {
             if params.contains_key(name.as_str()) || sp.views[0] == sp.views[1] {

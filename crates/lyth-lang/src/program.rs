@@ -19,7 +19,8 @@ use crate::lex::Span;
 /// A `main` that has been checked against its kernel.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
-    /// Elements the kernel walks: the bound at rank 1, the product of the extents at rank 2.
+    /// Elements the kernel walks: the bound at rank 1, the product of the extents at rank 2, and
+    /// for a kernel that splits, the **pairs** (half the base's length, ADR-0028).
     pub n: u32,
     /// Every `u32` extent by name, which a rank-2 oracle needs to decompose a linear index.
     pub extents: BTreeMap<String, u32>,
@@ -66,6 +67,8 @@ pub enum ProgramError {
         name: String,
         value: f64,
     },
+    #[error("{span}: {err}")]
+    View { span: Span, err: crate::ir::ViewLaunchError },
     #[error("{span}: `{name} = {value}` is a u32 extent and {value} is not a whole number at least 1")]
     NotAnExtent {
         span: Span,
@@ -158,7 +161,16 @@ pub fn resolve(unit: &Unit, main: &Main, ir: &KernelIr) -> Result<Program, Progr
         }
     }
 
-    let n = element_count(ir, &extents);
+    // The extent of the buffers, and the number of elements the loop walks. They differ only for
+    // a kernel that splits, which walks pairs: half of every base (ADR-0028).
+    let base_len = element_count(ir, &extents);
+    let n = match ir
+        .split_pairs(&extents)
+        .map_err(|err| ProgramError::View { span: main.span, err })?
+    {
+        Some(pairs) => pairs,
+        None => base_len,
+    };
 
     let mut prints = Vec::new();
     for pr in &main.prints {
@@ -178,8 +190,10 @@ pub fn resolve(unit: &Unit, main: &Main, ir: &KernelIr) -> Result<Program, Progr
         // value and `print partial` is one element rather than `n` of them.
         let len = if p.shape.iter().any(|d| d == BLOCKS) {
             1
-        } else {
+        } else if ir.views.is_empty() {
             n
+        } else {
+            base_len // a split kernel walks pairs, but its buffers are whole
         };
         let (lo, hi) = pr.range.unwrap_or((0, len));
         if hi > len {
