@@ -222,3 +222,48 @@ What this says, and what it does not:
   control with the body reordered so each load sits next to the loads that share its sectors. If the
   reorder moves the ratio, statement order is a cost the model does not see -- and that is a finding
   for ADR-0015's sector model, not a tuning knob.
+
+## P2 follow-up, as measured (2026-09-29)
+
+Protocol and analyzer frozen before the measurement (`docs/prereg/ADR-0029.p2-followup-protocol.md`,
+`tools/p2_followup.py`, hashes in `ADR-0029.p2-followup.PREREG_SHA256.txt`; the one probe and the
+SASS store order seen first are disclosed there). Run at `52a0572`; raw numbers in
+`docs/prereg/ADR-0029.p2-followup-results.json`; verdicts from the unedited analyzer. Bytes per quad
+at the L2, 2^21 quads.
+
+| `(c, t)` | `cu_q` read | `cu_q` write | `cu_q` total | `cu_q_grouped` total | L1 hit (loads) |
+|---|---|---|---|---|---|
+| control | 32.01 | 32.00 | 64.01 | -- | 0.0% |
+| both < 3 (4 pairs) | 32.1 - 32.2 | 85.3 - 86.7 | 117.5 - 119.1 | **67.9 - 68.2** | 74.9 - 75.0% |
+| one < 3 (7 pairs) | 32.1 - 32.5 | 41.4 - 56.2 | 73.6 - 88.8 | **65.3 - 68.5** | 49.4 - 49.9% |
+| (8, 4) | 32.01 | 32.00 | 64.02 | 64.01 | 0.0% |
+
+| prediction | verdict |
+|---|---|
+| **F1**, reads equal the control's | **PASS** (32.1 - 32.5 against 32.01) |
+| **F1**, writes carry >= 90% of the excess | **PASS** |
+| **F2**, L1 hit >= 50% where a qubit is narrow, <= 10% at (8, 4) | **FAIL** -- 49.4 - 49.9% with one narrow qubit |
+| **F3**, the declaration order does not move the bus | **FAIL** -- grouping it removes most of the excess |
+| every run bit-exact | PASS |
+
+What this says:
+
+* **The whole excess is in the writes.** Reads reach the L2 at exactly the payload at every pair:
+  the L1 serves every sector two leaves share. **F2 fails by the letter, and the threshold is what
+  was wrong:** the hit fraction is 1 - 1/(leaves sharing a sector) to the decimal -- 50.0% when two
+  leaves share, 75.0% when four do -- which is the most an L1 can serve, and I set the bar exactly at
+  that ceiling, where noise puts half the runs a hair under. The verdict stands as FAIL; the reading
+  is that the L1 serves every partner it can.
+* **F3 was wrong, and that is the finding.** I predicted that the order in which drained streams
+  are declared could not matter, because `ptxas` schedules the stores itself (seen in the SASS).
+  Declaring the four `re` leaves together, then the `im` ones, takes the L2 from **1.84x to 1.06x**
+  with two narrow qubits and from **1.15 - 1.39x to 1.02 - 1.07x** with one. The same body, the same
+  loads, the same bits. Stores that write the halves of one sector close together are merged before
+  the L2; stores that do not are sent twice. Which stage merges them is not measured here.
+* **So the store order is a cost the model does not see, and one the compiler should own.** An
+  author should not have to know that declaration order sets the write traffic. The emitter can
+  order drained leaves by buffer and by first address, whatever the source says; that is a change
+  with a prediction (the `cu_q` figures move to the `cu_q_grouped` ones within 5%), and it belongs to
+  the next ADR, measured, not slipped in here.
+* **Time is unaffected at this size**, as step 5 showed: DRAM binds. The saving matters where the
+  state fits in L2, and for the L2 traffic a fused multi-gate pass will generate.

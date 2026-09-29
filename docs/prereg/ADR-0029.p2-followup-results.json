@@ -1,0 +1,959 @@
+{
+ "protocol": "docs/prereg/ADR-0029.p2-followup-protocol.md",
+ "git_head": "52a0572b2280f32c2beb959900da01eeb9c9cd52",
+ "quads": 2097152,
+ "rounds": 3,
+ "seed": 290,
+ "ncu": {
+  "control": [
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 2097152,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 0,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 2097152,
+     "lts__t_bytes.sum": 134245984,
+     "lts__t_sectors_op_read.sum": 2097602,
+     "lts__t_sectors_op_write.sum": 2097206
+    },
+    "bit_exact": true,
+    "derived_isolated": null
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 2097152,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 0,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 2097152,
+     "lts__t_bytes.sum": 134243936,
+     "lts__t_sectors_op_read.sum": 2097602,
+     "lts__t_sectors_op_write.sum": 2097185
+    },
+    "bit_exact": true,
+    "derived_isolated": null
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 2097152,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 0,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 2097152,
+     "lts__t_bytes.sum": 134410592,
+     "lts__t_sectors_op_read.sum": 2102778,
+     "lts__t_sectors_op_write.sum": 2097209
+    },
+    "bit_exact": true,
+    "derived_isolated": null
+   }
+  ],
+  "cu_q:c=0,t=1": [
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 8388608,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 6283820,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 8388608,
+     "lts__t_bytes.sum": 245260768,
+     "lts__t_sectors_op_read.sum": 2115120,
+     "lts__t_sectors_op_write.sum": 5548835
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 8388608,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 6282396,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 8388608,
+     "lts__t_bytes.sum": 251861440,
+     "lts__t_sectors_op_read.sum": 2110568,
+     "lts__t_sectors_op_write.sum": 5759766
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 8388608,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 6282392,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 8388608,
+     "lts__t_bytes.sum": 246394752,
+     "lts__t_sectors_op_read.sum": 2106732,
+     "lts__t_sectors_op_write.sum": 5592768
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   }
+  ],
+  "cu_q:c=1,t=0": [
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 8388608,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 6281908,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 8388608,
+     "lts__t_bytes.sum": 253006048,
+     "lts__t_sectors_op_read.sum": 2223192,
+     "lts__t_sectors_op_write.sum": 5682868
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 8388608,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 6281024,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 8388608,
+     "lts__t_bytes.sum": 249683168,
+     "lts__t_sectors_op_read.sum": 2108108,
+     "lts__t_sectors_op_write.sum": 5694153
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 8388608,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 6283028,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 8388608,
+     "lts__t_bytes.sum": 243839648,
+     "lts__t_sectors_op_read.sum": 2112310,
+     "lts__t_sectors_op_write.sum": 5507295
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   }
+  ],
+  "cu_q:c=0,t=2": [
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 8388608,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 6283596,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 8388608,
+     "lts__t_bytes.sum": 247196352,
+     "lts__t_sectors_op_read.sum": 2106040,
+     "lts__t_sectors_op_write.sum": 5618452
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 8388608,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 6281704,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 8388608,
+     "lts__t_bytes.sum": 250110880,
+     "lts__t_sectors_op_read.sum": 2107420,
+     "lts__t_sectors_op_write.sum": 5708209
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 8388608,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 6282524,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 8388608,
+     "lts__t_bytes.sum": 244918688,
+     "lts__t_sectors_op_read.sum": 2106600,
+     "lts__t_sectors_op_write.sum": 5546773
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   }
+  ],
+  "cu_q:c=2,t=0": [
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 8388608,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 6283200,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 8388608,
+     "lts__t_bytes.sum": 244191936,
+     "lts__t_sectors_op_read.sum": 2110980,
+     "lts__t_sectors_op_write.sum": 5519682
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 8388608,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 6281772,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 8388608,
+     "lts__t_bytes.sum": 248518272,
+     "lts__t_sectors_op_read.sum": 2107352,
+     "lts__t_sectors_op_write.sum": 5658508
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 8388608,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 6282548,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 8388608,
+     "lts__t_bytes.sum": 248099168,
+     "lts__t_sectors_op_read.sum": 2106576,
+     "lts__t_sectors_op_write.sum": 5646177
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   }
+  ],
+  "cu_q:c=0,t=3": [
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2093784,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 177842784,
+     "lts__t_sectors_op_read.sum": 2105964,
+     "lts__t_sectors_op_write.sum": 3451283
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2091490,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 181405280,
+     "lts__t_sectors_op_read.sum": 2103330,
+     "lts__t_sectors_op_write.sum": 3565172
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2092374,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 177117344,
+     "lts__t_sectors_op_read.sum": 2102446,
+     "lts__t_sectors_op_write.sum": 3432135
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "cu_q:c=3,t=0": [
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2093422,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 177671328,
+     "lts__t_sectors_op_read.sum": 2101398,
+     "lts__t_sectors_op_write.sum": 3450495
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2092080,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 181551264,
+     "lts__t_sectors_op_read.sum": 2102740,
+     "lts__t_sectors_op_write.sum": 3570338
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2093564,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 177535456,
+     "lts__t_sectors_op_read.sum": 2101256,
+     "lts__t_sectors_op_write.sum": 3446391
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "cu_q:c=0,t=8": [
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2073056,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 186288352,
+     "lts__t_sectors_op_read.sum": 2135140,
+     "lts__t_sectors_op_write.sum": 3686035
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2071976,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 185102400,
+     "lts__t_sectors_op_read.sum": 2122844,
+     "lts__t_sectors_op_write.sum": 3661270
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2069700,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 186187232,
+     "lts__t_sectors_op_read.sum": 2130824,
+     "lts__t_sectors_op_write.sum": 3687191
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "cu_q:c=8,t=0": [
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2089832,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 157005024,
+     "lts__t_sectors_op_read.sum": 2115797,
+     "lts__t_sectors_op_write.sum": 2790274
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2089564,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 153868800,
+     "lts__t_sectors_op_read.sum": 2105256,
+     "lts__t_sectors_op_write.sum": 2702789
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2089684,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 154250688,
+     "lts__t_sectors_op_read.sum": 2105136,
+     "lts__t_sectors_op_write.sum": 2714860
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "cu_q:c=4,t=1": [
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2093376,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 178239776,
+     "lts__t_sectors_op_read.sum": 2101444,
+     "lts__t_sectors_op_write.sum": 3468176
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2092444,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 179643520,
+     "lts__t_sectors_op_read.sum": 2102376,
+     "lts__t_sectors_op_write.sum": 3511146
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2091976,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 180697632,
+     "lts__t_sectors_op_read.sum": 2102844,
+     "lts__t_sectors_op_write.sum": 3543619
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "cu_q:c=1,t=4": [
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2091682,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 179442944,
+     "lts__t_sectors_op_read.sum": 2103138,
+     "lts__t_sectors_op_write.sum": 3504118
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2090670,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 181607424,
+     "lts__t_sectors_op_read.sum": 2104158,
+     "lts__t_sectors_op_write.sum": 3570652
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2093414,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 177677728,
+     "lts__t_sectors_op_read.sum": 2106334,
+     "lts__t_sectors_op_write.sum": 3445759
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "cu_q:c=22,t=2": [
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2090304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 155334336,
+     "lts__t_sectors_op_read.sum": 2104516,
+     "lts__t_sectors_op_write.sum": 2749336
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2089648,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 154245600,
+     "lts__t_sectors_op_read.sum": 2105180,
+     "lts__t_sectors_op_write.sum": 2714585
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2089184,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 152931360,
+     "lts__t_sectors_op_read.sum": 2111030,
+     "lts__t_sectors_op_write.sum": 2667739
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "cu_q:c=8,t=4": [
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 2097152,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 0,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 2097152,
+     "lts__t_bytes.sum": 134439488,
+     "lts__t_sectors_op_read.sum": 2103716,
+     "lts__t_sectors_op_write.sum": 2097182
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 2097152,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 0,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 2097152,
+     "lts__t_bytes.sum": 134251296,
+     "lts__t_sectors_op_read.sum": 2097668,
+     "lts__t_sectors_op_write.sum": 2097347
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 2097152,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 0,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 2097152,
+     "lts__t_bytes.sum": 134245472,
+     "lts__t_sectors_op_read.sum": 2097668,
+     "lts__t_sectors_op_write.sum": 2097167
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   }
+  ],
+  "cu_q_grouped:c=0,t=1": [
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 8388608,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 6287420,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 8388608,
+     "lts__t_bytes.sum": 142705888,
+     "lts__t_sectors_op_read.sum": 2107880,
+     "lts__t_sectors_op_write.sum": 2351343
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 8388608,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 6286304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 8388608,
+     "lts__t_bytes.sum": 143098880,
+     "lts__t_sectors_op_read.sum": 2102820,
+     "lts__t_sectors_op_write.sum": 2368684
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 8388608,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 6287592,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 8388608,
+     "lts__t_bytes.sum": 144069920,
+     "lts__t_sectors_op_read.sum": 2107740,
+     "lts__t_sectors_op_write.sum": 2393610
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   }
+  ],
+  "cu_q_grouped:c=1,t=0": [
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 8388608,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 6287936,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 8388608,
+     "lts__t_bytes.sum": 142454624,
+     "lts__t_sectors_op_read.sum": 2105892,
+     "lts__t_sectors_op_write.sum": 2345433
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 8388608,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 6287060,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 8388608,
+     "lts__t_bytes.sum": 143112768,
+     "lts__t_sectors_op_read.sum": 2102065,
+     "lts__t_sectors_op_write.sum": 2369873
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 8388608,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 6287656,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 8388608,
+     "lts__t_bytes.sum": 141362208,
+     "lts__t_sectors_op_read.sum": 2101476,
+     "lts__t_sectors_op_write.sum": 2315756
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   }
+  ],
+  "cu_q_grouped:c=0,t=2": [
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 8388608,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 6285416,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 8388608,
+     "lts__t_bytes.sum": 148767040,
+     "lts__t_sectors_op_read.sum": 2308816,
+     "lts__t_sectors_op_write.sum": 2339764
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 8388608,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 6288312,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 8388608,
+     "lts__t_bytes.sum": 141309664,
+     "lts__t_sectors_op_read.sum": 2101039,
+     "lts__t_sectors_op_write.sum": 2314552
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 8388608,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 6287840,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 8388608,
+     "lts__t_bytes.sum": 142513408,
+     "lts__t_sectors_op_read.sum": 2105132,
+     "lts__t_sectors_op_write.sum": 2348076
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   }
+  ],
+  "cu_q_grouped:c=2,t=0": [
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 8388608,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 6287196,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 8388608,
+     "lts__t_bytes.sum": 142504320,
+     "lts__t_sectors_op_read.sum": 2107153,
+     "lts__t_sectors_op_write.sum": 2345771
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 8388608,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 6286140,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 8388608,
+     "lts__t_bytes.sum": 143150400,
+     "lts__t_sectors_op_read.sum": 2102984,
+     "lts__t_sectors_op_write.sum": 2370096
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 8388608,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 6288604,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 8388608,
+     "lts__t_bytes.sum": 140766368,
+     "lts__t_sectors_op_read.sum": 2100520,
+     "lts__t_sectors_op_write.sum": 2298093
+    },
+    "bit_exact": true,
+    "derived_isolated": 256.0
+   }
+  ],
+  "cu_q_grouped:c=0,t=3": [
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2094728,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 138043008,
+     "lts__t_sectors_op_read.sum": 2100092,
+     "lts__t_sectors_op_write.sum": 2213416
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2093188,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 138967392,
+     "lts__t_sectors_op_read.sum": 2101632,
+     "lts__t_sectors_op_write.sum": 2240763
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2094264,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 138254336,
+     "lts__t_sectors_op_read.sum": 2108300,
+     "lts__t_sectors_op_write.sum": 2211812
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "cu_q_grouped:c=3,t=0": [
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2094356,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 143475648,
+     "lts__t_sectors_op_read.sum": 2100464,
+     "lts__t_sectors_op_write.sum": 2382755
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2094662,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 143623392,
+     "lts__t_sectors_op_read.sum": 2100158,
+     "lts__t_sectors_op_write.sum": 2387735
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2094586,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 142451040,
+     "lts__t_sectors_op_read.sum": 2100362,
+     "lts__t_sectors_op_write.sum": 2350897
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "cu_q_grouped:c=0,t=8": [
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2071604,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 136940704,
+     "lts__t_sectors_op_read.sum": 2127824,
+     "lts__t_sectors_op_write.sum": 2151237
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2067392,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 137100416,
+     "lts__t_sectors_op_read.sum": 2134340,
+     "lts__t_sectors_op_write.sum": 2149662
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2071056,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 136898528,
+     "lts__t_sectors_op_read.sum": 2130949,
+     "lts__t_sectors_op_write.sum": 2146740
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "cu_q_grouped:c=8,t=0": [
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2091952,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 143045152,
+     "lts__t_sectors_op_read.sum": 2108516,
+     "lts__t_sectors_op_write.sum": 2361309
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2092032,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 142018560,
+     "lts__t_sectors_op_read.sum": 2102788,
+     "lts__t_sectors_op_write.sum": 2334901
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2092504,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 141593568,
+     "lts__t_sectors_op_read.sum": 2102316,
+     "lts__t_sectors_op_write.sum": 2322147
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "cu_q_grouped:c=4,t=1": [
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2095016,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 142351424,
+     "lts__t_sectors_op_read.sum": 2104796,
+     "lts__t_sectors_op_write.sum": 2343350
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2094622,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 143602432,
+     "lts__t_sectors_op_read.sum": 2101670,
+     "lts__t_sectors_op_write.sum": 2385570
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2094750,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 381674656,
+     "lts__t_sectors_op_read.sum": 2103274,
+     "lts__t_sectors_op_write.sum": 2352713
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "cu_q_grouped:c=1,t=4": [
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2092962,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 138101408,
+     "lts__t_sectors_op_read.sum": 2101858,
+     "lts__t_sectors_op_write.sum": 2213448
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2093540,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 138927904,
+     "lts__t_sectors_op_read.sum": 2101984,
+     "lts__t_sectors_op_write.sum": 2239177
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2093788,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 137480832,
+     "lts__t_sectors_op_read.sum": 2101032,
+     "lts__t_sectors_op_write.sum": 2194901
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "cu_q_grouped:c=22,t=2": [
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2093008,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 143573280,
+     "lts__t_sectors_op_read.sum": 2106970,
+     "lts__t_sectors_op_write.sum": 2378848
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2092400,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 142075776,
+     "lts__t_sectors_op_read.sum": 2102420,
+     "lts__t_sectors_op_write.sum": 2337030
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 4194304,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 2091776,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 4194304,
+     "lts__t_bytes.sum": 141953536,
+     "lts__t_sectors_op_read.sum": 2108028,
+     "lts__t_sectors_op_write.sum": 2327678
+    },
+    "bit_exact": true,
+    "derived_isolated": 128.0
+   }
+  ],
+  "cu_q_grouped:c=8,t=4": [
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 2097152,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 0,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 2097152,
+     "lts__t_bytes.sum": 134247712,
+     "lts__t_sectors_op_read.sum": 2097668,
+     "lts__t_sectors_op_write.sum": 2097169
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 2097152,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 0,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 2097152,
+     "lts__t_bytes.sum": 134250688,
+     "lts__t_sectors_op_read.sum": 2097668,
+     "lts__t_sectors_op_write.sum": 2097263
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   },
+   {
+    "counters": {
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": 2097152,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit.sum": 0,
+     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": 2097152,
+     "lts__t_bytes.sum": 134246112,
+     "lts__t_sectors_op_read.sum": 2097668,
+     "lts__t_sectors_op_write.sum": 2097187
+    },
+    "bit_exact": true,
+    "derived_isolated": 64.0
+   }
+  ]
+ }
+}
