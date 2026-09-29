@@ -1,0 +1,5 @@
+sha256=e236d098e65c705641534e9a6aaf6111d7edb45fd37307d80ed9c16556e6b634
+file=docs/prereg/ADR-0029.prereg-frozen.md
+frozen_at=2026-09-29T15:20:48+02:00
+git_head=d52a9dd2b67fcbea24b8c9c5b67efea197cc274b
+note=ADR-0029 as accepted, frozen before any code for it; P1-P5 are its predictions
