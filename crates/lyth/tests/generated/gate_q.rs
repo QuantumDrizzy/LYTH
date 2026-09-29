@@ -121,8 +121,8 @@ $L_loop_gate_q:
     fma.rn.f32 %f31, %f6, %f9, %f30;
     fma.rn.f32 %f32, %f5, %f11, %f31;
     st.global.f32 [%rd15], %f18;
-    st.global.f32 [%rd16], %f22;
     st.global.f32 [%rd17], %f28;
+    st.global.f32 [%rd16], %f22;
     st.global.f32 [%rd18], %f32;
     add.s32 %r8, %r8, %r9;
     bra $L_loop_gate_q;

@@ -113,12 +113,12 @@ $L_loop_swap_q:
     ld.global.f32 %f7, [%rd19];
     ld.global.f32 %f8, [%rd20];
     st.global.f32 [%rd21], %f1;
-    st.global.f32 [%rd22], %f2;
     st.global.f32 [%rd23], %f3;
-    st.global.f32 [%rd24], %f4;
     st.global.f32 [%rd25], %f5;
-    st.global.f32 [%rd26], %f6;
     st.global.f32 [%rd27], %f7;
+    st.global.f32 [%rd22], %f2;
+    st.global.f32 [%rd24], %f4;
+    st.global.f32 [%rd26], %f6;
     st.global.f32 [%rd28], %f8;
     add.s32 %r9, %r9, %r10;
     bra $L_loop_swap_q;

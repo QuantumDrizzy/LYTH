@@ -95,8 +95,8 @@ $L_loop_hadamard_q:
     sub.rn.f32 %f12, %f6, %f7;
     mul.rn.f32 %f13, %f1, %f12;
     st.global.f32 [%rd15], %f5;
-    st.global.f32 [%rd16], %f9;
     st.global.f32 [%rd17], %f11;
+    st.global.f32 [%rd16], %f9;
     st.global.f32 [%rd18], %f13;
     add.s32 %r8, %r8, %r9;
     bra $L_loop_hadamard_q;

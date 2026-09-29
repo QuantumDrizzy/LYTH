@@ -1,0 +1,5 @@
+tool_sha256=bdd3a1e23400256808885ae37c36f6411c947eecb82022651b37ca399880a7f5
+tool_file=tools/q4_store_order.py
+reuses=tools/p2_followup.py (frozen, unchanged)
+frozen_at=2026-09-29T18:26:57+02:00
+note=ADR-0030 Q4, the pass criterion is the frozen ADR's; tool frozen before the measurement, with the step-2 code it measures

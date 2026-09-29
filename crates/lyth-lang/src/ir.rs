@@ -1701,6 +1701,26 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
         let reg = *env.get(&s.buffer).expect("assigned implies an env entry");
         drains.push((s.buffer.clone(), reg));
     }
+    // The store order is the compiler's, not the author's (ADR-0030 step 2). ADR-0029's P2
+    // follow-up measured that the leaves of one buffer stored together reach the L2 at 1.06x the
+    // payload, and the same leaves interleaved with another buffer's at up to 1.84x: same body,
+    // same bits. So a split kernel stores grouped by buffer, in parameter order, and within a
+    // buffer in split-tree order (the parts from the root down, part 0 first). Width-independent,
+    // so it holds for a kernel compiled once for every qubit. Kernels that do not split keep the
+    // order they declare.
+    if !views.is_empty() {
+        let key = |name: &str| -> (usize, Vec<u8>) {
+            let mut path = Vec::new();
+            let mut at = name;
+            while let Some(v) = views.iter().find(|v| v.name == at) {
+                path.push(v.part);
+                at = v.base.as_str();
+            }
+            path.reverse();
+            (kernel.params.iter().position(|p| p.name == at).unwrap_or(usize::MAX), path)
+        };
+        drains.sort_by_key(|(name, _)| key(name));
+    }
 
     // A kernel that neither drains nor reduces computes nothing anyone can see.
     if drains.is_empty() && reduction.is_none() {

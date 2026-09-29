@@ -149,12 +149,12 @@ $L_loop_cu_q:
     ld.global.f32 %f35, [%rd13];
     ld.global.f32 %f36, [%rd14];
     st.global.f32 [%rd21], %f33;
-    st.global.f32 [%rd22], %f34;
     st.global.f32 [%rd23], %f35;
-    st.global.f32 [%rd24], %f36;
     st.global.f32 [%rd25], %f18;
-    st.global.f32 [%rd26], %f22;
     st.global.f32 [%rd27], %f28;
+    st.global.f32 [%rd22], %f34;
+    st.global.f32 [%rd24], %f36;
+    st.global.f32 [%rd26], %f22;
     st.global.f32 [%rd28], %f32;
     add.s32 %r9, %r9, %r10;
     bra $L_loop_cu_q;
