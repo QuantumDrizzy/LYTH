@@ -30,12 +30,80 @@ fn hadamard_q_lowers_with_eight_views_and_four_base_parameters() {
 #[test]
 fn the_split_does_not_move_the_flop_count_or_the_payload() {
     // ADR-0028: "the body is unchanged; hadamard_q derives the same 8 flop / 32 byte per pair as
-    // hadamard, intensity 0.25". Steps 1-3 must not move a derived number.
+    // hadamard, intensity 0.25". P1: a layout declaration must not move the payload. What the
+    // split DOES move is the sector bound, and only that (step 3): see the tests below.
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let h = lower(&std::fs::read_to_string(root.join("examples/hadamard.lyth")).unwrap()).unwrap();
     let q = lower(&example()).unwrap();
-    assert_eq!(format!("{:?}", h.cost), format!("{:?}", q.cost), "cost must be identical");
     assert_eq!(h.ops, q.ops, "the body lowers to the same ops");
+    assert_eq!(h.cost.flops_per_element(), q.cost.flops_per_element());
+    assert_eq!(h.cost.bytes_per_element(), q.cost.bytes_per_element(), "payload invariance (P1)");
+    assert_eq!(h.cost.bytes_per_element(), Some(32.0));
+    assert_eq!(h.cost.flops_per_element(), Some(8.0));
+    assert_eq!(h.cost.read_bytes_per_element(), q.cost.read_bytes_per_element());
+    assert_eq!(h.cost.write_bytes_per_element(), q.cost.write_bytes_per_element());
+}
+
+#[test]
+fn the_static_sector_figure_is_the_bound_and_the_contiguous_kernel_does_not_move() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let h = lower(&std::fs::read_to_string(root.join("examples/hadamard.lyth")).unwrap()).unwrap();
+    let q = lower(&example()).unwrap();
+    // hadamard is contiguous: every byte fetched is a byte wanted, exactly as before.
+    assert_eq!(h.cost.coalescence(), 1.0);
+    assert_eq!((h.cost.sector_read_per_element, h.cost.sector_write_per_element), (16.0, 16.0));
+    // hadamard_q's four read views and four drained views are charged a sector per element until
+    // the launch says how wide the runs are: 4 * 32 read + 4 * 32 written, payload 32.
+    assert_eq!((q.cost.sector_read_per_element, q.cost.sector_write_per_element), (128.0, 128.0));
+    assert_eq!(q.cost.coalescence(), 32.0 / 256.0);
+}
+
+fn exact(n: u32, w: u32) -> lyth_lang::ir::SplitSector {
+    let k = lower(&example()).unwrap();
+    let ex = std::collections::BTreeMap::from([("n".to_string(), n), ("w".to_string(), w)]);
+    k.split_sector(&ex).unwrap().expect("a split kernel")
+}
+
+#[test]
+fn the_exact_sector_figure_is_a_function_of_w_and_reaches_the_contiguous_kernel_at_8() {
+    let n = 1u32 << 20;
+    // P1, derived: the payload is 32 B per pair at every width.
+    for w in [1, 2, 4, 8, 16, 1024, n / 2] {
+        assert_eq!(exact(n, w).payload, 32.0, "w = {w}");
+    }
+    // P2, derived by walking the address rule. For w >= 8 a run fills a 32-byte sector, so each
+    // byte a warp fetches is a byte it wanted: 32 B of sector per pair against 32 B of payload,
+    // coalescence exactly 1, indistinguishable at the bus from contiguous hadamard. Below 8 a
+    // view in isolation fetches whole sectors for half of each, twice its payload.
+    for w in [8, 16, 64, 1024, n / 2] {
+        let e = exact(n, w);
+        assert_eq!(e.coalescence(), 1.0, "w = {w}: {e:?}");
+        assert_eq!(e.sectors, 32.0, "w = {w}");
+    }
+    for w in [1, 2, 4] {
+        let e = exact(n, w);
+        assert_eq!(e.coalescence(), 0.5, "w = {w}: a view alone wastes half its sectors: {e:?}");
+        assert_eq!(e.sectors, 64.0, "w = {w}");
+    }
+    // Monotone as w halves below 8, and never above the static bound.
+    let mut last = 0.0;
+    for w in [8, 4, 2, 1] {
+        let s = exact(n, w).sectors;
+        assert!(s >= last, "w = {w}");
+        assert!(s <= 256.0, "the static bound is a sector per element: {s}");
+        last = s;
+    }
+    // A width that is not a power of two straddles sectors: derived, not assumed away.
+    let e3 = exact(3 * 1024, 3);
+    assert!(e3.coalescence() < 1.0 && e3.coalescence() >= 32.0 / 256.0, "{e3:?}");
+}
+
+#[test]
+fn an_unsplit_kernel_has_no_exact_split_figure() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let h = lower(&std::fs::read_to_string(root.join("examples/hadamard.lyth")).unwrap()).unwrap();
+    let ex = std::collections::BTreeMap::from([("n".to_string(), 64u32)]);
+    assert_eq!(h.split_sector(&ex).unwrap(), None);
 }
 
 fn with(split_lines: &str, streams: &str) -> String {

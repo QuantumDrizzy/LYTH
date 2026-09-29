@@ -532,7 +532,7 @@ fn print_cost(ir: &KernelIr, report: &lyth_lang::IntensityReport) {
     // declared schedule, and a kernel that achieves 1.000 is saying something. At rank 1 it is
     // always 1.000 and the line would be noise.
     let coalescence = ir.cost.coalescence();
-    if ir.space.is_some() {
+    if ir.space.is_some() || !ir.views.is_empty() {
         let word = |fixed: f64, per: f64| match &ir.cost.contracted {
             Some(c) if per > 0.0 && fixed > 0.0 => format!("{} * {} + {}", num(per), c.extent, num(fixed)),
             Some(c) if per > 0.0 => format!("{} * {}", num(per), c.extent),
@@ -563,7 +563,26 @@ fn print_cost(ir: &KernelIr, report: &lyth_lang::IntensityReport) {
         println!("           the permutation is absorbed here, so no global access is strided");
     }
     if coalescence < 1.0 {
-        for st in ir.streams.iter().filter(|s| !s.coalesced) {
+        // One line per split, not per view: `re` into `p0r, p1r` is one declaration.
+        let mut split_bases: Vec<&str> = Vec::new();
+        for v in &ir.views {
+            if !split_bases.contains(&v.base.as_str()) {
+                split_bases.push(v.base.as_str());
+                let names: Vec<&str> = ir.views.iter().filter(|w| w.base == v.base).map(|w| w.name.as_str()).collect();
+                println!(
+                    "           `{}` is split into {} at width `{}`: runs of {} elements with a gap of {},",
+                    v.base,
+                    names.join(", "),
+                    v.width,
+                    v.width,
+                    v.width
+                );
+            }
+        }
+        if !ir.views.is_empty() {
+            println!("           so this is the bound (a sector per element); the exact figure needs the launch width");
+        }
+        for st in ir.streams.iter().filter(|s| !s.coalesced && ir.view(&s.buffer).is_none()) {
             println!(
                 "           `{}` is indexed [{}] and its innermost index is not the fast one,",
                 st.buffer,

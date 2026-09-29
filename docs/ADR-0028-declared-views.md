@@ -160,3 +160,19 @@ is what makes them claims *later*.
 One sentence for ADR-0026's ledger: the split adds a declaration whose cost is derivable, so
 it is growth. The day a split needs an uncountable feature to be useful, this ADR is the thing
 to amend — not the refusal table.
+
+## Progress notes (2026-09-29; the frozen predictions above are unedited)
+
+- **Steps 1–3 landed** (LYTH `6bdceaf`, `9dd046a` and the step-3 commit): the `split` declaration
+  and its refusals, the launch checks (`view_index`, `split_pairs`), and the sector figure.
+  `hadamard` and every existing kernel are unchanged, and the suite grew from 325 to 339 tests.
+- **P1 holds in the model:** `hadamard_q` derives 8 flop / 32 byte per pair, identical to
+  `hadamard`, at every `w`.
+- **A refinement of P2's arithmetic, stated before the measurement.** P2's worked bound at
+  `w = 1` (8×) is one sector per element, and that is now the *static bound*. Counting the
+  sectors a warp of 32 consecutive elements touches, walking `view_index` itself, gives the
+  figure at launch: **1.0× at `w ≥ 8` and 2× below it, per view in isolation**. Every sector a
+  view touches is half the other view's. P2's shape (equal to the payload at `w ≥ 8`, exceeding
+  it as `w` halves below that) stands; the magnitude below 8 is predicted at 2×, not 8×. The
+  partner view and the drain share those sectors, so what the bus actually shows is for step 5
+  to say, and it is published either way.

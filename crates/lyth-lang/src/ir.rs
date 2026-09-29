@@ -80,6 +80,54 @@ pub fn view_index(w: u32, part: u8, k: u32) -> u64 {
     (k / w) * 2 * w + u64::from(part) * w + (k % w)
 }
 
+/// Warps sampled when deriving a view's sector figure. 2^14 warps is 524,288 pairs: every warp
+/// of anything smaller, and the pattern repeats or saturates long before that for anything
+/// larger.
+const SECTOR_SAMPLE_WARPS: u32 = 1 << 14;
+
+/// L1-to-L2 traffic per pair of a split kernel at one launch, in bytes (ADR-0028 step 3).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SplitSector {
+    pub pairs: u32,
+    /// What the source asks for per pair: unchanged by the split (P1).
+    pub payload: f64,
+    /// What the sectors carry per pair, each view in isolation (P2).
+    pub sectors: f64,
+}
+
+impl SplitSector {
+    /// Payload over sectors: 1.0 when every byte a warp fetches is a byte it wanted.
+    pub fn coalescence(&self) -> f64 {
+        if self.sectors > 0.0 {
+            self.payload / self.sectors
+        } else {
+            1.0
+        }
+    }
+}
+
+/// Bytes of sector one element of a view costs at width `w`: the distinct 32-byte sectors a warp
+/// of 32 consecutive elements touches, times 32, over the elements in the warp.
+pub fn view_sector_bytes(w: u32, part: u8, elem: u32, pairs: u32) -> f64 {
+    const WARP: u32 = 32;
+    let warps = pairs.div_ceil(WARP).min(SECTOR_SAMPLE_WARPS);
+    let (mut sectors, mut elements) = (0u64, 0u64);
+    let mut seen: Vec<u64> = Vec::with_capacity(WARP as usize);
+    for m in 0..warps {
+        let (k0, k1) = (m * WARP, ((m + 1) * WARP).min(pairs));
+        seen.clear();
+        seen.extend((k0..k1).map(|k| view_index(w, part, k) * u64::from(elem) / 32));
+        seen.sort_unstable();
+        seen.dedup();
+        sectors += seen.len() as u64;
+        elements += u64::from(k1 - k0);
+    }
+    if elements == 0 {
+        return SECTOR;
+    }
+    sectors as f64 * SECTOR / elements as f64
+}
+
 /// Why a launch cannot use a split (ADR-0028: "a wrong `w` is a refusal with the arithmetic
 /// printed, not a wrong answer").
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -158,6 +206,39 @@ impl KernelIr {
             pairs = Some(len / 2);
         }
         Ok(pairs)
+    }
+
+    /// The exact L1-to-L2 sector figure of a split kernel at this launch, derived by walking the
+    /// address rule (ADR-0028 step 3). `None` for a kernel that does not split.
+    ///
+    /// Not a formula. Each view stream is charged the distinct 32-byte sectors that a warp of 32
+    /// consecutive elements touches, taken from [`view_index`] itself, over the first
+    /// `SECTOR_SAMPLE_WARPS` warps (which is every warp for anything short of 16 million pairs).
+    /// The base is taken to start on a sector boundary, which `cudaMalloc` guarantees.
+    ///
+    /// **A view in isolation.** The partner view and the drain touch the same sectors, and
+    /// whether the L1 serves them is what the measurement of P2 decides. So this is what one
+    /// view's loads ask of the L2 when nothing is shared, and it is a bound on what the bus can
+    /// see, not a claim about it. The static bound, a whole sector per element, is the
+    /// worst case above it.
+    pub fn split_sector(&self, extents: &BTreeMap<String, u32>) -> Result<Option<SplitSector>, ViewLaunchError> {
+        let Some(pairs) = self.split_pairs(extents)? else {
+            return Ok(None);
+        };
+        let (mut payload, mut sectors) = (0.0, 0.0);
+        for st in &self.streams {
+            let Some(v) = self.view(&st.buffer) else { continue };
+            let elem = self.buffer_param(&st.buffer).map_or(4, |p| p.ty.bytes());
+            let w = extents[&v.width];
+            let per = view_sector_bytes(w, v.part, elem, pairs);
+            for on in [st.read, st.drain] {
+                if on {
+                    payload += f64::from(elem);
+                    sectors += per;
+                }
+            }
+        }
+        Ok(Some(SplitSector { pairs, payload, sectors }))
     }
 
     /// The parameter a streamed name reads and writes: the buffer itself, or for a split view
@@ -1219,7 +1300,12 @@ pub fn lower(unit: &Unit, kernel: &Kernel) -> Result<KernelIr, LowerError> {
             staged: s.staged(),
             loaded: None,
             read: false,
-            coalesced: true,
+            // A view reads runs of `w` elements with a gap of `w` between them. Whether that
+            // wastes any of a 32-byte sector depends on `w`, which is the caller's, so the
+            // static figure is the **bound** -- a sector per element, the same upper bound a
+            // strided rank-2 access gets -- and the exact one is derived at launch by
+            // `KernelIr::split_sector` (ADR-0028 step 3).
+            coalesced: !views.iter().any(|v| v.name == s.buffer),
         });
     }
 
