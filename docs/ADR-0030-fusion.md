@@ -124,3 +124,49 @@ cuStateVec, which does not run on this Windows machine and is not measured here.
   they fit (QFT(10) at `k = 3`: 24 of 32; random at `k = 3`: 20 of 32), and a refused group runs
   unfused on the emulator. Every mixed run equals the GPU's, bit for bit. Spilling is what would
   close the gap; it is not built. `[KNOWN_LIMIT]`.
+
+## Step 5 -- Q2 and Q3, as measured (2026-09-29)
+
+Protocol, tool and timing binaries frozen at `5c00069` (hashes in `ADR-0030.step5.PREREG_SHA256.txt`),
+after the executor's tests passed; raw numbers in `docs/prereg/ADR-0030.step5-results.json`; verdicts
+from the unedited analyzer.
+
+**Q3 -- time follows passes. PASS.** A random 23-qubit circuit, depth 10, 340 gates, unfused
+130.31 ms (spread 0.7%):
+
+| k | passes F | F/G | ms | T/T_unfused | bound 1.15 F/G | achieved GB/s |
+|---|---|---|---|---|---|---|
+| 1 | 340 | 1.000 | 130.09 | 0.998 | 1.150 | 350.8 |
+| 2 | 227 | 0.668 | 87.30 | 0.670 | 0.768 | 349.0 |
+| 3 | 181 | 0.532 | 69.71 | 0.535 | 0.612 | 348.5 |
+| 4 | 112 | 0.329 | 44.01 | 0.338 | 0.379 | 341.6 |
+| 5 | 99 | 0.291 | 38.53 | 0.296 | 0.335 | 344.8 |
+
+Time tracks the pass count to within 1-3% at every `k`, and every pass runs at the same ~345-350 GB/s
+(84% of the machine file's 414.5 GB/s streaming baseline). At `k = 5` the circuit runs **3.38x faster,
+with the same bits**. Launch overhead and the larger groups' arithmetic took far less than the 15%
+allowed.
+
+**Q2 -- a fused pass costs one pass. DRAM: FAIL, by up to 6.4%. L2 on set A: PASS.**
+
+| group | DRAM / single pass | L2 / single pass | flop/byte |
+|---|---|---|---|
+| A (qubits 7..3), 1-20 gates | 0.996 - 1.013 | 1.001 - 1.003 | 0.9 - 14.9 |
+| A, 40 gates | **1.055** | 1.092 | 29.3 |
+| B (qubits 4..0), 1-40 gates | 0.994 - **1.064** | **4.50 - 4.75** | 0.9 - 29.3 |
+
+* The DRAM bound of 5% fails at A:40 (5.5%) and at four of six B groups (5.7-6.4%). A fused pass
+  costs one pass **to within 6.4%**, not 5%. Reported as a FAIL, as frozen.
+* **The finding is B's L2: 4.5-4.75x the payload** for a group on the five lowest qubits, whatever
+  its gate count. There, a thread owns 32 *contiguous* amplitudes, and each of its 32 leaf loads is
+  one f32 per thread at a 128-byte stride across the warp: every instruction touches a sector per
+  lane. The L1 does not absorb the rest of the sector before it is evicted. Q2's L2 clause was only
+  claimed for set A (lowest qubit >= 3) for this reason; the size of the excess was not predicted.
+  It did not show in time (Q3's circuit includes low-qubit groups and still ran at ~345 GB/s),
+  because DRAM binds.
+* Checked after the verdicts, not used for them: no group spills (`ptxas -v`: 0 bytes spill stores
+  or loads), but the 40-gate groups use 246 registers a thread against 128 for small ones, so their
+  occupancy is a fraction; that is the obvious suspect for A:40's extra 5.5%, and a hypothesis.
+* **What would fix B, named and not built:** when a thread's leaves are contiguous, load and store
+  them as vectors (`ld.global.v4.f32`), eight instructions for 32 floats instead of 32, each filling
+  whole sectors. That is an emitter change with its own prediction, for the next ADR.
