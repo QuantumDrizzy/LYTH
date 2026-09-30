@@ -134,6 +134,31 @@ the same kernel at the same size. The error is recorded in the ADR rather than a
 | 3 | layout × machine in the language | **live** — shapes, rank 2, ADR-0015 |
 | 3b | callable from Rust, C and Python | **live** — ADR-0016 |
 | 3c | the tile, and a schedule-dependent cost | **live** — ADR-0017, traffic confirmed |
+| 4 | contraction, coarsening, the level that binds, half-width elements | **live** — ADR-0018, 0021, 0022, 0024 |
+| 4b | against hand-written CUDA | **measured** — 17% more instructions, the same time (ADR-0020) |
+| 5 | a second target: Unibit assembly | **live** — `lyth-uasm`, ADR-0025 |
+| 6 | state-vector gates: any single-qubit gate on any qubit, without a copy | **live** — declared split, ADR-0028 |
+| 6b | two-qubit gates (split of a view), circuits against Qiskit | **live** — ADR-0029; one prediction failed and is kept (below) |
+| 6c | fusion: many gates, one pass over memory, the same bits | **live** — `lyth-circuit`, ADR-0030 |
+
+## Quantum circuits, without a quantum library
+
+A state vector is the most memory-bound thing in quantum simulation, which is the ground LYTH was
+built for. Since ADR-0028 a `.lyth` kernel applies any single-qubit gate to any qubit in place,
+through a *declared split* of the state — the compiler derives the strided view, nothing is
+copied. ADR-0029 nests the split for two-qubit gates (CU, SWAP). ADR-0030 fuses runs of gates into
+one pass, with fma chains kept in registers.
+
+| what | result |
+|---|---|
+| circuits (GHZ, QFT, random) against Qiskit | agree to **≤ 6.6e-8** |
+| fused against unfused | **bit-exact**, every run |
+| 340-gate circuit | **130.31 ms unfused → 38.53 ms fused at k = 5 (3.38x)**, same bits |
+| two-qubit gate traffic, P2 (≤ 1.10x of the control everywhere) | **FAIL** — worst 1.846x; grouping the declaration takes it to 1.06x (follow-up) |
+| fusion DRAM prediction, Q2 | **FAIL** by up to 6.4%, recorded as such |
+
+`[KNOWN_LIMIT]` On the Unibit back end, the widest fused kernels exceed its register pool; the
+executor falls back to the unfused kernel for those groups rather than emitting something wrong.
 
 ## Commands
 
@@ -179,7 +204,8 @@ cargo run -p lyth-probe -- intensity-check fixtures/intensity/k_propagate.json  
 
 ## Docs
 
-ADR-0001 … ADR-0010 under `docs/`.
+ADR-0000 … ADR-0030 under `docs/`; every pre-registration since ADR-0028 is frozen under
+`docs/prereg/` before its sweep runs.
 
 `docs/DOGFOOD.md` is the running record for the ADR-0001 parser gate: one row per kernel
 put through the tool, and for each one whether a Rust macro would have done the same job.
@@ -191,6 +217,8 @@ put through the tool, and for each one whether a Rust macro would have done the 
 | `lyth-lang` | lexer, parser, semantic IR, **cost derived from the AST**, host interpreter |
 | `lyth-ptx` | IR → PTX. No CUDA dependency, so emission is testable without a GPU |
 | `lyth-cuda` | CUDA Driver API. All `unsafe` in the project lives here. `raw-dylib`, so **no toolkit is needed to build** |
+| `lyth-uasm` | IR → Unibit assembly: a second back end, a `.lyth` file that becomes a program |
+| `lyth-circuit` | circuits as LYTH kernels: the greedy fuser, with the unfused bits as the reference |
 | `lyth` | the compiler binary: `check`, `build`, `run` |
 | `lyth-probe` | evidence, machine-as-value, intensity, measured traffic |
 
