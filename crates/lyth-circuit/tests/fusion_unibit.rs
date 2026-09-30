@@ -22,7 +22,7 @@ fn bits(v: &[f32]) -> Vec<u32> {
 }
 
 fn emulator() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../Unibit/target/release/unibit.exe")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../Labare/target/release/unibit.exe")
 }
 
 /// One program on the emulator: every float it printed.

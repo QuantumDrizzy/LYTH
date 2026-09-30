@@ -75,7 +75,7 @@ fn zipper2_matches_on_the_host_the_emulator_and_ptx() {
     std::fs::write(&src, asm).unwrap();
     let emu = Command::new("cargo")
         .args(["run", "--quiet", "--", "run", src.to_str().unwrap()])
-        .current_dir(repo().join("../Unibit"))
+        .current_dir(repo().join("../Labare"))
         .output()
         .expect("emulator");
     assert!(emu.status.success(), "{}", String::from_utf8_lossy(&emu.stderr));
@@ -223,7 +223,7 @@ fn emulator_chain(cores: &[[u64; 4]]) -> Vec<f32> {
     std::fs::write(&src, lines.join("\n") + "\n").unwrap();
     let emu = Command::new("cargo")
         .args(["run", "--quiet", "--", "run", src.to_str().unwrap()])
-        .current_dir(repo().join("../Unibit"))
+        .current_dir(repo().join("../Labare"))
         .output()
         .expect("emulator");
     assert!(

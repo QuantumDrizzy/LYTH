@@ -25,7 +25,7 @@ fn unibit() -> PathBuf {
     // The skip below then turned a wrong path into seven passing tests in 0.01 seconds, which
     // is the shape of defect this project hunts hardest: a check whose failure state is
     // unreachable. The skip now prints where it looked.
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../Unibit")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../Labare")
 }
 
 fn lower(src: &str) -> ir::KernelIr {

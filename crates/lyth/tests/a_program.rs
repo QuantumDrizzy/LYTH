@@ -32,7 +32,7 @@ fn repo() -> PathBuf {
 /// lookup into `LYTH/crates/Unibit` -- where it found nothing, skipped, and reported seven
 /// passes in a hundredth of a second.
 fn unibit_binary() -> Option<PathBuf> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../Unibit");
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../Labare");
     if !dir.join("Cargo.toml").exists() {
         eprintln!("skipped: no Unibit at {}", dir.display());
         return None;

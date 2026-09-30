@@ -146,7 +146,7 @@ use std::process::Command;
 
 /// Runs an emitted program on the Unibit emulator and returns every float it printed.
 fn emulator(asm: &str) -> Vec<f32> {
-    let uni = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../Unibit");
+    let uni = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../Labare");
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("split.uasm");
     std::fs::write(&src, asm).unwrap();

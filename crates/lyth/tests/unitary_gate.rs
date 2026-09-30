@@ -240,7 +240,7 @@ fn a_wrong_gate_keeps_its_bit_exactness_and_fails_the_physics() {
 fn any_single_qubit_unitary_is_bit_exact_on_the_unibit_emulator_too() {
     let k = kernel();
     const UNWRITTEN: f32 = 1.0e30;
-    let uni = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../Unibit");
+    let uni = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../Labare");
     let mut checked = 0;
     // One general unitary over the widths that exercise both MTLB paths: whole registers
     // (w % 8 == 0) and one f32 at a time (w = 1, 2, 4, 3, 5).

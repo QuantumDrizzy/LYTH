@@ -389,7 +389,7 @@ fn the_checked_in_two_qubit_bindings_match_the_generator() {
 #[test]
 fn two_qubit_gates_are_bit_exact_on_the_unibit_emulator_too() {
     const UNWRITTEN: f32 = 1.0e30;
-    let uni = root().join("../Unibit");
+    let uni = root().join("../Labare");
     let u = gates()[3].1;
     let (mut vector, mut scalar) = (0, 0);
     let mut checked = 0;

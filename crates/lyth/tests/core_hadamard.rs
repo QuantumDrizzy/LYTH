@@ -78,7 +78,7 @@ fn emulator(k: &ir::KernelIr, buffers: &BTreeMap<String, Vec<f32>>) -> Vec<f32> 
         },
     )
     .expect("emits");
-    let uni = repo().join("../Unibit");
+    let uni = repo().join("../Labare");
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("core.uasm");
     std::fs::write(&src, asm).unwrap();

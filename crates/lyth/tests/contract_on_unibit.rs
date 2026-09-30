@@ -26,7 +26,7 @@ use lyth_lang::{ir, parse};
 const QUAD_BYTES: u64 = 32;
 
 fn unibit_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../Unibit")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../Labare")
 }
 
 /// What the emulator says one run retired.

@@ -188,7 +188,7 @@ fn emulator_chains(chains: &[Vec<([u64; 4], [u64; 4])>]) -> Vec<[u64; 4]> {
     std::fs::write(&src, lines.join("\n") + "\n").unwrap();
     let emu = Command::new("cargo")
         .args(["run", "--quiet", "--", "run", src.to_str().unwrap()])
-        .current_dir(repo().join("../Unibit"))
+        .current_dir(repo().join("../Labare"))
         .output()
         .expect("emulator");
     let stdout = String::from_utf8_lossy(&emu.stdout);

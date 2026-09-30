@@ -118,7 +118,7 @@ fn emulator(k: &ir::KernelIr, buffers: &BTreeMap<String, Vec<f32>>, n: u32) -> V
     std::fs::write(&src, asm).unwrap();
     let emu = Command::new("cargo")
         .args(["run", "--quiet", "--", "run", src.to_str().unwrap()])
-        .current_dir(repo().join("../Unibit"))
+        .current_dir(repo().join("../Labare"))
         .output()
         .expect("emulator");
     let stdout = String::from_utf8_lossy(&emu.stdout);
