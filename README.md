@@ -181,7 +181,7 @@ One source, three callers, the cost contract embedded in each (ADR-0016):
   input/output does not compile.
 
 ```python
-import torch, saxpy                       # run on sm_120, torch 2.12: y == 2.5x + y to 1e-6 (one fma vs two roundings)
+import torch, saxpy                       # run on sm_120, torch 2.12; examples/use-from/python checks it exactly
 n = 1 << 20
 x, y = torch.randn(n, device="cuda"), torch.randn(n, device="cuda")
 saxpy.Kernel().launch(n, 2.5, saxpy.from_torch(x, n), saxpy.from_torch(y, n))
@@ -189,8 +189,18 @@ torch.cuda.synchronize()
 print(saxpy.DERIVED_INTENSITY)            # 0.1667 flop/byte -- derived, not written by hand
 ```
 
-`[KNOWN_LIMIT]` Built and measured on Windows (sm_120). On Linux `lyth-cuda` finds `libcuda` by name;
-that path has not yet been built or run there.
+**Your GPU.** The repository ships a machine file only for sm_120. Make one for yours, measured, with
+`python tools/peak_probe.py --machine-out fixtures/machine/<arch>.json`, and write `machine <arch>` in the
+source. The PTX back end targets sm_75, sm_80, sm_86, sm_89, sm_90, sm_100 and sm_120; seven examples
+were compiled for six of those and accepted by `ptxas` on every one (42/42).
+
+**From your own project**: [`docs/USING.md`](docs/USING.md) is the full path, and
+[`examples/use-from/`](examples/use-from/) holds four working projects -- Rust, C++/CUDA, Python, and a
+quantum circuit through `lyth-circuit` -- each run here and checking its own answer.
+
+`[KNOWN_LIMIT]` Run only on sm_120, Windows. Other targets are compile-checked, not run. On Linux
+`lyth-cuda` finds `libcuda` by name; that path has not yet been built or run there. Reports from other
+GPUs and Linux are exactly what the [bug report](.github/ISSUE_TEMPLATE/bug_report.yml) is for.
 
 ## Commands
 

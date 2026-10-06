@@ -1,0 +1,7 @@
+target/
+Cargo.lock
+*.exe
+*.exp
+*.lib
+*.obj
+__pycache__/

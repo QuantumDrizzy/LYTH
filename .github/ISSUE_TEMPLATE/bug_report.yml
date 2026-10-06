@@ -1,0 +1,61 @@
+name: Bug report
+description: A kernel that does not compile, compiles wrong, runs wrong, or a contract that disagrees with a measurement.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The most useful reports here are the uncomfortable ones: a wrong answer, a contract `ncu` disagrees with,
+        a GPU where a target was only assumed to work. Everything below is what it takes to reproduce one.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: source
+    attributes:
+      label: The .lyth source
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: command
+    attributes:
+      label: The exact command
+      placeholder: lyth run kernel.lyth --machine fixtures/machine/sm_86.json -n 1048576
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Full output
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: machine
+    attributes:
+      label: Machine file (or its name, if it is one in fixtures/machine/)
+      render: json
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU, compute capability and driver version
+      placeholder: RTX 3090, sm_86, driver 560.94
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: OS, Rust version, LYTH commit
+      placeholder: Ubuntu 24.04, rustc 1.83, a1b2c3d
+    validations:
+      required: true
+  - type: dropdown
+    id: caller
+    attributes:
+      label: Called from
+      multiple: true
+      options: [lyth CLI, Rust binding, C/C++ header, Python binding, lyth-circuit, lyth-probe]

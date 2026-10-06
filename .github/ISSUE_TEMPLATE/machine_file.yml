@@ -1,0 +1,29 @@
+name: Machine file for a new GPU
+description: Send in a machine file measured with tools/peak_probe.py --machine-out.
+labels: [machine-file]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Only measured files, please: `python tools/peak_probe.py --machine-out <arch>.json` on the device itself.
+        A datasheet number in a machine file makes every roofline printed against it wrong.
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU, compute capability, driver version
+    validations:
+      required: true
+  - type: textarea
+    id: file
+    attributes:
+      label: The generated machine file
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: check
+    attributes:
+      label: Output of `lyth run examples/saxpy.lyth --machine <your file> -n 1048576 --set a=2.5` (with `machine <arch>` in the source)
+      render: text
+    validations:
+      required: true

@@ -1,0 +1,15 @@
+[package]
+name = "lyth-use-from-circuit"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Not a member of the LYTH workspace: this is what a separate project looks like.
+[workspace]
+
+[dependencies]
+# From your own repository, use the git source instead of the path:
+#   lyth-cuda = { git = "https://github.com/QuantumDrizzy/LYTH" }
+lyth-cuda = { path = "../../../crates/lyth-cuda" }
+#   lyth-circuit = { git = "https://github.com/QuantumDrizzy/LYTH" }
+lyth-circuit = { path = "../../../crates/lyth-circuit" }

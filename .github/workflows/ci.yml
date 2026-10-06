@@ -28,3 +28,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --workspace
       - run: cargo run -p lyth -- check examples/saxpy.lyth --machine fixtures/machine/sm_120.json
+      # The use-from projects build the way an outside repository would (they cannot run without a GPU).
+      - run: cargo build --manifest-path examples/use-from/rust/Cargo.toml
+      - run: cargo build --manifest-path examples/use-from/circuit/Cargo.toml
