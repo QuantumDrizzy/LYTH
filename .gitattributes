@@ -1,0 +1,7 @@
+# Sources check out with LF everywhere; tests read examples from disk and the PTX is text.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.png binary
+*.gif binary
+*.pdf binary
+*.npy binary

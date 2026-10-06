@@ -21,13 +21,14 @@ jobs:
 
   build:
     # lyth-cuda links the driver with raw-dylib on Windows, so the whole workspace builds with no toolkit.
+    # Nothing is run: the binary imports nvcuda.dll at load time and a runner has no NVIDIA driver
+    # (STATUS_DLL_NOT_FOUND). That is a [KNOWN_LIMIT] in README.md, not a CI quirk.
     name: workspace build / windows
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --workspace
-      - run: cargo run -p lyth -- check examples/saxpy.lyth --machine fixtures/machine/sm_120.json
       # The use-from projects build the way an outside repository would (they cannot run without a GPU).
       - run: cargo build --manifest-path examples/use-from/rust/Cargo.toml
       - run: cargo build --manifest-path examples/use-from/circuit/Cargo.toml

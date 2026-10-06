@@ -82,6 +82,9 @@ fn the_matmul_example_on_disk_is_the_wrapped_form() {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/matmul.lyth"),
     )
     .expect("examples/matmul.lyth");
+    // A Windows checkout may hand the file over with CRLF; the lexer accepts either, so the
+    // assertion about the wrapping must not depend on which one this clone has.
+    let src = src.replace("\r\n", "\n");
     assert!(
         src.contains("kernel matmul(m: u32, n: u32, k: u32,\n"),
         "the example should wrap its signature"

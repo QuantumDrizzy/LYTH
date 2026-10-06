@@ -162,8 +162,8 @@ executor falls back to the unfused kernel for those groups rather than emitting 
 
 ## Use it in your project
 
-Rust stable is all you need to **check** and **build**: no GPU, no CUDA toolkit. Running a kernel, and the
-generated bindings, need an NVIDIA driver; the PTX targets the `machine` the source declares (the
+`check` and `build` need no GPU, but today the `lyth` binary links the CUDA driver at load time (see the
+known limit below). Running a kernel, and the generated bindings, need an NVIDIA driver; the PTX targets the `machine` the source declares (the
 examples say `sm_120`; machine files live in `fixtures/machine/`).
 
 ```bash
@@ -176,7 +176,8 @@ One source, three callers, the cost contract embedded in each (ADR-0016):
 
 - **Python** -- `saxpy.py`, `ctypes` against the driver and nothing else. It takes device pointers,
   so it composes with torch or cupy; `from_torch` checks dtype, contiguity and length first.
-- **C** -- `saxpy.h`, a single header over the CUDA driver API. No C++.
+- **C / C++ / CUDA** -- `saxpy.h`, a single header over the CUDA driver API, `extern "C"`, so it drops
+  into a `.c`, a `.cpp` or a `.cu` that manages memory with the CUDA runtime.
 - **Rust** -- `saxpy.rs`, typed launch over `lyth-cuda`. Written buffers take `&mut`, so an aliased
   input/output does not compile.
 
@@ -198,8 +199,13 @@ were compiled for six of those and accepted by `ptxas` on every one (42/42).
 [`examples/use-from/`](examples/use-from/) holds four working projects -- Rust, C++/CUDA, Python, and a
 quantum circuit through `lyth-circuit` -- each run here and checking its own answer.
 
-`[KNOWN_LIMIT]` Run only on sm_120, Windows. Other targets are compile-checked, not run. On Linux
-`lyth-cuda` finds `libcuda` by name; that path has not yet been built or run there. Reports from other
+`[KNOWN_LIMIT]` Run only on sm_120, Windows. Other targets are compile-checked, not run.
+`[KNOWN_LIMIT]` The driver is linked, not loaded. On Windows `lyth.exe` imports `nvcuda.dll`, so it does
+not start -- not even for `check` -- on a machine with no NVIDIA driver (found by CI). On Linux, linking
+needs `libcuda.so`, which the CUDA toolkit provides and a driver-only install may not; not yet built
+there. The crates that never touch a device (`lyth-lang`, `lyth-ptx`, `lyth-uasm`) build and test
+anywhere, Linux included (CI). Loading the driver at run time would remove both limits; it is the next
+change to `lyth-cuda`. Reports from other
 GPUs and Linux are exactly what the [bug report](.github/ISSUE_TEMPLATE/bug_report.yml) is for.
 
 ## Commands

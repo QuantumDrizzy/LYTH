@@ -12,9 +12,13 @@ git clone https://github.com/QuantumDrizzy/LYTH && cd LYTH
 cargo install --path crates/lyth          # the `lyth` binary, or use `cargo run -p lyth --` from the clone
 ```
 
-Rust stable is enough to **check** and **build**: no GPU, no CUDA toolkit. Running a kernel needs an
-NVIDIA driver. On Windows, `lyth-cuda` links the driver with `raw-dylib`, so no toolkit is needed to
-build either.
+`check` and `build` need no GPU. Today the `lyth` binary links the CUDA driver at load time, so:
+
+- **Windows**: builds with Rust stable alone (`raw-dylib`, no toolkit), but starts only where an NVIDIA
+  driver is installed -- even for `check`.
+- **Linux**: linking needs `libcuda.so`, which the CUDA toolkit provides. Not yet built or run there.
+
+`[KNOWN_LIMIT]` Both go away when `lyth-cuda` loads the driver at run time; that is the next change.
 
 ## 2. Describe your GPU: the machine file
 
