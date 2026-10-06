@@ -24,6 +24,12 @@ cargo run -p lyth -- check examples/saxpy.lyth --machine fixtures/machine/sm_120
 - **Refusals over guesses.** When the compiler cannot know something, it refuses and says why. A missing
   number is never turned into a zero.
 
-## Licence
+## Licence and the CLA
 
-Contributions are dual licensed under MIT OR Apache-2.0, as the project is; see `README.md`.
+LYTH is published under MIT OR Apache-2.0 (see `README.md`) and maintained by its author, who decides
+what is merged.
+
+Before a first pull request is merged, its author signs the [Contributor License Agreement](CLA.md)
+by posting one comment on the pull request; the CLA assistant asks for it and records it. You keep the
+rights to your work; the agreement lets the maintainer license the project as a whole, including your
+contribution, in one place.
