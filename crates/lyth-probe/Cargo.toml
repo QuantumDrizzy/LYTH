@@ -3,7 +3,7 @@ name = "lyth-probe"
 version = "0.1.0"
 edition = "2021"
 description = "Evidence CLI for LYTH — Fase 0, no language. A claim without a baseline does not ship."
-license = "UNLICENSED"
+license.workspace = true
 
 [[bin]]
 name = "lyth-probe"

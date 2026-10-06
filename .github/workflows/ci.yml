@@ -1,0 +1,30 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  cpu:
+    # The front end, both back ends' emission and the host interpreter need no GPU. Tests that need
+    # a device or the Unibit emulator print where they looked and skip; --nocapture keeps that visible.
+    name: cpu crates / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p lyth-lang -p lyth-ptx -p lyth-uasm -- --nocapture
+
+  build:
+    # lyth-cuda links the driver with raw-dylib on Windows, so the whole workspace builds with no toolkit.
+    name: workspace build / windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --workspace
+      - run: cargo run -p lyth -- check examples/saxpy.lyth --machine fixtures/machine/sm_120.json

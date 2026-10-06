@@ -160,6 +160,38 @@ one pass, with fma chains kept in registers.
 `[KNOWN_LIMIT]` On the Unibit back end, the widest fused kernels exceed its register pool; the
 executor falls back to the unfused kernel for those groups rather than emitting something wrong.
 
+## Use it in your project
+
+Rust stable is all you need to **check** and **build**: no GPU, no CUDA toolkit. Running a kernel, and the
+generated bindings, need an NVIDIA driver; the PTX targets the `machine` the source declares (the
+examples say `sm_120`; machine files live in `fixtures/machine/`).
+
+```bash
+git clone https://github.com/QuantumDrizzy/LYTH && cd LYTH
+cargo run -p lyth -- check examples/saxpy.lyth --machine fixtures/machine/sm_120.json      # no GPU
+cargo run -p lyth -- build examples/saxpy.lyth --machine fixtures/machine/sm_120.json     -o saxpy.ptx --bind-py saxpy.py --bind-c saxpy.h --bind-rust saxpy.rs
+```
+
+One source, three callers, the cost contract embedded in each (ADR-0016):
+
+- **Python** -- `saxpy.py`, `ctypes` against the driver and nothing else. It takes device pointers,
+  so it composes with torch or cupy; `from_torch` checks dtype, contiguity and length first.
+- **C** -- `saxpy.h`, a single header over the CUDA driver API. No C++.
+- **Rust** -- `saxpy.rs`, typed launch over `lyth-cuda`. Written buffers take `&mut`, so an aliased
+  input/output does not compile.
+
+```python
+import torch, saxpy                       # run on sm_120, torch 2.12: y == 2.5x + y to 1e-6 (one fma vs two roundings)
+n = 1 << 20
+x, y = torch.randn(n, device="cuda"), torch.randn(n, device="cuda")
+saxpy.Kernel().launch(n, 2.5, saxpy.from_torch(x, n), saxpy.from_torch(y, n))
+torch.cuda.synchronize()
+print(saxpy.DERIVED_INTENSITY)            # 0.1667 flop/byte -- derived, not written by hand
+```
+
+`[KNOWN_LIMIT]` Built and measured on Windows (sm_120). On Linux `lyth-cuda` finds `libcuda` by name;
+that path has not yet been built or run there.
+
 ## Commands
 
 ```bash
@@ -224,5 +256,7 @@ put through the tool, and for each one whether a Rust macro would have done the 
 
 ## License
 
-Proprietary. All rights reserved. See [LICENSE](LICENSE). Visibility for review or
-evaluation grants no right of use beyond reading.
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT),
+at your option. Unless you explicitly state otherwise, any contribution intentionally submitted for
+inclusion in LYTH by you, as defined in the Apache-2.0 license, shall be dual licensed as above,
+without any additional terms or conditions.
